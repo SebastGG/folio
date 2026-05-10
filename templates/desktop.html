@@ -25,6 +25,7 @@
   </div>
   <div class="header-right">
     <span id="clock"></span>
+    <span class="app-version">v{{APP_VERSION}}</span>
     <button class="refresh-btn" id="refreshBtn" onclick="updateAllPrices().then(loadData)">↻ Refresh</button>
     <button id="saveBtn" onclick="saveAll(this)">✓ Speichern</button>
     <a href="/logout" class="header-btn">→ Logout</a>

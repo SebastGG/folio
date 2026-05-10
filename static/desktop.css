@@ -48,6 +48,7 @@ header {
   z-index: 100;
 }
 .logo { font-weight: 700; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; }
+.app-version { font-size: 10px; color: var(--muted); letter-spacing: .03em; }
 .header-center { flex: 1; display: flex; align-items: center; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 8px; }
 #basketSelect {

@@ -54,6 +54,7 @@ select, input, button, textarea { font-family: inherit; font-size: 11px; }
   padding: 4px 6px;
   height: 32px;
 }
+.m-app-version { font-size: 9px; color: var(--muted); letter-spacing: .03em; margin: 0 4px; }
 .m-header-btn {
   border: none;
   height: 32px;

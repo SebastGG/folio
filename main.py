@@ -42,6 +42,17 @@ else:
     BASE_DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
+_manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
+with open(_manifest_path) as _f:
+    APP_VERSION = json.load(_f).get("version", "0.0.0")
+
+_hash_path = os.path.join(os.path.dirname(__file__), "build_hash.txt")
+if os.path.exists(_hash_path):
+    with open(_hash_path) as _f:
+        _build_hash = _f.read().strip()[:7]  # kurzer Hash, 7 Zeichen
+    if _build_hash and _build_hash != "dev":
+        APP_VERSION = f"{APP_VERSION}+{_build_hash}"
+
 # ── App-Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI()
 
@@ -227,19 +238,25 @@ async def health():
     """Cloudron Healthcheck — kein Auth nötig."""
     return {"status": "ok"}
 
+def _render(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("{{APP_VERSION}}", APP_VERSION)
+    # Cache-Busting: ?v= an lokale statische Dateien hängen
+    html = re.sub(r'(/static/[^"\']+\.(js|css))', lambda m: m.group(1) + f'?v={APP_VERSION}', html)
+    return html
+
 @app.get("/", response_class=HTMLResponse)
 async def desktop(request: Request):
     """Desktop App."""
-    with open(os.path.join(TEMPLATES_DIR, "desktop.html"), "r", encoding="utf-8") as f:
-        return f.read()
+    return _render(os.path.join(TEMPLATES_DIR, "desktop.html"))
 
 @app.get("/mobile", response_class=HTMLResponse)
 async def mobile(request: Request):
     """Mobile App."""
     mobile_file = os.path.join(TEMPLATES_DIR, "mobile.html")
     template = mobile_file if os.path.exists(mobile_file) else os.path.join(TEMPLATES_DIR, "desktop.html")
-    with open(template, "r", encoding="utf-8") as f:
-        return f.read()
+    return _render(template)
 
 @app.post("/api/prices/update")
 async def update_prices(request: Request):
