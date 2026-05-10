@@ -1,0 +1,298 @@
+/**
+ * desktop.css — Desktop Layout
+ * ============================
+ * Nur für Desktop. Mobile hat eigene mobile.css.
+ *
+ * !! REFACTORING-REGEL !!
+ * Bestehende Regeln ändern, keine neuen hinzufügen.
+ * Neue Komponente? → Bestehende Sektion erweitern.
+ */
+
+/* ── CSS-Variablen (Theme) ─────────────────────────────────────────────────── */
+:root {
+  --bg:      #f7f5f2;
+  --surface: #ffffff;
+  --text:    #1a1a18;
+  --muted:   #888880;
+  --border:  #e8e4dc;
+  --accent:  #2d6b3e;
+  --red:     #c0392b;
+  --green:   #2d8a4e;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+select, input, button, textarea { font-family: inherit; font-size: 11px; }
+a { color: var(--accent); text-decoration: none; }
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  height: 48px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 12px;
+  z-index: 100;
+}
+.logo { font-weight: 700; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; }
+.header-center { flex: 1; display: flex; align-items: center; gap: 8px; }
+.header-right { display: flex; align-items: center; gap: 8px; }
+#basketSelect {
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 4px 8px; color: var(--text); cursor: pointer; height: 28px;
+}
+#clock { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.refresh-btn {
+  background: var(--text); color: var(--bg); border: none;
+  padding: 6px 14px; cursor: pointer; text-transform: uppercase; font-size: 10px;
+}
+.refresh-btn:hover { opacity: 0.85; }
+#saveBtn {
+  background: var(--green); color: white; border: none;
+  padding: 6px 14px; cursor: pointer; text-transform: uppercase; font-size: 10px;
+  transition: background 0.15s;
+}
+.header-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  padding: 4px 10px; cursor: pointer;
+}
+.header-btn:hover { color: var(--text); border-color: var(--text); }
+
+/* ── Stats-Zeile ───────────────────────────────────────────────────────────── */
+.stats-bar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 6px 24px; height: 30px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; font-size: 10px; color: var(--muted);
+  overflow: hidden;
+}
+.stats-bar span { white-space: nowrap; }
+.stat-val { color: var(--text); font-weight: 500; }
+
+/* ── Haupt-Layout (Chart + Sidebar) ───────────────────────────────────────── */
+.main {
+  display: flex; flex: 1; min-height: 0; overflow: hidden;
+}
+.chart-pane {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* ── Chart-Toolbar ─────────────────────────────────────────────────────────── */
+.chart-toolbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 12px; height: 36px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.chart-title { font-weight: 700; font-size: 12px; margin-right: 8px; }
+.btn-group { display: flex; gap: 2px; }
+.btn {
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); padding: 3px 8px; cursor: pointer;
+  transition: background 0.1s;
+}
+.btn:hover { background: var(--border); }
+.btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.ind-active { background: #555; color: white; border-color: #555; }
+.sep { width: 1px; background: var(--border); margin: 0 4px; align-self: stretch; }
+.draw-btn {
+  background: none; border: 1px solid transparent;
+  color: var(--muted); padding: 3px 8px; cursor: pointer;
+}
+.draw-btn:hover { border-color: var(--border); color: var(--text); }
+.draw-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(45,107,62,0.07); }
+.clear-btn {
+  border: 1px solid var(--red); color: var(--red); padding: 3px 10px;
+  cursor: pointer; background: none;
+}
+.clear-btn:hover { background: var(--red); color: white; }
+
+/* ── Chart-Container ───────────────────────────────────────────────────────── */
+.chart-wrap {
+  position: relative; flex: 1; min-height: 0; overflow: hidden;
+}
+#chartContainer { width: 100%; height: 100%; }
+#drawCanvas {
+  position: absolute; top: 0; left: 0;
+  z-index: 10; pointer-events: none;
+}
+.chart-overlay {
+  position: absolute; top: 14px; left: 16px;
+  pointer-events: none; z-index: 5;
+}
+.cursor-hint {
+  display: none; position: absolute; bottom: 32px; left: 50%;
+  transform: translateX(-50%); background: rgba(0,0,0,0.6);
+  color: white; padding: 4px 10px; font-size: 10px; pointer-events: none; z-index: 20;
+}
+.cursor-hint.show { display: block; }
+#statusOverlay {
+  position: absolute; inset: 0; display: none;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
+  background: var(--surface); z-index: 20;
+}
+.status-text { color: var(--muted); font-size: 11px; }
+.spinner {
+  width: 24px; height: 24px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Resizer (horizontal: Chart | Sidebar) ─────────────────────────────────── */
+.resizer {
+  width: 5px; cursor: col-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; user-select: none;
+}
+.resizer:hover, .resizer.dragging { background: #aaa; }
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+.sidebar {
+  display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--border);
+  overflow: hidden; flex-shrink: 0;
+}
+.sidebar-tabs {
+  display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.sidebar-tab {
+  flex: 1; padding: 8px; text-align: center; cursor: pointer;
+  color: var(--muted); font-size: 10px; text-transform: uppercase;
+  border-bottom: 2px solid transparent; background: none; border-top: none;
+  border-left: none; border-right: none;
+}
+.sidebar-tab.active { color: var(--text); border-bottom-color: var(--text); }
+.sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
+
+/* ── Watchlist ─────────────────────────────────────────────────────────────── */
+.wl-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 4px; border-bottom: 1px solid var(--border); cursor: pointer;
+  user-select: none;
+}
+.wl-item:hover { background: var(--bg); }
+.wl-item.active { background: var(--accent); color: white; }
+.wl-item.active .wl-price, .wl-item.active .wl-chg { color: rgba(255,255,255,0.85); }
+.wl-sym { font-weight: 600; font-size: 12px; }
+.wl-right { text-align: right; }
+.wl-price { font-size: 11px; font-weight: 500; }
+.wl-chg { font-size: 10px; margin-top: 1px; }
+.wl-index { border-bottom: 2px solid var(--border); }
+
+/* ── Basket-Verwaltung (Sidebar) ───────────────────────────────────────────── */
+.manage-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.manage-item input[type=number] {
+  width: 52px; border: 1px solid var(--border);
+  padding: 2px 4px; background: var(--bg); text-align: right;
+}
+.manage-item .sym-label { flex: 1; font-weight: 500; }
+.manage-del {
+  background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px;
+}
+.manage-del:hover { color: var(--red); }
+
+/* ── Vresizer (vertikal: Chart | Bottom-Panels) ────────────────────────────── */
+.vresizer {
+  height: 5px; cursor: row-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; user-select: none;
+}
+.vresizer:hover, .vresizer.dragging { background: #aaa; }
+
+/* ── Bottom-Panels ─────────────────────────────────────────────────────────── */
+.bottom-area {
+  display: flex; flex-shrink: 0; background: var(--surface);
+  border-top: 1px solid var(--border); overflow: hidden;
+}
+.panel {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.panel-resizer {
+  width: 5px; cursor: col-resize; background: var(--border);
+  flex-shrink: 0; user-select: none; transition: background 0.15s;
+}
+.panel-resizer:hover, .panel-resizer.dragging { background: #aaa; }
+.panel-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  background: var(--bg); flex-shrink: 0; height: 30px;
+}
+.panel-title { font-weight: 700; font-size: 10px; text-transform: uppercase; color: var(--muted); }
+.panel-body { flex: 1; overflow-y: auto; }
+
+/* ── Performance-Tabelle ───────────────────────────────────────────────────── */
+.perf-table {
+  width: 100%; border-collapse: collapse; font-size: 10px;
+}
+.perf-table th {
+  position: sticky; top: 0; background: var(--bg);
+  padding: 4px 8px; color: var(--muted); font-size: 9px;
+  text-transform: uppercase; text-align: left;
+  border-bottom: 1px solid var(--border); z-index: 1;
+}
+.perf-table td { padding: 4px 8px; border-bottom: 1px solid var(--bg); }
+.perf-table tr:hover td { background: var(--bg); }
+.perf-table th.sortable { cursor: pointer; }
+.perf-table th.sortable:hover { color: var(--text); }
+
+/* ── Notizen ───────────────────────────────────────────────────────────────── */
+#notesArea {
+  width: 100%; height: 100%; border: none; outline: none; resize: none;
+  background: transparent; color: var(--text); line-height: 1.7;
+  padding: 8px 12px;
+}
+
+/* ── Import / Export ───────────────────────────────────────────────────────── */
+.drop-zone {
+  border: 2px dashed var(--border); padding: 16px; text-align: center;
+  color: var(--muted); cursor: pointer; margin: 8px;
+}
+.drop-zone.over { border-color: var(--accent); color: var(--accent); }
+.export-btn {
+  display: block; margin: 8px; padding: 6px 12px;
+  background: var(--bg); border: 1px solid var(--border);
+  cursor: pointer; text-align: center; width: calc(100% - 16px);
+}
+.export-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Ticker-Suchleiste ─────────────────────────────────────────────────────── */
+.search-wrap { display: flex; gap: 4px; padding: 8px; }
+#searchInput {
+  flex: 1; border: 1px solid var(--border); padding: 4px 8px;
+  background: var(--bg); color: var(--text); outline: none;
+}
+#searchInput:focus { border-color: var(--accent); }
+.search-result {
+  display: flex; justify-content: space-between;
+  padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--bg);
+}
+.search-result:hover { background: var(--bg); }
+.add-ticker-btn {
+  background: var(--accent); color: white; border: none;
+  padding: 4px 10px; cursor: pointer;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+footer {
+  display: flex; justify-content: space-between;
+  padding: 3px 12px; background: var(--bg);
+  border-top: 1px solid var(--border); color: var(--muted);
+  font-size: 9px; flex-shrink: 0;
+}

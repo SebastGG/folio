@@ -1,0 +1,632 @@
+/**
+ * mobile.js — Mobile UI
+ * ======================
+ * Lädt NACH shared.js.
+ * Enthält: Navigation, Mobile-Chart, Screens, Positionierung.
+ * Enthält NICHT: Berechnungen, API-Calls (→ shared.js)
+ *
+ * !! REFACTORING-REGEL !!
+ * Bestehenden Code ÄNDERN, keinen neuen Code hinzufügen.
+ * Neue Screen? → Case in mNav() hinzufügen + Screen-Funktion anpassen.
+ *
+ * Schnittstelle zu shared.js:
+ *   renderMobileChart(colored, volAgg, agg, regResult) ← von applyPeriod() aufgerufen
+ *   showLoading(msg) / hideLoading()                   ← von loadIndexData() aufgerufen
+ *   renderWatchlist()                                  ← von loadData() aufgerufen
+ *   renderBasketSelect()                               ← von loadConfig() aufgerufen
+ *   updateChartTitle()                                 ← von switchView() aufgerufen
+ */
+
+'use strict';
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  1. STATE (nur Mobile)                                    ║
+// ╚══════════════════════════════════════════════════════════╝
+
+var mChart    = null;   // LWC Chart-Instanz
+var mCs       = null;   // Candlestick Series
+var mVol      = null;   // Volume Series
+var mMa50     = null;   // MA50 Series
+var mMa200    = null;   // MA200 Series
+var mReg      = null;   // LogReg Series
+var mRegU     = null;   // LogReg Upper Band
+var mRegL     = null;   // LogReg Lower Band
+var mSincePlugin = null; // Seit-Datum Marker
+
+var mCurrentScreen = 'chart'; // Aktiver Screen
+
+// Positionen (berechnet nach Layout-Init)
+var _mHeaderH = 48;  // Header-Höhe
+var _mNavTop  = 0;   // Nav-Position von oben
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  2. LAYOUT-INIT                                           ║
+// ╚══════════════════════════════════════════════════════════╝
+
+/**
+ * Positioniert Nav und Screens dynamisch.
+ * Berücksichtigt Browser-Toolbar (Firefox Android ~50px am unteren Rand).
+ */
+function mLayout() {
+    var nav = document.getElementById('m-nav');
+    if (!nav) return;
+
+    // Nav-Position: 80px vom echten Viewport-Boden
+    var navBottom = 80;
+    nav.style.bottom = navBottom + 'px';
+    _mNavTop = window.innerHeight - navBottom - 60; // 60 = Nav-Höhe
+
+    // Screens: zwischen Header-Ende und Nav-Anfang
+    var screenTop    = _mHeaderH;
+    var screenBottom = window.innerHeight - _mNavTop;
+
+    document.querySelectorAll('.m-screen').forEach(function(s) {
+        s.style.top    = screenTop + 'px';
+        s.style.bottom = screenBottom + 'px';
+    });
+
+    // Chart-Wrap
+    var wrap = document.getElementById('m-chart-wrap');
+    if (wrap) {
+        wrap.style.top    = screenTop + 'px';
+        wrap.style.bottom = screenBottom + 'px';
+    }
+
+    // Mobile Chart Größe anpassen
+    fitMobileChart();
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  3. LOADING (Interface zu shared.js)                      ║
+// ╚══════════════════════════════════════════════════════════╝
+
+function showLoading(msg) {
+    // Auf Mobile: Nachricht im Chart-Bereich zeigen
+    var el = document.getElementById('m-loading-text');
+    if (el) el.textContent = msg || 'Lade...';
+    var overlay = document.getElementById('m-loading');
+    if (overlay) overlay.style.display = 'flex';
+}
+
+function hideLoading() {
+    var overlay = document.getElementById('m-loading');
+    if (overlay) overlay.style.display = 'none';
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  4. BOTTOM NAVIGATION                                     ║
+// ╚══════════════════════════════════════════════════════════╝
+
+/**
+ * Wechselt zwischen den 6 Screens.
+ * Screens werden per CSS .active gesteuert.
+ */
+function mNav(screen, btn) {
+    mCurrentScreen = screen;
+
+    // Nav-Buttons
+    document.querySelectorAll('.m-nav-btn').forEach(function(b) {
+        b.classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+
+    // Alle Screens ausblenden
+    document.querySelectorAll('.m-screen').forEach(function(s) {
+        s.classList.remove('active');
+    });
+
+    // Chart-Wrap verstecken (außer bei 'chart')
+    var wrap = document.getElementById('m-chart-wrap');
+    if (screen === 'chart') {
+        if (wrap) wrap.style.display = 'flex';
+        if (!mChart) {
+            setTimeout(initMobileChart, 100);
+        } else {
+            setTimeout(function() {
+                fitMobileChart();
+                if (mChart) mChart.timeScale().fitContent();
+            }, 50);
+        }
+    } else {
+        if (wrap) wrap.style.display = 'none';
+        var el = document.getElementById('m-screen-' + screen);
+        if (el) el.classList.add('active');
+
+        // Screen-Inhalte rendern
+        if (screen === 'watch')   renderMobileWatchlist();
+        if (screen === 'perf')    renderMobilePerf();
+        if (screen === 'notes')   syncMobileNotes();
+        if (screen === 'ind')     syncMobileInd();
+        if (screen === 'manage')  renderMobileManage();
+        if (screen === 'search')  { renderMobileManage(); document.getElementById('m-search-input') && (document.getElementById('m-search-input').value='') && (document.getElementById('m-search-results').innerHTML=''); }
+    }
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  5. MOBILE CHART                                          ║
+// ╚══════════════════════════════════════════════════════════╝
+
+function initMobileChart() {
+    var div = document.getElementById('m-chart-div');
+    if (!div || mChart) {
+        if (mChart) { fitMobileChart(); syncMobileChart(); }
+        return;
+    }
+
+    var textColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--text').trim() || '#1a1a18';
+
+    mChart = LightweightCharts.createChart(div, {
+        width:  div.clientWidth  || window.innerWidth,
+        height: div.clientHeight || 300,
+        layout: {
+            background: { color: 'transparent' },
+            textColor:  textColor,
+            fontFamily: "'JetBrains Mono', monospace",
+        },
+        grid: {
+            vertLines: { color: 'rgba(0,0,0,0.05)' },
+            horzLines: { color: 'rgba(0,0,0,0.05)' },
+        },
+        timeScale: { borderVisible: false, timeVisible: false },
+        rightPriceScale: { borderVisible: false },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+
+    mVol = mChart.addSeries(LightweightCharts.HistogramSeries, {
+        color: '#2d8a4e',
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'vol',
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    mChart.priceScale('vol').applyOptions({
+        scaleMargins: { top: 0.85, bottom: 0 },
+        borderVisible: false,
+    });
+
+    mCs = mChart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor:        '#2d8a4e', downColor:       '#c0392b',
+        borderUpColor:  '#2d8a4e', borderDownColor: '#c0392b',
+        wickUpColor:    '#2d8a4e', wickDownColor:   '#c0392b',
+    });
+
+    mMa50  = mChart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff', lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false });
+    mMa200 = mChart.addSeries(LightweightCharts.LineSeries, { color: '#f5a623', lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false });
+    mReg   = mChart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6', lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: false });
+    mRegU  = mChart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6', lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
+    mRegL  = mChart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6', lineWidth: 1, visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
+
+    new ResizeObserver(fitMobileChart).observe(div);
+
+    // Initiale Daten laden falls vorhanden
+    if (_lastCandles && _lastCandles.length > 0) syncMobileChart();
+}
+
+function fitMobileChart() {
+    if (!mChart) return;
+    var div = document.getElementById('m-chart-div');
+    var wrap = document.getElementById('m-chart-wrap');
+    if (!div || !wrap) return;
+    var w = wrap.clientWidth;
+    var h = wrap.clientHeight;
+    if (w > 0 && h > 0) {
+        mChart.applyOptions({ width: w, height: h });
+    }
+}
+
+function syncMobileChart() {
+    if (!mChart || !mCs || !_lastCandles.length) return;
+
+    mCs.setData(_lastCandles);
+
+    if (mVol && _volumeData.length) {
+        var cmap = {};
+        _lastCandles.forEach(function(c) { cmap[c.time] = c.color; });
+        try {
+            mVol.setData(_volumeData.map(function(v) {
+                return {
+                    time: v.time, value: v.volume || 0,
+                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                };
+            }));
+        } catch(e) {}
+    }
+
+    if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });  if (indicators.ma50)  mMa50.setData(calcMA(_lastCandles, 50)); }
+    if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 }); if (indicators.ma200) mMa200.setData(calcMA(_lastCandles, 200)); }
+
+    if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
+    if (mChart) mChart.timeScale().fitContent();
+    fitMobileChart();
+}
+
+/**
+ * Wird von shared.js applyPeriod() aufgerufen.
+ * Rendert Mobile-Chart mit gefärbten Kerzen + Indikatoren.
+ */
+function renderMobileChart(colored, volAgg, agg, regResult) {
+    if (!mChart || !mCs) return;
+
+    mCs.setData(colored);
+
+    if (mVol && volAgg.length) {
+        var cmap = {};
+        colored.forEach(function(c) { cmap[c.time] = c.color; });
+        // Normiert: Durchschnitt = 100
+        var mVolSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
+        var mVolAvg = mVolSum / volAgg.length || 1;
+        try {
+            mVol.setData(volAgg.map(function(v) {
+                return {
+                    time: v.time, value: (v.volume || 0) / mVolAvg * 100,
+                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                };
+            }));
+        } catch(e) {}
+    }
+
+    if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });   if (indicators.ma50)  mMa50.setData(calcMA(agg, 50)); }
+    if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 });  if (indicators.ma200) mMa200.setData(calcMA(agg, 200)); }
+
+    // LogReg
+    if (mReg) {
+        if (regResult) {
+            mReg.applyOptions({ visible: true, title: 'ARR: ' + regResult.arr + '%' });
+            mReg.setData(regResult.reg);
+            if (mRegU) { mRegU.applyOptions({ visible: true }); mRegU.setData(regResult.upper); }
+            if (mRegL) { mRegL.applyOptions({ visible: true }); mRegL.setData(regResult.lower); }
+        } else {
+            [mReg, mRegU, mRegL].forEach(function(s) { if (s) s.applyOptions({ visible: false }); });
+        }
+    }
+
+    // Seit-Marker
+    var sinceDate = (document.getElementById('m-perf-since') || {}).value;
+    if (sinceDate && mCs && typeof LightweightCharts.createSeriesMarkers === 'function') {
+        var bar = agg.find(function(c) { return c.time >= sinceDate; });
+        if (bar) {
+            var marker = [{ time: bar.time, position: 'belowBar', color: '#e67e22', shape: 'arrowUp', text: sinceDate.slice(5), size: 2 }];
+            try {
+                if (!mSincePlugin) mSincePlugin = LightweightCharts.createSeriesMarkers(mCs, marker);
+                else mSincePlugin.setMarkers(marker);
+            } catch(e) {}
+        }
+    }
+
+    if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
+    if (mChart) mChart.timeScale().fitContent();
+    fitMobileChart();
+
+    // Aktiven Screen ggf. aktualisieren
+    if (mCurrentScreen === 'watch') renderMobileWatchlist();
+    if (mCurrentScreen === 'perf')  renderMobilePerf();
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  6. SCREEN-FUNKTIONEN                                     ║
+// ╚══════════════════════════════════════════════════════════╝
+
+// ── Watchlist ──────────────────────────────────────────────
+function renderMobileWatchlist() {
+    var el = document.getElementById('m-watchlist');
+    if (!el) return;
+    el.innerHTML = '';
+
+    // Einheitliche Item-Erstellung für Index + Ticker
+    function addItem(sym, name, price, chgPct, isActive, onClick) {
+        var div = document.createElement('div');
+        div.className = 'm-wl-item' + (isActive ? ' m-active' : '');
+        var chgColor = 'var(--muted)';
+        if (!isActive && chgPct !== null) {
+            chgColor = parseFloat(chgPct) >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+        div.innerHTML = '<div class="m-wl-sym">' + name + '</div>'
+            + '<div class="m-wl-right">'
+            + '<div class="m-wl-price">' + (price || '-') + '</div>'
+            + '<div class="m-wl-chg" style="color:' + (isActive ? 'rgba(255,255,255,0.9)' : chgColor) + '">'
+            + (chgPct !== null ? (parseFloat(chgPct) >= 0 ? '+' : '') + chgPct + '%' : '-')
+            + '</div></div>';
+        div.onclick = onClick;
+        el.appendChild(div);
+    }
+
+    // Index
+    var last = allCandles.length ? allCandles[allCandles.length - 1] : null;
+    var prev = allCandles.length > 1 ? allCandles[allCandles.length - 2] : last;
+    var idxChg = last && prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : null;
+    addItem(
+        'index',
+        '● ' + (baskets[currentBasket] ? baskets[currentBasket].name : 'Index'),
+        last ? '$' + last.close.toFixed(2) : '-',
+        idxChg,
+        currentView === 'index',
+        function() { switchView('index'); mNav('chart', document.getElementById('mnav-chart')); }
+    );
+
+    // Ticker
+    Object.keys(WEIGHTS).forEach(function(sym) {
+        var p = perfData[sym];
+        addItem(
+            sym, sym,
+            p ? '$' + p.price.toFixed(2) : '-',
+            p ? p.d1 : null,
+            currentView === sym,
+            function() { switchView(sym); mNav('chart', document.getElementById('mnav-chart')); }
+        );
+    });
+}
+
+// ── Performance ────────────────────────────────────────────
+function renderMobilePerf() {
+    // Seit-Datum synchronisieren
+    var mSince = document.getElementById('m-perf-since');
+    var dSince = document.getElementById('perfSinceDate');
+    if (mSince && mSince.value && dSince) dSince.value = mSince.value;
+    else if (dSince && dSince.value && mSince) mSince.value = dSince.value;
+
+    // Sort synchronisieren
+    var mSort = document.getElementById('m-perf-sort-mobile');
+    var dSort = document.getElementById('perfSort');
+    if (mSort && dSort) dSort.value = mSort.value;
+
+    // Direkt in Mobile-Tabelle rendern (nicht Umweg über hidden stub)
+    var mb = document.getElementById('m-perf-body');
+    var mf = document.getElementById('m-perf-foot');
+    if (!mb) return;
+
+    buildPerfData();
+
+    var sinceDate = baskets[currentBasket] ? baskets[currentBasket].perfSinceDate : null;
+    var sortVal   = (mSort || {}).value || 'alpha';
+
+    var fmt = function(v) {
+        if (v === null || v === undefined || v === 'n/a') return '<td style="color:var(--muted)">-</td>';
+        var n = parseFloat(v);
+        var color = n >= 0 ? '#2d8a4e' : '#c0392b';
+        return '<td style="color:' + color + '">' + (n >= 0 ? '+' : '') + n.toFixed(2) + '%</td>';
+    };
+
+    var syms = Object.keys(perfData);
+    if (syms.length === 0) {
+        mb.innerHTML = '<tr><td colspan="6" style="padding:16px;color:var(--muted);text-align:center;">Keine Daten — Refresh drücken</td></tr>';
+        return;
+    }
+
+    var sortKey = { alpha: null, '1d': 'd1', '1m': 'd22', ytd: 'ytd', since: 'since' }[sortVal];
+    syms.sort(function(a, b) {
+        if (!sortKey) return a.localeCompare(b);
+        return parseFloat(perfData[b][sortKey] || 0) - parseFloat(perfData[a][sortKey] || 0);
+    });
+
+    var html = '';
+    var totalValue = 0, totalPrevValue = 0, totalSinceValue = 0, hasSince = false;
+
+    syms.forEach(function(sym) {
+        var p = perfData[sym];
+        if (!p) return;
+        var anzahl   = WEIGHTS[sym] || 0;
+        var posValue = p.price * anzahl;
+        totalValue     += posValue;
+        totalPrevValue += posValue / (1 + parseFloat(p.d1 || 0) / 100);
+        if (sinceDate && p.since !== null) {
+            totalSinceValue += (p.price / (1 + parseFloat(p.since) / 100)) * anzahl;
+            hasSince = true;
+        }
+        html += '<tr>'
+            + '<td style="font-weight:500">' + sym + '</td>'
+            + '<td>$' + p.price.toFixed(2) + '</td>'
+            + '<td>$' + posValue.toFixed(0) + '</td>'
+            + fmt(p.since) + fmt(p.d1) + fmt(p.ytd)
+            + '</tr>';
+    });
+    mb.innerHTML = html;
+
+    if (mf && totalValue > 0) {
+        var totalChg = ((totalValue - totalPrevValue) / totalPrevValue * 100).toFixed(2);
+        var chgColor = parseFloat(totalChg) >= 0 ? '#2d8a4e' : '#c0392b';
+        var sincePct = hasSince && totalSinceValue > 0
+            ? ((totalValue - totalSinceValue) / totalSinceValue * 100).toFixed(2) : null;
+        mf.innerHTML = '<tr style="border-top:2px solid var(--border)">'
+            + '<td style="font-weight:700">TOTAL</td><td></td>'
+            + '<td style="font-weight:700">$' + totalValue.toFixed(0) + '</td>'
+            + (sincePct ? '<td style="font-weight:700;color:' + (parseFloat(sincePct)>=0?'#2d8a4e':'#c0392b') + '">' + (parseFloat(sincePct)>=0?'+':'') + sincePct + '%</td>' : '<td>-</td>')
+            + '<td style="font-weight:700;color:' + chgColor + '">' + (parseFloat(totalChg)>=0?'+':'') + totalChg + '%</td>'
+            + '<td></td>'
+            + '</tr>';
+    }
+}
+
+// ── Notizen ────────────────────────────────────────────────
+function syncMobileNotes() {
+    var src = document.getElementById('notesArea');
+    var dst = document.getElementById('m-notes-area');
+    if (src && dst) dst.value = src.value || '';
+}
+
+// ── Indikatoren ────────────────────────────────────────────
+function syncMobileInd() {
+    var activeStyle   = 'font-family:inherit;font-size:12px;padding:12px 18px;border:1px solid #555;background:#555;color:white;cursor:pointer;border-radius:4px;touch-action:manipulation;min-height:44px;';
+    var inactiveStyle = 'font-family:inherit;font-size:12px;padding:12px 18px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;border-radius:4px;touch-action:manipulation;min-height:44px;';
+
+    // Zeitraum
+    var pMap = { 30: '1M', 90: '3M', 180: '6M', 365: '1J', 0: 'All' };
+    document.querySelectorAll('.m-period-btn').forEach(function(b) {
+        b.style.cssText = b.textContent.trim() === (pMap[currentPeriod] || 'All') ? activeStyle : inactiveStyle;
+    });
+
+    // TF
+    var tMap = { '1D': '1T', '1W': '1W', '1M': '1M' };
+    document.querySelectorAll('.m-tf-btn').forEach(function(b) {
+        b.style.cssText = b.textContent.trim() === (tMap[currentTF] || '1T') ? activeStyle : inactiveStyle;
+    });
+
+    // Indikatoren
+    ['ma50', 'ma200', 'reg'].forEach(function(k) {
+        var btn = document.getElementById('m-ind-' + k);
+        if (btn) btn.style.cssText = indicators[k] ? activeStyle : inactiveStyle;
+    });
+
+    // Log-Skala
+    var lb = document.getElementById('m-ind-log');
+    if (lb) lb.style.cssText = logScale ? activeStyle : inactiveStyle;
+}
+
+// ── Einstellungen ──────────────────────────────────────────
+function renderMobileManage() {
+    var el = document.getElementById('m-manage-content');
+    if (!el) return;
+    el.innerHTML = '';
+
+    var syms = Object.keys(WEIGHTS);
+    if (syms.length === 0) {
+        el.innerHTML = '<p style="color:var(--muted);padding:12px;">Noch keine Ticker. Desktop → Verwaltung nutzen.</p>';
+        return;
+    }
+
+    syms.forEach(function(sym) {
+        var row = document.createElement('div');
+        row.className = 'm-manage-item';
+        row.innerHTML = '<span class="m-manage-sym">' + sym + '</span>'
+            + '<input class="m-manage-input" type="number" min="0" value="' + (WEIGHTS[sym] || 0) + '" data-sym="' + sym + '">'
+            + '<button class="m-manage-del" onclick="mRemoveTicker(\'' + sym + '\')">×</button>';
+        var input = row.querySelector('input');
+        input.oninput = function() {
+            var v = parseInt(this.value, 10);
+            WEIGHTS[sym] = isNaN(v) ? 0 : v;
+            markUnsaved();
+        };
+        el.appendChild(row);
+    });
+}
+
+function mRemoveTicker(sym) {
+    delete WEIGHTS[sym];
+    markUnsaved();
+    renderMobileManage();
+    if (currentView === sym) switchView('index');
+    else loadData();
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  7. INTERFACE-FUNKTIONEN (von shared.js aufgerufen)       ║
+// ╚══════════════════════════════════════════════════════════╝
+
+function renderWatchlist() {
+    renderMobileWatchlist();
+}
+
+function renderBasketSelect() {
+    var mSel = document.getElementById('m-basket-select');
+    var dSel = document.getElementById('basketSelect');  // hidden stub
+    if (!mSel) return;
+    mSel.innerHTML = '';
+    Object.keys(baskets).forEach(function(id) {
+        var opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = baskets[id].name || id;
+        opt.selected = id === currentBasket;
+        mSel.appendChild(opt);
+    });
+    // Auch den hidden basketSelect füllen (für saveAll etc.)
+    if (dSel) dSel.innerHTML = mSel.innerHTML;
+    updateChartTitle();
+}
+
+function updateChartTitle() {
+    // Kein sichtbarer Chart-Title auf Mobile — Basket-Select zeigt den Namen
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  8. STARTUP                                               ║
+// ╚══════════════════════════════════════════════════════════╝
+
+/**
+ * Mobile-Startup-Sequenz:
+ * 1. Layout positionieren
+ * 2. Config laden
+ * 3. Daten laden
+ * 4. Chart initialisieren
+ * 5. Notizen laden
+ */
+
+// ── Ticker Suche ───────────────────────────────────────────
+function mOnSearch(val) {
+    var res = document.getElementById('m-search-results');
+    if (!res) return;
+    if (!val || val.length < 1) { res.innerHTML = ''; return; }
+    fetch('/api/search/' + encodeURIComponent(val))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            res.innerHTML = data.slice(0, 8).map(function(d) {
+                var already = WEIGHTS[d.symbol] !== undefined;
+                return '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--border);">'
+                    + '<div><div style="font-weight:600;font-size:13px;">' + d.symbol + '</div>'
+                    + '<div style="font-size:10px;color:var(--muted)">' + (d.name || '') + '</div></div>'
+                    + (already
+                        ? '<span style="color:var(--muted);font-size:10px;">bereits vorhanden</span>'
+                        : '<button data-s="' + d.symbol + '" onclick="mAddTicker(this.getAttribute(\'data-s\'))" style="background:var(--accent);color:white;border:none;padding:8px 16px;cursor:pointer;font-family:inherit;font-size:12px;touch-action:manipulation;">+ Hinzufügen</button>')
+                    + '</div>';
+            }).join('') || '<p style="padding:12px;color:var(--muted);">Keine Ergebnisse</p>';
+        })
+        .catch(function() { res.innerHTML = ''; });
+}
+
+async function mAddTicker(sym) {
+    if (WEIGHTS[sym] !== undefined) return;
+    WEIGHTS[sym] = 1;
+    markUnsaved();
+    await fetch('/api/prices/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickers: [sym] })
+    });
+    await loadData();
+    renderMobileManage();
+    var inp = document.getElementById('m-search-input');
+    if (inp && inp.value) mOnSearch(inp.value);
+}
+
+(function mobileStartup() {
+    // Layout nach erstem Paint positionieren
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            mLayout();
+
+            // Notes Textarea → sync beim Tippen
+            var mNotes = document.getElementById('m-notes-area');
+            if (mNotes) {
+                mNotes.addEventListener('input', function() {
+                    var dNotes = document.getElementById('notesArea');
+                    if (dNotes) dNotes.value = mNotes.value;
+                    clearTimeout(window._mNotesTimer);
+                    window._mNotesTimer = setTimeout(saveNotes, 2000);
+                });
+            }
+
+            // Chart-Screen als Standard
+            var chartWrap = document.getElementById('m-chart-wrap');
+            if (chartWrap) chartWrap.style.display = 'flex';
+            var chartBtn = document.getElementById('mnav-chart');
+            if (chartBtn) chartBtn.classList.add('active');
+
+            // Daten laden
+            loadConfig().then(function() {
+                return loadDbTickers();
+            }).then(function() {
+                return loadData();
+            }).then(function() {
+                loadNotes();
+                syncMobileNotes();
+                initMobileChart();
+                syncMobileInd();
+            });
+        });
+    });
+
+    // Orientation/Resize → Layout neu berechnen
+    window.addEventListener('resize', function() {
+        mLayout();
+        fitMobileChart();
+    });
+})();

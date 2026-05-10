@@ -1,0 +1,217 @@
+/**
+ * mobile.css — Mobile Layout
+ * ==========================
+ * Komplett eigenständig. Kein Overlap mit desktop.css.
+ * Wird nur von mobile.html geladen.
+ *
+ * !! REFACTORING-REGEL !!
+ * Bestehende Regeln ändern, keine neuen hinzufügen.
+ * Neue Komponente? → Bestehende Sektion erweitern.
+ */
+
+/* ── CSS-Variablen (gleich wie desktop.css) ────────────────────────────────── */
+:root {
+  --bg:      #f7f5f2;
+  --surface: #ffffff;
+  --text:    #1a1a18;
+  --muted:   #888880;
+  --border:  #e8e4dc;
+  --accent:  #2d6b3e;
+  --red:     #c0392b;
+  --green:   #2d8a4e;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;           /* dvh = Dynamic Viewport Height (Firefox Android) */
+  overflow: hidden;
+}
+select, input, button, textarea { font-family: inherit; font-size: 11px; }
+
+/* ── Mobile Header (48px) ──────────────────────────────────────────────────── */
+#m-header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 48px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 8px;
+}
+#m-basket-select {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 4px 6px;
+  height: 32px;
+}
+.m-header-btn {
+  border: none;
+  height: 32px;
+  padding: 0 12px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+#m-refresh-btn { background: var(--text);   color: white; }
+#m-save-btn    { background: var(--green);  color: white; }
+
+/* ── Bottom Navigation ─────────────────────────────────────────────────────── */
+#m-nav {
+  position: fixed;
+  left: 0; right: 0;
+  height: 60px;
+  background: var(--surface);
+  border-top: 2px solid var(--border);
+  z-index: 9999;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  /* bottom wird per JS gesetzt (Browser-Toolbar variiert) */
+}
+.m-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  height: 100%;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-nav-btn .ico { font-size: 20px; line-height: 1; }
+.m-nav-btn .lbl { font-size: 9px; }
+.m-nav-btn.active { color: var(--accent); }
+
+/* ── Screens ───────────────────────────────────────────────────────────────── */
+/* Alle Screens: position:fixed, top/bottom per JS gesetzt */
+.m-screen {
+  display: none;
+  position: fixed;
+  left: 0; right: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  z-index: 100;
+  -webkit-overflow-scrolling: touch;
+}
+.m-screen.active { display: block; }
+
+/* Chart-Screen */
+#m-chart-wrap {
+  display: flex;
+  position: fixed;
+  left: 0; right: 0;
+  flex-direction: column;
+  background: var(--surface);
+  z-index: 100;
+}
+#m-chart-div { flex: 1; min-height: 0; width: 100%; }
+
+/* ── Watchlist Screen ──────────────────────────────────────────────────────── */
+.m-wl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.m-wl-item.m-active { background: var(--accent); }
+.m-wl-item.m-active .m-wl-sym { color: white; }
+.m-wl-item.m-active .m-wl-right { color: rgba(255,255,255,0.9); }
+.m-wl-sym   { font-size: 13px; font-weight: 600; flex: 1; min-width: 0;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-wl-right { text-align: right; flex-shrink: 0; margin-left: 12px; }
+.m-wl-price { font-size: 12px; font-weight: 500; }
+.m-wl-chg   { font-size: 11px; margin-top: 2px; }
+
+/* ── Performance Screen ────────────────────────────────────────────────────── */
+.m-perf-wrap { padding: 10px; }
+.m-perf-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; gap: 8px;
+}
+.m-perf-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.m-perf-table th {
+  padding: 4px 6px; color: var(--muted); font-size: 9px;
+  text-transform: uppercase; border-bottom: 1px solid var(--border);
+  text-align: left; background: var(--bg); white-space: nowrap;
+}
+.m-perf-table td { padding: 5px 6px; border-bottom: 1px solid var(--bg); white-space: nowrap; }
+
+/* ── Indikatoren Screen ────────────────────────────────────────────────────── */
+.m-ind-wrap { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.m-ind-label { font-size: 10px; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+.m-btn-row  { display: flex; gap: 8px; flex-wrap: wrap; }
+.m-btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 44px;
+}
+.m-btn.active { background: var(--text);   color: var(--bg);  border-color: var(--text); }
+.m-btn.on     { background: #555;          color: white;       border-color: #555; }
+
+/* ── Notizen Screen ────────────────────────────────────────────────────────── */
+.m-notes-wrap { height: 100%; padding: 12px; display: flex; flex-direction: column; }
+#m-notes-area {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* ── Einstellungen Screen ──────────────────────────────────────────────────── */
+.m-manage-wrap { padding: 12px; }
+.m-manage-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.m-manage-sym   { flex: 1; font-weight: 600; font-size: 13px; }
+.m-manage-input {
+  width: 64px; border: 1px solid var(--border);
+  padding: 6px 4px; background: var(--bg); text-align: right;
+  font-family: inherit; font-size: 12px;
+}
+.m-manage-del {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 18px; padding: 4px;
+  touch-action: manipulation;
+}
+.m-save-full {
+  display: block; width: 100%; margin-top: 16px;
+  padding: 16px; font-family: inherit; font-size: 14px;
+  background: var(--green); color: white; border: none;
+  cursor: pointer; touch-action: manipulation;
+}

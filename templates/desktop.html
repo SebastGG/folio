@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Folio</title>
+  <script>
+    // Automatisch zur Mobile-Version weiterleiten
+    if (window.innerWidth <= 900 || /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent)) {
+      window.location.replace('/mobile');
+    }
+  </script>
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/static/desktop.css">
+</head>
+<body>
+
+<header>
+  <span class="logo">Portfolio Index</span>
+  <div class="header-center">
+    <select id="basketSelect" onchange="switchBasket(this.value)"></select>
+    <button class="header-btn" onclick="addBasket()">+</button>
+    <button class="header-btn" onclick="renameBasket()">✎</button>
+    <button class="header-btn" onclick="deleteBasket()">×</button>
+  </div>
+  <div class="header-right">
+    <span id="clock"></span>
+    <button class="refresh-btn" id="refreshBtn" onclick="updateAllPrices().then(loadData)">↻ Refresh</button>
+    <button id="saveBtn" onclick="saveAll(this)">✓ Speichern</button>
+    <a href="/logout" class="header-btn">→ Logout</a>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <span>INDEX <span id="sv" class="stat-val">-</span></span>
+  <span>1T <span id="s1d" class="stat-val">-</span></span>
+  <span>1W <span id="s1w" class="stat-val">-</span></span>
+  <span>1M <span id="s1m" class="stat-val">-</span></span>
+  <span>3M <span id="s3m" class="stat-val">-</span></span>
+  <span>HIGH <span id="shi" class="stat-val">-</span></span>
+  <span>LOW <span id="slo" class="stat-val">-</span></span>
+  <span>TICKER <span id="sct" class="stat-val">-</span></span>
+</div>
+
+<div class="main" id="mainLayout">
+  <div class="chart-pane">
+    <div class="chart-toolbar">
+      <span id="chartTitle" class="chart-title">Index</span>
+      <div class="btn-group" id="period-btns">
+        <button class="btn" onclick="setPeriod(30)">1M</button>
+        <button class="btn" onclick="setPeriod(90)">3M</button>
+        <button class="btn active" onclick="setPeriod(180)">6M</button>
+        <button class="btn" onclick="setPeriod(365)">1J</button>
+        <button class="btn" onclick="setPeriod(0)">All</button>
+      </div>
+      <div class="sep"></div>
+      <div class="btn-group">
+        <button class="btn active" id="tf1D" onclick="setTF('1D')">1T</button>
+        <button class="btn" id="tf1W" onclick="setTF('1W')">1W</button>
+        <button class="btn" id="tf1M" onclick="setTF('1M')">1M</button>
+      </div>
+      <div class="sep"></div>
+      <div class="btn-group">
+        <button class="btn" id="bma50"  onclick="togInd('ma50')">MA50</button>
+        <button class="btn" id="bma200" onclick="togInd('ma200')">MA200</button>
+        <button class="btn" id="breg"   onclick="togInd('reg')">LogReg</button>
+        <input type="number" id="regPeriod" value="12" min="5" max="200"
+          title="LogReg Zeitrahmen (Anzahl Kerzen)"
+          style="width:44px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:2px 4px;font-family:inherit;font-size:10px;text-align:center;"
+          onchange="applyPeriod()">
+        <button class="btn" id="blog"   onclick="togLog()">Log</button>
+      </div>
+      <div class="sep"></div>
+      <button class="draw-btn" onclick="setDraw('line',this)">/ Linie</button>
+      <button class="draw-btn" onclick="setDraw('trend',this)">↗ Trend</button>
+      <button class="draw-btn" onclick="setDraw('hline',this)">— H-Linie</button>
+      <button class="draw-btn" onclick="setDraw('ray',this)">→ Ray</button>
+      <button class="draw-btn" onclick="setDraw('rect',this)">□ Rect</button>
+      <button class="draw-btn" onclick="setDraw('select',this)">▶ Sel</button>
+      <button class="draw-btn" onclick="if(chart){chart.timeScale().fitContent();chart.priceScale('right').applyOptions({autoScale:true});if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();}">⤢ Fit</button>
+      <button class="clear-btn" onclick="clearAllDrawings()">🗑 Clear</button>
+    </div>
+    <div class="chart-wrap">
+      <div id="chartContainer"></div>
+      <canvas id="drawCanvas"></canvas>
+      <div id="statusOverlay" style="display:none;">
+        <div class="spinner"></div>
+        <div class="status-text">Lade Kursdaten...</div>
+      </div>
+      <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:rgba(255,255,255,0.85);padding:4px 8px;border:1px solid var(--border);">
+        <span id="ov-date" style="color:var(--muted);"></span><br>
+        O <span id="ov" class="stat-val">-</span>
+        H <span id="oh" class="stat-val">-</span>
+        L <span id="ol" class="stat-val">-</span>
+        C <span id="oc" class="stat-val">-</span><br>
+        Vol <span id="ovol" class="stat-val">-</span>
+        Vol∅ <span id="ovola" class="stat-val">-</span>
+      </div>
+      <div class="cursor-hint" id="cursorHint"></div>
+    </div>
+  </div>
+
+  <div class="resizer" id="resizer"></div>
+
+  <div class="sidebar" id="sidebarPane" style="width:280px;min-width:180px;max-width:500px;">
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
+      <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
+    </div>
+    <div class="sidebar-content" id="content-kurse">
+      <div id="watchlist"></div>
+    </div>
+    <div class="sidebar-content" id="content-verwaltung" style="display:none;">
+      <div id="manageList"></div>
+      <div class="search-wrap">
+        <input type="text" id="searchInput" placeholder="Ticker suchen…"
+          oninput="onSearch(this.value)" autocomplete="off">
+      </div>
+      <div id="searchResults"></div>
+    </div>
+  </div>
+</div>
+
+<div class="vresizer" id="vresizer"></div>
+
+<div class="bottom-area" id="bottomArea" style="height:200px;">
+  <div class="panel" id="panel-notes">
+    <div class="panel-header">
+      <span class="panel-title">📝 Notizen</span>
+      <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:10px;" onclick="saveNotes()">Speichern</button>
+    </div>
+    <div class="panel-body">
+      <textarea id="notesArea" placeholder="Notizen, Beobachtungen, Trading-Ideen..."
+        oninput="clearTimeout(window._notesTimer);window._notesTimer=setTimeout(saveNotes,2000)"></textarea>
+    </div>
+  </div>
+  <div class="panel-resizer" id="panel-resizer-1"></div>
+  <div class="panel" id="panel-perf">
+    <div class="panel-header">
+      <span class="panel-title">📊 Performance</span>
+      <label style="font-size:9px;color:var(--muted);">Seit</label>
+      <input type="date" id="perfSinceDate" style="border:1px solid var(--border);padding:2px 4px;background:var(--bg);color:var(--text);font-size:9px;"
+        onchange="saveCurrentBasketState();markUnsaved();renderPerfTable();applySinceMarker(_lastCandles);">
+      <select id="perfSort" onchange="renderPerfTable()" style="border:1px solid var(--border);background:var(--bg);padding:2px 4px;font-size:9px;">
+        <option value="alpha">A-Z</option>
+        <option value="1d">1T</option>
+        <option value="1w">1W</option>
+        <option value="1m">1M</option>
+        <option value="3m">3M</option>
+        <option value="ytd">YTD</option>
+        <option value="since">Seit</option>
+      </select>
+    </div>
+    <div class="panel-body">
+      <table class="perf-table">
+        <thead><tr>
+          <th>Ticker</th><th>Kurs</th><th>Anz.</th><th>Position</th>
+          <th id="sinceHeader">Seit</th><th>1T</th><th>1W</th><th>1M</th><th>3M</th><th>YTD</th>
+        </tr></thead>
+        <tbody id="perfBody"></tbody>
+        <tfoot id="perfFoot"></tfoot>
+      </table>
+    </div>
+  </div>
+  <div class="panel-resizer" id="panel-resizer-2"></div>
+  <div class="panel" id="panel-import">
+    <div class="panel-header"><span class="panel-title">📥 Import / Export</span></div>
+    <div class="panel-body" style="padding:8px;">
+      <div class="drop-zone" id="dropZone"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');readFile(event.dataTransfer.files[0])">
+        <div style="font-size:10px;color:var(--muted);">📄 Datei hierher ziehen oder klicken</div>
+        <input type="file" id="fileInput" style="display:none" accept=".txt" onchange="readFile(this.files[0])">
+      </div>
+      <div style="margin-top:6px;font-size:9px;color:var(--muted);">Format: AAPL 10 oder AAPL,10</div>
+      <button class="export-btn" onclick="exportTxt()">⬇ Als TXT herunterladen</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>Daten: Yahoo Finance (verzögert)</span>
+  <span id="lastUpdate">Noch nicht geladen</span>
+</footer>
+
+<script src="/static/shared.js"></script>
+<script src="/static/desktop.js"></script>
+<script>
+  document.getElementById('dropZone').addEventListener('click', function() {
+    document.getElementById('fileInput').click();
+  });
+  function readFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var w = parseTxt(e.target.result);
+      if (Object.keys(w).length === 0) { alert('Keine gültigen Ticker gefunden.'); return; }
+      WEIGHTS = w; markUnsaved(); renderManageList(); loadData();
+    };
+    reader.readAsText(file);
+  }
+  // Toolbar button active states
+  var _origSetPeriod = setPeriod;
+  setPeriod = function(days) {
+    var grp = document.getElementById('period-btns');
+    if (grp) grp.querySelectorAll('.btn').forEach(function(b) {
+      b.classList.toggle('active', b.textContent === ({30:'1M',90:'3M',180:'6M',365:'1J',0:'All'}[days]));
+    });
+    _origSetPeriod(days);
+  };
+  var _origSetTF = setTF;
+  setTF = function(tf) {
+    ['1D','1W','1M'].forEach(function(t) {
+      var b = document.getElementById('tf'+t);
+      if (b) b.classList.toggle('active', t === tf);
+    });
+    _origSetTF(tf);
+  };
+  var _origTogInd = togInd;
+  togInd = function(name) {
+    _origTogInd(name);
+    var b = document.getElementById('b'+name);
+    if (b) b.classList.toggle('ind-active', indicators[name]);
+  };
+  var _origTogLog = togLog;
+  togLog = function() {
+    _origTogLog();
+    var b = document.getElementById('blog');
+    if (b) b.classList.toggle('ind-active', logScale);
+  };
+</script>
+</body>
+</html>

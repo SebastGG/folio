@@ -1,0 +1,22 @@
+{
+  "id": "de.gtech01.folio",
+  "title": "Folio",
+  "author": "seb",
+  "description": "Pers\u00f6nlicher gewichteter Portfolio-Index",
+  "tagline": "Dein pers\u00f6nlicher Aktienindex",
+  "version": "1.0.0",
+  "healthCheckPath": "/health",
+  "httpPort": 8000,
+  "addons": {
+    "localstorage": {},
+    "proxyAuth": {}
+  },
+  "manifestVersion": 2,
+  "website": "https://gtech01.de",
+  "contactEmail": "seb@gtech01.de",
+  "icon": "",
+  "tags": [
+    "finance",
+    "chart"
+  ]
+}

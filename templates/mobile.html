@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Folio</title>
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="stylesheet" href="/static/mobile.css">
+</head>
+<body>
+
+<!-- ── Mobile Header (48px) ──────────────────────────────────────────── -->
+<div id="m-header">
+  <select id="m-basket-select" onchange="switchBasket(this.value)"></select>
+  <button id="m-refresh-btn" class="m-header-btn"
+    onclick="updateAllPrices().then(loadData)">↻</button>
+  <button id="m-save-btn" class="m-header-btn"
+    onclick="saveAll(this)">💾</button>
+</div>
+
+<!-- ── Mobile Chart ───────────────────────────────────────────────────── -->
+<div id="m-chart-wrap">
+  <div id="m-loading" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:var(--surface);z-index:10;">
+    <div style="width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+    <div id="m-loading-text" style="color:var(--muted);font-size:11px;">Lade...</div>
+  </div>
+  <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+  <div id="m-chart-div"></div>
+</div>
+
+<!-- ── Screen: Ticker ─────────────────────────────────────────────────── -->
+<div id="m-screen-watch" class="m-screen">
+  <div id="m-watchlist"></div>
+</div>
+
+<!-- ── Screen: Performance ───────────────────────────────────────────── -->
+<div id="m-screen-perf" class="m-screen">
+  <div class="m-perf-wrap">
+    <div class="m-perf-header">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:9px;color:var(--muted);text-transform:uppercase;">Seit</span>
+        <input type="date" id="m-perf-since"
+          style="font-size:10px;border:1px solid var(--border);padding:3px 6px;background:var(--bg);color:var(--text);"
+          onchange="
+            var d=document.getElementById('perfSinceDate');
+            if(d) d.value=this.value;
+            saveCurrentBasketState();saveBasketsToServer();
+            renderMobilePerf();">
+      </div>
+      <select id="m-perf-sort-mobile"
+        style="font-size:10px;border:1px solid var(--border);background:var(--bg);padding:3px 5px;"
+        onchange="
+          var d=document.getElementById('perfSort');
+          if(d) d.value=this.value;
+          renderMobilePerf();">
+        <option value="alpha">A-Z</option>
+        <option value="1d">1T</option>
+        <option value="1m">1M</option>
+        <option value="ytd">YTD</option>
+        <option value="since">Seit</option>
+      </select>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="m-perf-table">
+        <thead><tr>
+          <th>Ticker</th><th>Kurs</th><th>Pos.</th>
+          <th>Seit</th><th>1T</th><th>YTD</th>
+        </tr></thead>
+        <tbody id="m-perf-body"></tbody>
+        <tfoot id="m-perf-foot"></tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── Screen: Notizen ───────────────────────────────────────────────── -->
+<div id="m-screen-notes" class="m-screen">
+  <div class="m-notes-wrap">
+    <textarea id="m-notes-area" placeholder="Notizen, Beobachtungen, Trading-Ideen..."></textarea>
+  </div>
+</div>
+
+<!-- ── Screen: Indikatoren ───────────────────────────────────────────── -->
+<div id="m-screen-ind" class="m-screen">
+  <div class="m-ind-wrap">
+    <div>
+      <div class="m-ind-label">Zeitraum</div>
+      <div class="m-btn-row">
+        <button class="m-period-btn" onclick="setPeriod(30);syncMobileInd()">1M</button>
+        <button class="m-period-btn" onclick="setPeriod(90);syncMobileInd()">3M</button>
+        <button class="m-period-btn" onclick="setPeriod(180);syncMobileInd()">6M</button>
+        <button class="m-period-btn" onclick="setPeriod(365);syncMobileInd()">1J</button>
+        <button class="m-period-btn" onclick="setPeriod(0);syncMobileInd()">All</button>
+      </div>
+    </div>
+    <div>
+      <div class="m-ind-label">Kerzentyp</div>
+      <div class="m-btn-row">
+        <button class="m-tf-btn" onclick="setTF('1D');syncMobileInd()">1T</button>
+        <button class="m-tf-btn" onclick="setTF('1W');syncMobileInd()">1W</button>
+        <button class="m-tf-btn" onclick="setTF('1M');syncMobileInd()">1M</button>
+      </div>
+    </div>
+    <div>
+      <div class="m-ind-label">Indikatoren</div>
+      <div class="m-btn-row">
+        <button id="m-ind-ma50"  onclick="indicators.ma50=!indicators.ma50;applyPeriod();saveAll();syncMobileInd()">MA50</button>
+        <button id="m-ind-ma200" onclick="indicators.ma200=!indicators.ma200;applyPeriod();saveAll();syncMobileInd()">MA200</button>
+        <button id="m-ind-reg"   onclick="indicators.reg=!indicators.reg;applyPeriod();saveAll();syncMobileInd()">LogReg</button>
+        <button id="m-ind-log"   onclick="logScale=!logScale;applyPeriod();saveAll();syncMobileInd()">Log</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Screen: Einstellungen ─────────────────────────────────────────── -->
+<div id="m-screen-manage" class="m-screen">
+  <div class="m-manage-wrap">
+    <div id="m-manage-content"></div>
+    <button class="m-save-full" onclick="saveAll(this)">💾 Speichern</button>
+  </div>
+</div>
+
+
+<!-- ── Screen: Suche ──────────────────────────────────────────────────── -->
+<div id="m-screen-search" class="m-screen">
+  <div style="padding:12px;">
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <input type="text" id="m-search-input" placeholder="Ticker suchen z.B. AAPL…"
+        style="flex:1;border:1px solid var(--border);padding:10px;background:var(--bg);color:var(--text);font-family:inherit;font-size:13px;outline:none;"
+        oninput="mOnSearch(this.value)" autocomplete="off">
+    </div>
+    <div id="m-search-results"></div>
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Aktuelle Ticker</div>
+      <div id="m-manage-content"></div>
+      <button class="m-save-full" onclick="saveAll(this)">💾 Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bottom Navigation ─────────────────────────────────────────────── -->
+<nav id="m-nav">
+  <button class="m-nav-btn" id="mnav-chart"
+    onclick="mNav('chart',this)">
+    <span class="ico">📈</span><span class="lbl">Chart</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-watch"
+    onclick="mNav('watch',this)">
+    <span class="ico">👁</span><span class="lbl">Ticker</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-perf"
+    onclick="mNav('perf',this)">
+    <span class="ico">📊</span><span class="lbl">Perf.</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-notes"
+    onclick="mNav('notes',this)">
+    <span class="ico">📝</span><span class="lbl">Notizen</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-ind"
+    onclick="mNav('ind',this)">
+    <span class="ico">〰️</span><span class="lbl">Indik.</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-manage"
+    onclick="mNav('manage',this)">
+    <span class="ico">⚙️</span><span class="lbl">Einst.</span>
+  </button>
+  <button class="m-nav-btn" id="mnav-search"
+    onclick="mNav('search',this)">
+    <span class="ico">🔍</span><span class="lbl">Suche</span>
+  </button>
+</nav>
+
+<!-- Hidden stubs: shared.js erwartet diese DOM-Elemente ──────────────── -->
+<div id="watchlist"     style="display:none;"></div>
+<tbody id="perfBody"    style="display:none;"></tbody>
+<tfoot id="perfFoot"    style="display:none;"></tfoot>
+<select id="basketSelect"  style="display:none;"></select>
+<select id="perfSort"      style="display:none;"></select>
+<textarea id="notesArea"   style="display:none;"></textarea>
+<input type="date" id="perfSinceDate" style="display:none;">
+<span id="sinceHeader"  style="display:none;"></span>
+<div id="manageList"    style="display:none;"></div>
+<!-- Stats stubs (computeStats schreibt hier rein, auf Mobile ignoriert) -->
+<span id="sv"  style="display:none;"></span>
+<span id="s1d" style="display:none;"></span><span id="s1w" style="display:none;"></span>
+<span id="s1m" style="display:none;"></span><span id="s3m" style="display:none;"></span>
+<span id="shi" style="display:none;"></span><span id="slo" style="display:none;"></span>
+<span id="sct" style="display:none;"></span>
+
+<!-- Scripts: shared.js zuerst, dann mobile.js ───────────────────────── -->
+<script src="/static/shared.js"></script>
+<script src="/static/mobile.js"></script>
+
+</body>
+</html>
