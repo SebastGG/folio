@@ -738,6 +738,9 @@ async function fetchTicker(sym) {
                 close:  d.close,
                 volume: d.volume || 0,
             };
+        }).filter(function(d) {
+            var day = new Date(d.time + 'T12:00:00Z').getUTCDay();
+            return day !== 0 && day !== 6;
         });
     } catch (e) {
         console.error('fetchTicker failed for ' + sym + ':', e);
