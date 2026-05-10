@@ -232,31 +232,69 @@ function buildIndex(dataMap) {
         if ((WEIGHTS[sym] || 0) === 0) return;
         (dataMap[sym] || []).forEach(function(d) { datesSet.add(d.time); });
     });
-    var dates = Array.from(datesSet).sort();
+    // Wochenenden aus dem Datum-Set entfernen (Samstag=6, Sonntag=0)
+    var dates = Array.from(datesSet).sort().filter(function(d) {
+        var day = new Date(d + 'T12:00:00Z').getUTCDay();
+        return day !== 0 && day !== 6;
+    });
     if (dates.length === 0) return [];
 
-    // Hilfsfunktion: Portfoliowert für ein bestimmtes Preisfeld
-    function portVal(date, field) {
+    // Sortierte Arrays + Zeiger pro Ticker für Forward-Fill (O(n) statt O(n²))
+    // Fehlt ein Ticker an einem Tag (Wochenende/Feiertag), wird der letzte bekannte Kurs genutzt.
+    var _sorted = {}, _ptrs = {}, _last = {};
+    Object.keys(WEIGHTS).forEach(function(sym) {
+        if ((WEIGHTS[sym] || 0) === 0) return;
+        _sorted[sym] = (dataMap[sym] || []).slice().sort(function(a, b) {
+            return a.time < b.time ? -1 : 1;
+        });
+        _ptrs[sym] = 0;
+        _last[sym] = null;
+    });
+
+    // Zeiger für alle Ticker bis einschließlich `date` vorwärts schieben
+    function advanceTo(date) {
+        Object.keys(WEIGHTS).forEach(function(sym) {
+            if ((WEIGHTS[sym] || 0) === 0) return;
+            var bars = _sorted[sym];
+            while (_ptrs[sym] < bars.length && bars[_ptrs[sym]].time <= date) {
+                _last[sym] = bars[_ptrs[sym]];
+                _ptrs[sym]++;
+            }
+        });
+    }
+
+    // Portfoliowert mit Forward-Fill: fehlt ein Ticker-Bar, letzten bekannten Kurs nehmen
+    function portVal(field) {
         var val = 0;
         Object.keys(WEIGHTS).forEach(function(sym) {
             var w = WEIGHTS[sym] || 0;
             if (w === 0) return;
-            var bar = (dataMap[sym] || []).find(function(d) { return d.time === date; });
+            var bar = _last[sym];
             if (bar && bar[field]) val += bar[field] * w;
         });
         return val;
     }
 
     // Basis = Schlusskurs-Portfoliowert am ersten Handelstag
-    var baseVal = portVal(dates[0], 'close');
+    advanceTo(dates[0]);
+    var baseVal = portVal('close');
     if (baseVal === 0) return [];
+
+    // Zeiger zurücksetzen — forEach beginnt ebenfalls bei dates[0]
+    Object.keys(WEIGHTS).forEach(function(sym) { _ptrs[sym] = 0; _last[sym] = null; });
+
+    var totalShares = Object.keys(WEIGHTS).reduce(function(sum, sym) {
+        return sum + (WEIGHTS[sym] || 0);
+    }, 0);
+    var div = totalShares || 1;
 
     var result = [];
     dates.forEach(function(date) {
-        var closeVal = portVal(date, 'close');
-        var openVal  = portVal(date, 'open')  || closeVal;
-        var highVal  = portVal(date, 'high')  || closeVal;
-        var lowVal   = portVal(date, 'low')   || closeVal;
+        advanceTo(date);
+        var closeVal = portVal('close');
+        var openVal  = portVal('open')  || closeVal;
+        var highVal  = portVal('high')  || closeVal;
+        var lowVal   = portVal('low')   || closeVal;
         // Sicherheitsnetz: high/low dürfen open/close nicht um >50% überschreiten
         // (verhindert Ausreißer durch fehlerhafte DB-Einträge)
         var maxRange = Math.max(openVal, closeVal) * 1.5;
@@ -264,28 +302,22 @@ function buildIndex(dataMap) {
         if (highVal > maxRange) highVal = Math.max(openVal, closeVal);
         if (lowVal  < minRange) lowVal  = Math.min(openVal, closeVal);
 
-        // Durchschnittskurs = Portfoliowert / Gesamtanzahl Aktien
-        var totalShares = Object.keys(WEIGHTS).reduce(function(sum, sym) {
-            return sum + (WEIGHTS[sym] || 0);
-        }, 0);
-        var div = totalShares || 1;
+        // Volumen nur für Tage mit echten Bars summieren (kein Forward-Fill bei Volumen)
+        var vol = 0;
+        Object.keys(WEIGHTS).forEach(function(sym) {
+            var w = WEIGHTS[sym] || 0;
+            if (w === 0) return;
+            var bar = _last[sym];
+            if (bar && bar.time === date && bar.volume && bar.close) vol += bar.volume * bar.close * w;
+        });
+
         result.push({
             time:   date,
             open:   parseFloat((openVal  / div).toFixed(2)),
             high:   parseFloat((highVal  / div).toFixed(2)),
             low:    parseFloat((lowVal   / div).toFixed(2)),
             close:  parseFloat((closeVal / div).toFixed(2)),
-            // Volumen = Σ(Handelsvolumen_i × Kurs_i × Anzahl_i) — gewichteter Tagesumsatz in USD
-            volume: (function() {
-                var vol = 0;
-                Object.keys(WEIGHTS).forEach(function(sym) {
-                    var w = WEIGHTS[sym] || 0;
-                    if (w === 0) return;
-                    var bar = (dataMap[sym] || []).find(function(d) { return d.time === date; });
-                    if (bar && bar.volume && bar.close) vol += bar.volume * bar.close * w;
-                });
-                return vol;
-            })(),
+            volume: vol,
         });
     });
     return result;

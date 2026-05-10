@@ -149,7 +149,8 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
         meta  = chart.get("meta", {})
         count = 0
 
-        today = datetime.date.today().strftime("%Y-%m-%d")
+        today_obj = datetime.date.today()
+        today = today_obj.strftime("%Y-%m-%d")
 
         for i, ts in enumerate(timestamps):
             date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
@@ -168,9 +169,11 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
             )
             count += 1
 
-        # Close auf aktuellen Live-Kurs aktualisieren (OHLC kommt aus dem 1d-Bar oben)
+        # Close auf aktuellen Live-Kurs aktualisieren — nur an Handelstagen (Mo–Fr)
+        # Kein Eintrag für Wochenenden: regularMarketPrice wäre der letzte Schlusskurs und
+        # würde als Samstag/Sonntag-Kerze in der DB landen.
         live_price = meta.get("regularMarketPrice")
-        if live_price and live_price > 0:
+        if live_price and live_price > 0 and today_obj.weekday() < 5:
             existing = conn.execute(
                 "SELECT open, high, low FROM prices WHERE ticker=? AND date=?",
                 (ticker, today)
