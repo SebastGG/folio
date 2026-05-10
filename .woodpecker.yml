@@ -10,5 +10,6 @@ steps:
       tags: latest
       username:
         from_secret: registry_user
+        
       password:
         from_secret: registry_password
