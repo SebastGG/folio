@@ -9,6 +9,9 @@ steps:
       repo: registry.gtech01.de/folio
       tags: latest
       username:
-        from_secret: registry_user      
+        from_secret: registry_user
       password:
         from_secret: registry_password
+    secrets:
+      - registry_user
+      - registry_password
