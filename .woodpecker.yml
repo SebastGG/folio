@@ -6,7 +6,7 @@ steps:
       event: [push, manual]
     settings:
       registry: registry.gtech01.de
-      repo: registry.gtech01.de/seb/folio
+      repo: registry.gtech01.de/folio
       tags: latest
       username:
         from_secret: registry_user      
