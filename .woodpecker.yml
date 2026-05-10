@@ -1,0 +1,11 @@
+steps:
+  - name: build-and-push
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      registry: registry.gtech01.de
+      repo: registry.gtech01.de/seb/folio
+      tags: latest
+      username:
+        from_secret: registry_user
+      password:
+        from_secret: registry_password
