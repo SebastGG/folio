@@ -15,11 +15,12 @@ steps:
     privileged: true
     when:
       event: [push, manual]
+    secrets:
+      - source: registry_user
+        target: PLUGIN_USERNAME
+      - source: registry_password
+        target: PLUGIN_PASSWORD
     settings:
       registry: registry.gtech01.de
       repo: registry.gtech01.de/folio
       tags: latest
-      username:
-        from_secret: registry_user
-      password:
-        from_secret: registry_password
