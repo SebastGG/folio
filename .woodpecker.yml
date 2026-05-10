@@ -4,6 +4,8 @@ steps:
     privileged: true
     when:
       event: [push, manual]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       REGISTRY_USER:
         from_secret: registry_user
