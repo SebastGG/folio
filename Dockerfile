@@ -11,6 +11,7 @@ ARG BUILD_HASH=dev
 RUN mkdir -p /app/code/static /app/code/templates
 WORKDIR /app/code
 
+COPY CloudronManifest.json .
 COPY main.py .
 COPY start.sh .
 RUN echo "$BUILD_HASH" > /app/code/build_hash.txt
