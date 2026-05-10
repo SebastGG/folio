@@ -155,20 +155,16 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
             )
             count += 1
 
-        # Heutiger Intraday-Kurs aus meta.regularMarketPrice
-        # Überschreibt heutigen Eintrag mit aktuellem Kurs
+        # Heutiger Intraday-Kurs aus meta — echte Intraday-Werte statt Proxy
         today = datetime.date.today().strftime("%Y-%m-%d")
         live_price = meta.get("regularMarketPrice")
-        live_open  = meta.get("chartPreviousClose")  # Vortages-Close als Open-Proxy
         if live_price and live_price > 0:
-            # Heutigen Eintrag mit Live-Kurs setzen/aktualisieren
-            # open  = gestriger Schlusskurs (chartPreviousClose) als Proxy
-            # high  = max(open, live_price)
-            # low   = min(open, live_price)
-            # close = live_price (aktueller Kurs)
-            o = live_open or live_price
-            h = max(o, live_price)
-            l = min(o, live_price)
+            o = meta.get("regularMarketOpen")   or live_price
+            h = meta.get("regularMarketDayHigh") or live_price
+            l = meta.get("regularMarketDayLow")  or live_price
+            # Sicherstellen dass live_price in high/low enthalten ist
+            h = max(h, live_price)
+            l = min(l, live_price)
             conn.execute(
                 "INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)",
                 (ticker, today, o, h, l, live_price, 0)
