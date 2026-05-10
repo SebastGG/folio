@@ -1,14 +1,15 @@
 steps:
   - name: build-and-push
-    image: woodpeckerci/plugin-docker-buildx
+    image: docker:dind
     privileged: true
     when:
       event: [push, manual]
-    settings:
-      registry: registry.gtech01.de
-      repo: registry.gtech01.de/folio
-      tags: latest
-      username:
+    environment:
+      REGISTRY_USER:
         from_secret: registry_user
-      password:
+      REGISTRY_PASSWORD:
         from_secret: registry_password
+    commands:
+      - docker login registry.gtech01.de -u $REGISTRY_USER -p $REGISTRY_PASSWORD
+      - docker build -t registry.gtech01.de/folio:latest .
+      - docker push registry.gtech01.de/folio:latest
