@@ -57,7 +57,9 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 # Rate Limiting: max 1 Update pro Minute pro User
+import threading
 _last_update: dict[str, float] = {}
+_last_update_lock = threading.Lock()
 
 # ── User-Verwaltung ────────────────────────────────────────────────────────────
 def get_user(request: Request) -> str:
@@ -66,7 +68,7 @@ def get_user(request: Request) -> str:
     Fallback: 'default' (für lokale Entwicklung ohne proxyAuth)
     """
     user = request.headers.get("X-Forwarded-User", "").strip()
-    user = re.sub(r'[^a-zA-Z0-9_.\-]', '', user)
+    user = re.sub(r'[^a-zA-Z0-9_\-]', '', user)  # kein Punkt — verhindert Path Traversal via ".."
     return user or "default"
 
 def get_user_dir(user: str) -> str:
@@ -176,7 +178,8 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
         conn.commit()
         return count
     except Exception as e:
-        return f"error: {e}"
+        print(f"update_ticker error for {ticker}: {e}")
+        return -1
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 def load_config(config_file: str) -> dict:
@@ -238,12 +241,13 @@ async def update_prices(request: Request):
     """
     user = get_user(request)
     now = time.time()
-    if now - _last_update.get(user, 0) < 60:
-        return JSONResponse(
-            content={"ok": False, "error": "Rate limit: 1x pro Minute"},
-            status_code=429
-        )
-    _last_update[user] = now
+    with _last_update_lock:
+        if now - _last_update.get(user, 0) < 60:
+            return JSONResponse(
+                content={"ok": False, "error": "Rate limit: 1x pro Minute"},
+                status_code=429
+            )
+        _last_update[user] = now
 
     files = get_user_files(user)
     init_db(files["db"])
@@ -358,8 +362,10 @@ async def get_notes(request: Request):
 async def save_notes(request: Request):
     user = get_user(request)
     files = get_user_files(user)
-    with open(files["notes"], "w") as f:
+    tmp = files["notes"] + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(await request.json(), f)
+    shutil.move(tmp, files["notes"])
     return JSONResponse(content={"ok": True})
 
 @app.get("/api/search/{query}")
