@@ -1,26 +1,14 @@
 steps:
-  - name: debug
-    image: alpine
-    when:
-      event: [push, manual]
-    commands:
-      - echo "Registry user is $REGISTRY_USER"
-      - wget -q --spider https://registry.gtech01.de/v2/ && echo "Registry erreichbar" || echo "Registry NICHT erreichbar"
-    secrets:
-      - registry_user
-      - registry_password
-
   - name: build-and-push
     image: woodpeckerci/plugin-docker-buildx
     privileged: true
     when:
       event: [push, manual]
-    secrets:
-      - source: registry_user
-        target: PLUGIN_USERNAME
-      - source: registry_password
-        target: PLUGIN_PASSWORD
     settings:
       registry: registry.gtech01.de
       repo: registry.gtech01.de/folio
       tags: latest
+      username:
+        from_secret: registry_user
+      password:
+        from_secret: registry_password
