@@ -138,9 +138,11 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
         meta  = chart.get("meta", {})
         count = 0
 
+        today = datetime.date.today().strftime("%Y-%m-%d")
+
         for i, ts in enumerate(timestamps):
             date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-            if date_str <= last_date:
+            if date_str < last_date:  # < statt <= damit heute immer neu geladen wird
                 continue
             o = ohlcv["open"][i]
             h = ohlcv["high"][i]
@@ -155,20 +157,30 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
             )
             count += 1
 
-        # Heutiger Intraday-Kurs aus meta — echte Intraday-Werte statt Proxy
-        today = datetime.date.today().strftime("%Y-%m-%d")
+        # Close auf aktuellen Live-Kurs aktualisieren (OHLC kommt aus dem 1d-Bar oben)
         live_price = meta.get("regularMarketPrice")
         if live_price and live_price > 0:
-            o = meta.get("regularMarketOpen")   or live_price
-            h = meta.get("regularMarketDayHigh") or live_price
-            l = meta.get("regularMarketDayLow")  or live_price
-            # Sicherstellen dass live_price in high/low enthalten ist
-            h = max(h, live_price)
-            l = min(l, live_price)
-            conn.execute(
-                "INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)",
-                (ticker, today, o, h, l, live_price, 0)
-            )
+            existing = conn.execute(
+                "SELECT open, high, low FROM prices WHERE ticker=? AND date=?",
+                (ticker, today)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE prices SET close=?, high=?, low=? WHERE ticker=? AND date=?",
+                    (live_price,
+                     max(existing["high"], live_price),
+                     min(existing["low"],  live_price),
+                     ticker, today)
+                )
+            else:
+                # Kein historischer Bar vorhanden (z.B. Feiertag) — Meta als Fallback
+                o = meta.get("regularMarketOpen")    or live_price
+                h = meta.get("regularMarketDayHigh") or live_price
+                l = meta.get("regularMarketDayLow")  or live_price
+                conn.execute(
+                    "INSERT INTO prices VALUES (?,?,?,?,?,?,?)",
+                    (ticker, today, o, max(h, live_price), min(l, live_price), live_price, 0)
+                )
             count += 1
 
         conn.commit()
