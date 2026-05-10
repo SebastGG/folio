@@ -3,13 +3,12 @@ steps:
     image: woodpeckerci/plugin-docker-buildx
     privileged: true
     when:
-      event: push
+      event: [push, manual]
     settings:
       registry: registry.gtech01.de
       repo: registry.gtech01.de/seb/folio
       tags: latest
       username:
-        from_secret: registry_user
-        
+        from_secret: registry_user      
       password:
         from_secret: registry_password
