@@ -1,6 +1,9 @@
 steps:
   - name: build-and-push
     image: woodpeckerci/plugin-docker-buildx
+    privileged: true
+    when:
+      event: push
     settings:
       registry: registry.gtech01.de
       repo: registry.gtech01.de/seb/folio
