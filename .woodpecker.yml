@@ -11,6 +11,7 @@ steps:
         from_secret: registry_user
       REGISTRY_PASSWORD:
         from_secret: registry_password
+        
     commands:
       - docker login registry.gtech01.de -u $REGISTRY_USER -p $REGISTRY_PASSWORD
       - docker build -t registry.gtech01.de/folio:latest .
