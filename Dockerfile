@@ -11,6 +11,7 @@ WORKDIR /app/code
 COPY main.py .
 COPY start.sh .
 COPY icon.png .
+COPY CloudronManifest.json .
 COPY static/ static/
 COPY templates/ templates/
 
