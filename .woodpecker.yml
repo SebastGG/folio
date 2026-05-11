@@ -25,4 +25,4 @@ steps:
         from_secret: cloudron_token
     commands:
       - apk add --no-cache curl
-      - curl -s -H "Authorization: Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps | grep -o '"id":"[^"]*"'
+      - curl -s -H "Authorization:Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps
