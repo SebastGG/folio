@@ -11,8 +11,19 @@ steps:
         from_secret: registry_user
       REGISTRY_PASSWORD:
         from_secret: registry_password
-        
     commands:
       - docker login registry.gtech01.de -u $REGISTRY_USER -p $REGISTRY_PASSWORD
       - docker build --build-arg BUILD_HASH=${CI_COMMIT_SHA} -t registry.gtech01.de/folio:latest .
       - docker push registry.gtech01.de/folio:latest
+
+  - name: deploy
+    image: node:alpine
+    when:
+      event: [push, manual]
+    environment:
+      CLOUDRON_TOKEN:
+        from_secret: cloudron_token
+    commands:
+      - npm install -g cloudron
+      - cloudron login my.gtech01.de --token $CLOUDRON_TOKEN
+      - cloudron update --app folio.gtech01.de --image registry.gtech01.de/folio:latest
