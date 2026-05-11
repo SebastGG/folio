@@ -27,5 +27,5 @@ steps:
       - apk add --no-cache curl jq
       - APP_ID=$(curl -s -H "Authorization:Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps | jq -r '.apps[] | select(.fqdn=="folio.gtech01.de") | .id')
       - echo "App ID is $APP_ID"
-      - curl -s -H "Authorization:Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps/$APP_ID | jq -c '.manifest' > /tmp/manifest.json
+      - curl -s -H "Authorization:Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps/$APP_ID | jq -c '{manifest:.manifest}' > /tmp/manifest.json
       - curl -s -X POST -H "Authorization:Bearer $CLOUDRON_TOKEN" -H "Content-Type:application/json" -d @/tmp/manifest.json https://my.gtech01.de/api/v1/apps/$APP_ID/update
