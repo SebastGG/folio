@@ -825,6 +825,7 @@ function switchView(view) {
     _lastCandles = [];
     loadData().then(function() {
         if (typeof renderWatchlist === 'function') renderWatchlist();
+        loadDrawings();
     });
 }
 
