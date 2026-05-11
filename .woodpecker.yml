@@ -17,13 +17,12 @@ steps:
       - docker push registry.gtech01.de/folio:latest
 
   - name: deploy
-    image: node:alpine
+    image: alpine
     when:
       event: [push, manual]
     environment:
       CLOUDRON_TOKEN:
         from_secret: cloudron_token
     commands:
-      - npm install -g cloudron
-      - cloudron login my.gtech01.de --token $CLOUDRON_TOKEN
-      - cloudron update --app folio.gtech01.de --image registry.gtech01.de/folio:latest
+      - apk add --no-cache curl
+      - curl -s -H "Authorization: Bearer $CLOUDRON_TOKEN" https://my.gtech01.de/api/v1/apps | grep -o '"id":"[^"]*"'
