@@ -796,8 +796,9 @@ function loadLayout() {
     }
 
     // ── Panel-Resizer (horizontal zwischen Bottom-Panels) ──
-    [['panel-resizer-1', 'panel-notes', 'panel-perf'],
-     ['panel-resizer-2', 'panel-perf',  'panel-import']].forEach(function(cfg) {
+    [['panel-resizer-1', 'panel-notes',   'panel-perf'],
+     ['panel-resizer-2', 'panel-perf',    'panel-import'],
+     ['panel-resizer-3', 'panel-import',  'panel-ibkr']].forEach(function(cfg) {
         var pr   = document.getElementById(cfg[0]);
         var left = document.getElementById(cfg[1]);
         if (!pr || !left) return;
@@ -888,5 +889,141 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
+        ibkrLoadPositions().then(function() { ibkrRenderTable(); });
     });
 })();
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 12. IBKR POSITIONEN (Desktop)                             ║
+// ╚══════════════════════════════════════════════════════════╝
+
+function ibkrRenderTable() {
+    var tbody = document.getElementById('ibkrBody');
+    var tfoot = document.getElementById('ibkrFoot');
+    if (!tbody) return;
+
+    if (!ibkrPositions || ibkrPositions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
+        if (tfoot) tfoot.innerHTML = '';
+        return;
+    }
+
+    var html = '', totalPnl = 0, totalValue = 0, totalCost = 0;
+    ibkrPositions.forEach(function(p) {
+        var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
+        var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
+        totalPnl   += pnlMoney;
+        totalValue += (p.position_value || 0);
+        totalCost  += (p.cost_basis_money || 0);
+        var pColor = pnlMoney >= 0 ? '#2d8a4e' : '#c0392b';
+        var qty    = p.quantity || 0;
+        html += '<tr>'
+            + '<td style="font-weight:500">' + p.symbol + '</td>'
+            + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
+            + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
+            + '<td>' + (p.cost_basis_price || 0).toFixed(2) + '</td>'
+            + '<td>' + (p.mark_price || 0).toFixed(2) + '</td>'
+            + '<td style="color:' + pColor + '">' + (pnlMoney >= 0 ? '+' : '') + pnlMoney.toFixed(2) + '</td>'
+            + '<td style="color:' + pColor + '">' + (pnlPct  >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
+            + '</tr>';
+    });
+    tbody.innerHTML = html;
+
+    if (tfoot && totalValue !== 0) {
+        var tPnlPct = totalCost ? totalPnl / Math.abs(totalCost) * 100 : 0;
+        var tc = totalPnl >= 0 ? '#2d8a4e' : '#c0392b';
+        tfoot.innerHTML = '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
+            + '<td style="font-weight:700">TOTAL</td><td></td><td></td>'
+            + '<td style="font-weight:700">' + totalCost.toFixed(0)  + '</td>'
+            + '<td style="font-weight:700">' + totalValue.toFixed(0) + '</td>'
+            + '<td style="font-weight:700;color:' + tc + '">' + (totalPnl  >= 0 ? '+' : '') + totalPnl.toFixed(2)  + '</td>'
+            + '<td style="font-weight:700;color:' + tc + '">' + (tPnlPct   >= 0 ? '+' : '') + tPnlPct.toFixed(2)   + '%</td>'
+            + '</tr>';
+    }
+
+    var syncEl = document.getElementById('ibkrLastSync');
+    if (syncEl && ibkrLastSync) {
+        syncEl.textContent = ibkrLastSync.slice(0, 16).replace('T', ' ') + ' UTC';
+    }
+}
+
+function ibkrShowSettings() {
+    var modal = document.getElementById('ibkrModal');
+    if (modal) { modal.style.display = 'flex'; modal.classList.add('open'); }
+    var msg = document.getElementById('ibkrModalMsg');
+    if (msg) msg.textContent = '';
+}
+
+function ibkrCloseSettings() {
+    var modal = document.getElementById('ibkrModal');
+    if (modal) { modal.style.display = 'none'; modal.classList.remove('open'); }
+}
+
+async function ibkrSaveSettings() {
+    var token = (document.getElementById('ibkrTokenInput') || {}).value || '';
+    var qid   = (document.getElementById('ibkrQueryInput') || {}).value || '';
+    var msg   = document.getElementById('ibkrModalMsg');
+    var btn   = document.getElementById('ibkrSaveBtn');
+    if (!token || !qid) {
+        if (msg) { msg.textContent = 'Bitte beide Felder ausfüllen.'; msg.style.color = 'var(--red)'; }
+        return;
+    }
+    if (btn) { btn.textContent = '...'; btn.disabled = true; }
+    try {
+        var result = await ibkrSaveConfig(token, qid);
+        if (result.ok) {
+            if (msg) { msg.textContent = 'Gespeichert.'; msg.style.color = 'var(--green)'; }
+            setTimeout(ibkrCloseSettings, 1000);
+        } else {
+            if (msg) { msg.textContent = result.error || 'Fehler'; msg.style.color = 'var(--red)'; }
+        }
+    } catch(e) {
+        if (msg) { msg.textContent = 'Verbindungsfehler: ' + e.message; msg.style.color = 'var(--red)'; }
+    } finally {
+        if (btn) { btn.textContent = 'Speichern'; btn.disabled = false; }
+    }
+}
+
+async function ibkrSync() {
+    var btn = document.getElementById('ibkrSyncBtn');
+    if (btn) { btn.textContent = '...'; btn.disabled = true; }
+    try {
+        var result = await ibkrDoSync();
+        if (result.ok) {
+            ibkrLastSync = result.last_sync;
+            await ibkrLoadPositions();
+            ibkrRenderTable();
+        } else {
+            alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
+        }
+    } catch(e) {
+        alert('Verbindungsfehler: ' + e.message);
+    } finally {
+        if (btn) { btn.textContent = '↻ Sync'; btn.disabled = false; }
+    }
+}
+
+function ibkrExport() {
+    if (!ibkrPositions || ibkrPositions.length === 0) {
+        alert('Keine IBKR Positionen geladen. Bitte zuerst synchronisieren.');
+        return;
+    }
+    var csv = ibkrBuildExportCsv();
+    if (!csv) {
+        alert('Kein Export möglich — kein aktiver Basket oder Portfoliowert = 0.');
+        return;
+    }
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a    = document.createElement('a');
+    a.href   = URL.createObjectURL(blob);
+    a.download = 'ibkr_basket_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+}
+
+// Modal bei Klick außerhalb schließen
+document.addEventListener('click', function(e) {
+    var modal = document.getElementById('ibkrModal');
+    if (modal && modal.style.display === 'flex' && e.target === modal) {
+        ibkrCloseSettings();
+    }
+});

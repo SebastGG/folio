@@ -414,3 +414,229 @@ async def search_ticker(query: str, request: Request):
     except Exception as e:
         print(f"Search error for {query}: {e}")
         return JSONResponse(content=[])
+
+# ── IBKR Flex Query Integration ────────────────────────────────────────────────
+
+try:
+    from cryptography.fernet import Fernet as _Fernet
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
+
+def _get_ibkr_key(data_dir: str) -> bytes:
+    """Gibt Fernet-Key für IBKR-Verschlüsselung zurück, erstellt ihn bei Bedarf."""
+    key_file = os.path.join(data_dir, "ibkr.key")
+    if os.path.exists(key_file):
+        with open(key_file, "rb") as f:
+            return f.read().strip()
+    if not _CRYPTO_OK:
+        return b""
+    from cryptography.fernet import Fernet
+    key = Fernet.generate_key()
+    with open(key_file, "wb") as f:
+        f.write(key)
+    return key
+
+def _ibkr_encrypt(text: str, data_dir: str) -> str:
+    if not _CRYPTO_OK:
+        import base64
+        return base64.b64encode(text.encode()).decode()
+    from cryptography.fernet import Fernet
+    return Fernet(_get_ibkr_key(data_dir)).encrypt(text.encode()).decode()
+
+def _ibkr_decrypt(token: str, data_dir: str) -> str:
+    if not _CRYPTO_OK:
+        import base64
+        return base64.b64decode(token.encode()).decode()
+    from cryptography.fernet import Fernet
+    return Fernet(_get_ibkr_key(data_dir)).decrypt(token.encode()).decode()
+
+def _init_ibkr_tables(db_file: str):
+    """Erstellt IBKR-Tabellen falls nicht vorhanden."""
+    conn = get_db(db_file)
+    conn.execute('''CREATE TABLE IF NOT EXISTS positions (
+        symbol           TEXT PRIMARY KEY,
+        quantity         REAL,
+        cost_basis_price REAL,
+        cost_basis_money REAL,
+        mark_price       REAL,
+        position_value   REAL,
+        asset_class      TEXT,
+        last_sync        TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ibkr_config (
+        key   TEXT PRIMARY KEY,
+        value TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+@app.get("/api/ibkr/config/status")
+async def ibkr_config_status(request: Request):
+    """Gibt zurück ob IBKR konfiguriert ist (ohne Credentials zu senden)."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    keys  = {r["key"] for r in conn.execute("SELECT key FROM ibkr_config").fetchall()}
+    conn.close()
+    return JSONResponse(content={"configured": "flex_token" in keys and "query_id" in keys})
+
+@app.post("/api/ibkr/config")
+async def set_ibkr_config(request: Request):
+    """Speichert Flex Token + Query ID AES-verschlüsselt."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    body  = await request.json()
+    token = (body.get("flex_token") or "").strip()
+    qid   = (body.get("query_id")   or "").strip()
+    if not token or not qid:
+        return JSONResponse({"ok": False, "error": "flex_token und query_id erforderlich"}, status_code=400)
+    enc_token = _ibkr_encrypt(token, files["data_dir"])
+    enc_qid   = _ibkr_encrypt(qid,   files["data_dir"])
+    conn = get_db(files["db"])
+    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('flex_token', ?)", (enc_token,))
+    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id',   ?)", (enc_qid,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
+    """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
+    import csv as csv_mod
+    import datetime as dt_
+    import time as time_
+    import urllib.request as urlreq
+    import urllib.error
+
+    conn = get_db(db_file)
+    cfg  = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
+    conn.close()
+
+    if "flex_token" not in cfg or "query_id" not in cfg:
+        return {"ok": False, "error": "IBKR nicht konfiguriert"}
+
+    flex_token = _ibkr_decrypt(cfg["flex_token"], data_dir)
+    query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
+
+    # Step 1: SendRequest → ReferenceCode
+    url1 = (
+        "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
+        f"FlexStatementService.SendRequest?v=3&t={flex_token}&q={query_id}&p=3"
+    )
+    try:
+        req1 = urlreq.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
+        with urlreq.urlopen(req1, timeout=30) as resp:
+            xml1 = resp.read().decode("utf-8")
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"SendRequest fehlgeschlagen: {e}"}
+
+    m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
+    if not m:
+        err_m = re.search(r"<ErrorMessage>([^<]+)</ErrorMessage>", xml1)
+        err_msg = err_m.group(1) if err_m else xml1[:300]
+        return {"ok": False, "error": f"Kein ReferenceCode: {err_msg}"}
+    ref_code = m.group(1)
+
+    # Step 2: GetStatement — retry bis zu 5× bei "Processing"
+    csv_text = None
+    for attempt in range(5):
+        url2 = (
+            "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
+            f"FlexStatementService.GetStatement?v=3&t={flex_token}&q={ref_code}&p=3"
+        )
+        try:
+            req2 = urlreq.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
+            with urlreq.urlopen(req2, timeout=30) as resp:
+                content = resp.read().decode("utf-8")
+        except urllib.error.URLError as e:
+            return {"ok": False, "error": f"GetStatement fehlgeschlagen: {e}"}
+
+        if "<ErrorCode>1019</ErrorCode>" in content or "<Status>Processing</Status>" in content:
+            if attempt < 4:
+                time_.sleep(5)
+                continue
+            return {"ok": False, "error": "IBKR verarbeitet noch — bitte in 30s erneut versuchen"}
+        csv_text = content
+        break
+
+    if not csv_text:
+        return {"ok": False, "error": "Leere Antwort von IBKR"}
+
+    # CSV parsen: Header-Zeile für Spaltenindizes, dann Data-Zeilen
+    header_map: dict = {}
+    positions   = []
+    now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for raw_line in csv_text.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            reader = csv_mod.reader([raw_line])
+            parts  = next(reader)
+        except Exception:
+            continue
+        if len(parts) < 3:
+            continue
+
+        if parts[0] == "Open Positions" and parts[1] == "Header":
+            header_map = {col.strip(): i for i, col in enumerate(parts)}
+            continue
+
+        if parts[0] == "Open Positions" and parts[1] == "Data":
+            if not header_map:
+                continue
+
+            def _gc(name: str, default: str = "") -> str:
+                idx = header_map.get(name)
+                return parts[idx].strip() if (idx is not None and idx < len(parts)) else default
+
+            symbol = _gc("Symbol")
+            if not symbol:
+                continue
+            try:
+                qty    = float(_gc("Quantity",       "0") or "0")
+                cbp    = float(_gc("CostBasisPrice", "0") or "0")
+                cbm    = float(_gc("CostBasisMoney", "0") or "0")
+                mrkp   = float(_gc("MarkPrice",      "0") or "0")
+                posval = float(_gc("PositionValue",  "0") or "0")
+            except ValueError:
+                continue
+            positions.append((symbol, qty, cbp, cbm, mrkp, posval, _gc("AssetClass"), now))
+
+    if not positions:
+        return {"ok": False, "error": "Keine 'Open Positions' im CSV gefunden"}
+
+    conn = get_db(db_file)
+    conn.execute("DELETE FROM positions")
+    conn.executemany("INSERT INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "count": len(positions), "last_sync": now}
+
+@app.get("/api/ibkr/sync")
+async def ibkr_sync(request: Request):
+    """Ruft IBKR Flex API ab und befüllt die positions-Tabelle."""
+    import asyncio
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    try:
+        loop   = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _do_ibkr_sync, files["db"], files["data_dir"])
+        return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
+    except Exception as e:
+        print(f"ibkr_sync error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.get("/api/ibkr/positions")
+async def ibkr_positions(request: Request):
+    """Alle gespeicherten IBKR-Positionen als JSON."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    rows  = conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall()
+    conn.close()
+    return JSONResponse(content=[dict(r) for r in rows])

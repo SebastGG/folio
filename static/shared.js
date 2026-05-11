@@ -1096,3 +1096,68 @@ function navigateWatchlist(dir) {
     }
     // renderWatchlist wird von switchView → loadData → renderWatchlist aufgerufen
 }
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 14. IBKR FLEX QUERY                                       ║
+// ╚══════════════════════════════════════════════════════════╝
+
+var ibkrPositions = [];   // Geladene IBKR-Positionen
+var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
+
+async function ibkrLoadPositions() {
+    try {
+        var r = await fetch('/api/ibkr/positions');
+        ibkrPositions = await r.json();
+        if (ibkrPositions.length > 0) ibkrLastSync = ibkrPositions[0].last_sync;
+        return ibkrPositions;
+    } catch(e) {
+        console.warn('ibkrLoadPositions failed:', e);
+        ibkrPositions = [];
+        return [];
+    }
+}
+
+async function ibkrSaveConfig(token, queryId) {
+    var r = await fetch('/api/ibkr/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({flex_token: token, query_id: queryId})
+    });
+    return await r.json();
+}
+
+async function ibkrDoSync() {
+    var r = await fetch('/api/ibkr/sync');
+    return await r.json();
+}
+
+/**
+ * Erzeugt CSV im IBKR Basket Trader Format aus dem Vergleich
+ * aktiver Basket-Gewichte mit IBKR-Ist-Positionen.
+ */
+function ibkrBuildExportCsv() {
+    var totalPortValue = ibkrPositions.reduce(function(s, p) { return s + (p.position_value || 0); }, 0);
+    if (totalPortValue <= 0) return null;
+
+    var tickers = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) > 0; });
+    if (tickers.length === 0) return null;
+    var totalWeight = tickers.reduce(function(s, sym) { return s + (WEIGHTS[sym] || 0); }, 0);
+
+    var ibkrMap = {};
+    ibkrPositions.forEach(function(p) { ibkrMap[p.symbol] = p; });
+
+    var rows = [['Symbol', 'Action', 'Quantity']];
+    tickers.forEach(function(sym) {
+        var targetValue = (WEIGHTS[sym] / totalWeight) * totalPortValue;
+        var pos         = ibkrMap[sym];
+        var markPrice   = pos ? (pos.mark_price || 0) : 0;
+        var curQty      = pos ? (pos.quantity   || 0) : 0;
+        if (markPrice <= 0) return;
+        var targetQty = Math.round(targetValue / markPrice);
+        var diff      = targetQty - curQty;
+        if (Math.abs(diff) < 1) return;
+        rows.push([sym, diff > 0 ? 'BUY' : 'SELL', String(Math.abs(diff))]);
+    });
+
+    return rows.length > 1 ? rows.map(function(r) { return r.join(','); }).join('\n') : null;
+}

@@ -216,3 +216,22 @@ select, input, button, textarea { font-family: inherit; font-size: 11px; }
   background: var(--green); color: white; border: none;
   cursor: pointer; touch-action: manipulation;
 }
+
+/* ── IBKR Positionen Screen ────────────────────────────────────────────────── */
+.m-ibkr-wrap { padding: 0; }
+.m-ibkr-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-wrap: wrap;
+}
+.m-ibkr-btn-primary {
+  background: var(--text); color: var(--bg); border: none;
+  padding: 8px 14px; font-family: inherit; font-size: 11px;
+  cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.m-ibkr-btn-secondary {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  padding: 8px 12px; font-family: inherit; font-size: 11px;
+  cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  margin-left: auto;
+}
