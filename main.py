@@ -564,9 +564,28 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if not csv_text:
         return {"ok": False, "error": "Leere Antwort von IBKR"}
 
-    # CSV parsen: Header-Zeile für Spaltenindizes, dann Data-Zeilen
-    header_map: dict = {}
-    positions   = []
+    # Festes Spalten-Layout (IBKR Flex CSV, Typ DATA/"POST"):
+    # Index 0  = Zeilentyp ("HEADER" / "DATA")
+    # Index 1  = Sektionsname ("POST")
+    # Index 4  = CurrencyPrimary
+    # Index 6  = AssetClass
+    # Index 8  = Symbol
+    # Index 29 = Quantity
+    # Index 30 = MarkPrice
+    # Index 31 = PositionValue
+    # Index 32 = CostBasisPrice
+    # Index 33 = CostBasisMoney
+    IDX_CURRENCY    = 4
+    IDX_ASSET_CLASS = 6
+    IDX_SYMBOL      = 8
+    IDX_QUANTITY    = 29
+    IDX_MARK_PRICE  = 30
+    IDX_POS_VALUE   = 31
+    IDX_CB_PRICE    = 32
+    IDX_CB_MONEY    = 33
+    MIN_COLS        = IDX_CB_MONEY + 1  # mindestens 34 Felder
+
+    positions = []
     now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for raw_line in csv_text.splitlines():
@@ -577,36 +596,26 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             parts  = next(reader)
         except Exception:
             continue
-        if len(parts) < 3:
+        # Nur DATA-Zeilen mit genug Feldern verarbeiten
+        if len(parts) < MIN_COLS or parts[0] != "DATA":
             continue
-
-        if parts[0] == "Open Positions" and parts[1] == "Header":
-            header_map = {col.strip(): i for i, col in enumerate(parts)}
+        symbol = parts[IDX_SYMBOL].strip()
+        if not symbol:
             continue
+        try:
+            qty    = float(parts[IDX_QUANTITY].strip()  or "0")
+            mrkp   = float(parts[IDX_MARK_PRICE].strip() or "0")
+            posval = float(parts[IDX_POS_VALUE].strip()  or "0")
+            cbp    = float(parts[IDX_CB_PRICE].strip()   or "0")
+            cbm    = float(parts[IDX_CB_MONEY].strip()   or "0")
+        except ValueError:
+            continue
+        asset_class = parts[IDX_ASSET_CLASS].strip()
+        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now))
 
-        if parts[0] == "Open Positions" and parts[1] == "Data":
-            if not header_map:
-                continue
-
-            def _gc(name: str, default: str = "") -> str:
-                idx = header_map.get(name)
-                return parts[idx].strip() if (idx is not None and idx < len(parts)) else default
-
-            symbol = _gc("Symbol")
-            if not symbol:
-                continue
-            try:
-                qty    = float(_gc("Quantity",       "0") or "0")
-                cbp    = float(_gc("CostBasisPrice", "0") or "0")
-                cbm    = float(_gc("CostBasisMoney", "0") or "0")
-                mrkp   = float(_gc("MarkPrice",      "0") or "0")
-                posval = float(_gc("PositionValue",  "0") or "0")
-            except ValueError:
-                continue
-            positions.append((symbol, qty, cbp, cbm, mrkp, posval, _gc("AssetClass"), now))
-
+    print(f"[IBKR] Geparste Positionen: {len(positions)}")
     if not positions:
-        return {"ok": False, "error": "Keine 'Open Positions' im CSV gefunden"}
+        return {"ok": False, "error": "Keine DATA-Zeilen im CSV gefunden — prüfe Flex-Query-Konfiguration"}
 
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
