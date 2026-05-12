@@ -521,10 +521,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
 
     # Step 1: SendRequest → ReferenceCode (bis zu 3 Versuche, 10s Pause)
-    url1 = (
-        "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
-        f"FlexStatementService.SendRequest?v=3&t={flex_token}&q={query_id}&p=3"
-    )
+    url1 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest?v=3&t={flex_token}&q={query_id}"
     ref_code = None
     last_err  = ""
     for attempt1 in range(3):
@@ -556,10 +553,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     # Step 2: GetStatement — retry bis zu 5× bei "Processing"
     csv_text = None
     for attempt in range(5):
-        url2 = (
-            "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
-            f"FlexStatementService.GetStatement?v=3&t={flex_token}&q={ref_code}&p=3"
-        )
+        url2 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement?v=3&t={flex_token}&q={ref_code}"
         try:
             req2 = urlreq.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
             with urlreq.urlopen(req2, timeout=30) as resp:
