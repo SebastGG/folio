@@ -520,24 +520,37 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     flex_token = _ibkr_decrypt(cfg["flex_token"], data_dir)
     query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
 
-    # Step 1: SendRequest → ReferenceCode
+    # Step 1: SendRequest → ReferenceCode (bis zu 3 Versuche, 10s Pause)
     url1 = (
         "https://gdcdyn.interactivebrokers.com/Universal/servlet/"
         f"FlexStatementService.SendRequest?v=3&t={flex_token}&q={query_id}&p=3"
     )
-    try:
-        req1 = urlreq.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
-        with urlreq.urlopen(req1, timeout=30) as resp:
-            xml1 = resp.read().decode("utf-8")
-    except urllib.error.URLError as e:
-        return {"ok": False, "error": f"SendRequest fehlgeschlagen: {e}"}
+    ref_code = None
+    last_err  = ""
+    for attempt1 in range(3):
+        try:
+            req1 = urlreq.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
+            with urlreq.urlopen(req1, timeout=30) as resp:
+                xml1 = resp.read().decode("utf-8")
+        except urllib.error.URLError as e:
+            last_err = f"SendRequest fehlgeschlagen: {e}"
+            if attempt1 < 2:
+                time_.sleep(10)
+                continue
+            return {"ok": False, "error": last_err}
 
-    m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
-    if not m:
-        err_m = re.search(r"<ErrorMessage>([^<]+)</ErrorMessage>", xml1)
-        err_msg = err_m.group(1) if err_m else xml1[:300]
-        return {"ok": False, "error": f"Kein ReferenceCode: {err_msg}"}
-    ref_code = m.group(1)
+        m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
+        if m:
+            ref_code = m.group(1)
+            break
+
+        err_m   = re.search(r"<ErrorMessage>([^<]+)</ErrorMessage>", xml1)
+        last_err = err_m.group(1) if err_m else xml1[:300]
+        if attempt1 < 2:
+            time_.sleep(10)
+
+    if not ref_code:
+        return {"ok": False, "error": f"Kein ReferenceCode: {last_err}"}
 
     # Step 2: GetStatement — retry bis zu 5× bei "Processing"
     csv_text = None
