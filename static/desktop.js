@@ -919,17 +919,21 @@ function ibkrRenderTable() {
             + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
     };
 
-    var html = '', totalPnl = 0, totalValue = 0, totalCost = 0;
+    var html = '', totalPnl = 0, totalValue = 0, totalCost = 0, totalValueEur = 0, totalCostEur = 0, totalPnlEur = 0;
 
     // ── Positionen ─────────────────────────────────────────────
     if (hasPosns) {
         html += sectionHdr('Positionen');
         ibkrPositions.forEach(function(p) {
+            var fx       = p.fx_rate_to_base || 1.0;
             var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
             var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
-            totalPnl   += pnlMoney;
-            totalValue += (p.position_value || 0);
-            totalCost  += (p.cost_basis_money || 0);
+            totalPnl      += pnlMoney;
+            totalValue    += (p.position_value || 0);
+            totalCost     += (p.cost_basis_money || 0);
+            totalValueEur += (p.position_value || 0) * fx;
+            totalCostEur  += (p.cost_basis_money || 0) * fx;
+            totalPnlEur   += pnlMoney * fx;
             var pColor = pnlMoney >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
             html += '<tr>'
@@ -964,30 +968,37 @@ function ibkrRenderTable() {
 
     // ── Footer ──────────────────────────────────────────────────
     var footHtml = '';
-    if (hasPosns && totalValue !== 0) {
-        var tPnlPct = totalCost ? totalPnl / Math.abs(totalCost) * 100 : 0;
-        var tc = totalPnl >= 0 ? '#2d8a4e' : '#c0392b';
+    if (hasPosns && totalValueEur !== 0) {
+        var tPnlPct    = totalCost    ? totalPnl    / Math.abs(totalCost)    * 100 : 0;
+        var tPnlPctEur = totalCostEur ? totalPnlEur / Math.abs(totalCostEur) * 100 : 0;
+        var tc = totalPnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
             + '<td style="font-weight:700">Assets</td><td></td><td></td>'
-            + '<td style="font-weight:700">' + totalCost.toFixed(0)  + '</td>'
-            + '<td style="font-weight:700">' + totalValue.toFixed(0) + '</td>'
-            + '<td style="font-weight:700;color:' + tc + '">' + (totalPnl  >= 0 ? '+' : '') + totalPnl.toFixed(2)  + '</td>'
-            + '<td style="font-weight:700;color:' + tc + '">' + (tPnlPct   >= 0 ? '+' : '') + tPnlPct.toFixed(2)   + '%</td>'
+            + '<td style="font-weight:700">' + totalCostEur.toFixed(0) + ' €</td>'
+            + '<td style="font-weight:700">' + totalValueEur.toFixed(0) + ' €</td>'
+            + '<td style="font-weight:700;color:' + tc + '">' + (totalPnlEur >= 0 ? '+' : '') + totalPnlEur.toFixed(2) + ' €</td>'
+            + '<td style="font-weight:700;color:' + tc + '">' + (tPnlPctEur  >= 0 ? '+' : '') + tPnlPctEur.toFixed(2)  + '%</td>'
             + '</tr>';
     }
     if (cashBase) {
         var cb = cashBase.ending_cash || 0;
         footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
             + '<td style="font-weight:700">Cash (Basis)</td><td colspan="3"></td>'
-            + '<td style="font-weight:700">' + cb.toFixed(2) + '</td>'
+            + '<td style="font-weight:700">' + cb.toFixed(2) + ' €</td>'
             + '<td colspan="2"></td>'
             + '</tr>';
-        if (hasPosns && totalValue !== 0) {
-            var grandTotal = totalValue + cb;
+        if (hasPosns && totalValueEur !== 0) {
+            var grandTotal = totalValueEur + cb;
+            var grandPnl   = totalPnlEur;
+            var grandPnlPct = (totalCostEur + cb - grandPnl) > 0
+                ? grandPnl / Math.abs(totalCostEur + cb - grandPnl) * 100 : 0;
+            var gc = grandTotal >= 0 ? '#2d8a4e' : '#c0392b';
             footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-                + '<td style="font-weight:700">SUMME</td><td colspan="3"></td>'
-                + '<td style="font-weight:700">' + grandTotal.toFixed(2) + '</td>'
-                + '<td colspan="2"></td>'
+                + '<td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="2"></td>'
+                + '<td style="font-weight:700;font-size:11px;">' + (totalCostEur + cb).toFixed(0) + ' €</td>'
+                + '<td style="font-weight:700;font-size:11px;">' + grandTotal.toFixed(0) + ' €</td>'
+                + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnl >= 0 ? '+' : '') + grandPnl.toFixed(0) + ' €</td>'
+                + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnlPct >= 0 ? '+' : '') + grandPnlPct.toFixed(2) + '%</td>'
                 + '</tr>';
         }
     }

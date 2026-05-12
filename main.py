@@ -462,8 +462,13 @@ def _init_ibkr_tables(db_file: str):
         mark_price       REAL,
         position_value   REAL,
         asset_class      TEXT,
-        last_sync        TEXT
+        last_sync        TEXT,
+        fx_rate_to_base  REAL DEFAULT 1.0
     )''')
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
+    except Exception:
+        pass
     conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
         currency    TEXT PRIMARY KEY,
         ending_cash REAL,
@@ -640,6 +645,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         i_cbp = cols.get("CostBasisPrice", cols.get("OpenPrice", -1))
         i_cbm = cols.get("CostBasisMoney", -1)
         i_cls = cols.get("AssetClass", -1)
+        i_fx  = cols.get("FXRateToBase", -1)
 
         if i_sym < 0 or i_qty < 0 or i_mkp < 0:
             continue
@@ -653,10 +659,11 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             posval = float(parts[i_pv ].strip() or "0") if 0 <= i_pv  < len(parts) else 0.0
             cbp    = float(parts[i_cbp].strip() or "0") if 0 <= i_cbp < len(parts) else 0.0
             cbm    = float(parts[i_cbm].strip() or "0") if 0 <= i_cbm < len(parts) else 0.0
+            fx     = float(parts[i_fx ].strip() or "1") if 0 <= i_fx  < len(parts) else 1.0
         except ValueError:
             continue
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
-        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now))
+        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx))
 
     print(f"[IBKR] Geparste Positionen: {len(positions)}, Cash-Einträge: {len(cash_rows)}")
     if not positions and not cash_rows:
@@ -665,7 +672,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
     if positions:
-        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
+        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?)", positions)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
