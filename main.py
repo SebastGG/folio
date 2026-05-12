@@ -539,6 +539,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                 continue
             return {"ok": False, "error": last_err}
 
+        print(f"[IBKR] SendRequest Antwort (Versuch {attempt1+1}): {xml1[:500]}")
         m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
         if m:
             ref_code = m.group(1)
