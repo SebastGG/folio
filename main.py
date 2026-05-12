@@ -619,7 +619,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
 
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
-    conn.executemany("INSERT INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
+    conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
     conn.commit()
     conn.close()
     return {"ok": True, "count": len(positions), "last_sync": now}
