@@ -572,26 +572,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if not csv_text:
         return {"ok": False, "error": "Leere Antwort von IBKR"}
 
-    # Festes Spalten-Layout (IBKR Flex CSV, Typ DATA/"POST"):
-    # Index 0  = Zeilentyp ("HEADER" / "DATA")
-    # Index 1  = Sektionsname ("POST")
-    # Index 4  = CurrencyPrimary
-    # Index 6  = AssetClass
-    # Index 8  = Symbol
-    # Index 29 = Quantity
-    # Index 30 = MarkPrice
-    # Index 31 = PositionValue
-    # Index 32 = CostBasisPrice
-    # Index 33 = CostBasisMoney
-    IDX_CURRENCY    = 4
-    IDX_ASSET_CLASS = 6
-    IDX_SYMBOL      = 8
-    IDX_QUANTITY    = 29
-    IDX_MARK_PRICE  = 30
-    IDX_POS_VALUE   = 31
-    IDX_CB_PRICE    = 32
-    IDX_CB_MONEY    = 33
-    MIN_COLS        = IDX_CB_MONEY + 1  # mindestens 34 Felder
+    # Spalten-Indizes dynamisch aus HEADER-Zeilen ermitteln
+    section_headers: dict = {}
 
     positions = []
     now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -604,21 +586,44 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             parts  = next(reader)
         except Exception:
             continue
-        # Nur DATA-Zeilen mit genug Feldern verarbeiten
-        if len(parts) < MIN_COLS or parts[0] != "DATA":
+        if len(parts) < 2:
             continue
-        symbol = parts[IDX_SYMBOL].strip()
+        row_type = parts[0]
+        section  = parts[1]
+
+        if row_type == "HEADER":
+            section_headers[section] = {name: i for i, name in enumerate(parts)}
+            continue
+        if row_type != "DATA":
+            continue
+
+        cols = section_headers.get(section)
+        if not cols:
+            continue
+
+        i_sym = cols.get("Symbol", -1)
+        i_qty = cols.get("Quantity", cols.get("Position", -1))
+        i_mkp = cols.get("MarkPrice", -1)
+        i_pv  = cols.get("PositionValue", -1)
+        i_cbp = cols.get("CostBasisPrice", cols.get("OpenPrice", -1))
+        i_cbm = cols.get("CostBasisMoney", -1)
+        i_cls = cols.get("AssetClass", -1)
+
+        if i_sym < 0 or i_qty < 0 or i_mkp < 0:
+            continue
+
+        symbol = parts[i_sym].strip() if i_sym < len(parts) else ""
         if not symbol:
             continue
         try:
-            qty    = float(parts[IDX_QUANTITY].strip()  or "0")
-            mrkp   = float(parts[IDX_MARK_PRICE].strip() or "0")
-            posval = float(parts[IDX_POS_VALUE].strip()  or "0")
-            cbp    = float(parts[IDX_CB_PRICE].strip()   or "0")
-            cbm    = float(parts[IDX_CB_MONEY].strip()   or "0")
+            qty    = float(parts[i_qty].strip() or "0") if i_qty < len(parts) else 0.0
+            mrkp   = float(parts[i_mkp].strip() or "0") if i_mkp < len(parts) else 0.0
+            posval = float(parts[i_pv ].strip() or "0") if 0 <= i_pv  < len(parts) else 0.0
+            cbp    = float(parts[i_cbp].strip() or "0") if 0 <= i_cbp < len(parts) else 0.0
+            cbm    = float(parts[i_cbm].strip() or "0") if 0 <= i_cbm < len(parts) else 0.0
         except ValueError:
             continue
-        asset_class = parts[IDX_ASSET_CLASS].strip()
+        asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
         positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now))
 
     print(f"[IBKR] Geparste Positionen: {len(positions)}")
