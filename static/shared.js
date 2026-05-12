@@ -1102,6 +1102,7 @@ function navigateWatchlist(dir) {
 // ╚══════════════════════════════════════════════════════════╝
 
 var ibkrPositions = [];   // Geladene IBKR-Positionen
+var ibkrCash      = [];   // Geladene IBKR-Cash-Balances
 var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
 
 async function ibkrLoadPositions() {
@@ -1113,6 +1114,19 @@ async function ibkrLoadPositions() {
     } catch(e) {
         console.warn('ibkrLoadPositions failed:', e);
         ibkrPositions = [];
+        return [];
+    }
+}
+
+async function ibkrLoadCash() {
+    try {
+        var r = await fetch('/api/ibkr/cash');
+        ibkrCash = await r.json();
+        if (ibkrCash.length > 0 && !ibkrLastSync) ibkrLastSync = ibkrCash[0].last_sync;
+        return ibkrCash;
+    } catch(e) {
+        console.warn('ibkrLoadCash failed:', e);
+        ibkrCash = [];
         return [];
     }
 }

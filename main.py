@@ -464,6 +464,11 @@ def _init_ibkr_tables(db_file: str):
         asset_class      TEXT,
         last_sync        TEXT
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
+        currency    TEXT PRIMARY KEY,
+        ending_cash REAL,
+        last_sync   TEXT
+    )''')
     conn.execute('''CREATE TABLE IF NOT EXISTS ibkr_config (
         key   TEXT PRIMARY KEY,
         value TEXT
@@ -575,7 +580,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     # Spalten-Indizes dynamisch aus HEADER-Zeilen ermitteln
     section_headers: dict = {}
 
-    positions = []
+    positions  = []
+    cash_rows  = []
     now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for raw_line in csv_text.splitlines():
@@ -601,6 +607,32 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         if not cols:
             continue
 
+        # ── CRTT: Cash Report ──────────────────────────────────────────
+        if section == "CRTT":
+            i_cur = cols.get("CurrencyPrimary", -1)
+            i_lod = cols.get("LevelOfDetail",   -1)
+            i_ec  = cols.get("EndingCash",       -1)
+            if i_cur < 0 or i_ec < 0:
+                continue
+            lod      = parts[i_lod].strip() if 0 <= i_lod < len(parts) else ""
+            currency = parts[i_cur].strip() if i_cur < len(parts) else ""
+            if not currency:
+                continue
+            # "Currency" → native rows; "BaseCurrency" → total in base stored as "BASE"
+            if lod == "Currency":
+                key = currency
+            elif lod == "BaseCurrency":
+                key = "BASE"
+            else:
+                continue
+            try:
+                ending_cash = float(parts[i_ec].strip() or "0") if i_ec < len(parts) else 0.0
+            except ValueError:
+                continue
+            cash_rows.append((key, ending_cash, now))
+            continue
+
+        # ── POST: Positionen ───────────────────────────────────────────
         i_sym = cols.get("Symbol", -1)
         i_qty = cols.get("Quantity", cols.get("Position", -1))
         i_mkp = cols.get("MarkPrice", -1)
@@ -626,16 +658,20 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
         positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now))
 
-    print(f"[IBKR] Geparste Positionen: {len(positions)}")
-    if not positions:
+    print(f"[IBKR] Geparste Positionen: {len(positions)}, Cash-Einträge: {len(cash_rows)}")
+    if not positions and not cash_rows:
         return {"ok": False, "error": "Keine DATA-Zeilen im CSV gefunden — prüfe Flex-Query-Konfiguration"}
 
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
-    conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
+    if positions:
+        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?)", positions)
+    conn.execute("DELETE FROM cash_balances")
+    if cash_rows:
+        conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
     conn.commit()
     conn.close()
-    return {"ok": True, "count": len(positions), "last_sync": now}
+    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "last_sync": now}
 
 @app.get("/api/ibkr/sync")
 async def ibkr_sync(request: Request):
@@ -660,5 +696,16 @@ async def ibkr_positions(request: Request):
     _init_ibkr_tables(files["db"])
     conn  = get_db(files["db"])
     rows  = conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall()
+    conn.close()
+    return JSONResponse(content=[dict(r) for r in rows])
+
+@app.get("/api/ibkr/cash")
+async def ibkr_cash(request: Request):
+    """Alle gespeicherten IBKR-Cash-Balances als JSON."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    rows  = conn.execute("SELECT * FROM cash_balances ORDER BY currency").fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])

@@ -889,7 +889,7 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
-        ibkrLoadPositions().then(function() { ibkrRenderTable(); });
+        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); });
     });
 })();
 
@@ -902,44 +902,96 @@ function ibkrRenderTable() {
     var tfoot = document.getElementById('ibkrFoot');
     if (!tbody) return;
 
-    if (!ibkrPositions || ibkrPositions.length === 0) {
+    var cashItems = (ibkrCash || []).filter(function(c) { return c.currency !== 'BASE'; });
+    var cashBase  = (ibkrCash || []).find(function(c)   { return c.currency === 'BASE'; });
+    var hasPosns  = ibkrPositions && ibkrPositions.length > 0;
+    var hasCash   = cashItems.length > 0;
+
+    if (!hasPosns && !hasCash) {
         tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
         if (tfoot) tfoot.innerHTML = '';
         return;
     }
 
+    var sectionHdr = function(label) {
+        return '<tr style="background:var(--surface);">'
+            + '<td colspan="7" style="font-weight:700;font-size:9px;text-transform:uppercase;'
+            + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
+    };
+
     var html = '', totalPnl = 0, totalValue = 0, totalCost = 0;
-    ibkrPositions.forEach(function(p) {
-        var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
-        var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
-        totalPnl   += pnlMoney;
-        totalValue += (p.position_value || 0);
-        totalCost  += (p.cost_basis_money || 0);
-        var pColor = pnlMoney >= 0 ? '#2d8a4e' : '#c0392b';
-        var qty    = p.quantity || 0;
-        html += '<tr>'
-            + '<td style="font-weight:500">' + p.symbol + '</td>'
-            + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
-            + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
-            + '<td>' + (p.cost_basis_price || 0).toFixed(2) + '</td>'
-            + '<td>' + (p.mark_price || 0).toFixed(2) + '</td>'
-            + '<td style="color:' + pColor + '">' + (pnlMoney >= 0 ? '+' : '') + pnlMoney.toFixed(2) + '</td>'
-            + '<td style="color:' + pColor + '">' + (pnlPct  >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
-            + '</tr>';
-    });
+
+    // ── Positionen ─────────────────────────────────────────────
+    if (hasPosns) {
+        html += sectionHdr('Positionen');
+        ibkrPositions.forEach(function(p) {
+            var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
+            var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
+            totalPnl   += pnlMoney;
+            totalValue += (p.position_value || 0);
+            totalCost  += (p.cost_basis_money || 0);
+            var pColor = pnlMoney >= 0 ? '#2d8a4e' : '#c0392b';
+            var qty    = p.quantity || 0;
+            html += '<tr>'
+                + '<td style="font-weight:500">' + p.symbol + '</td>'
+                + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
+                + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
+                + '<td>' + (p.cost_basis_price || 0).toFixed(2) + '</td>'
+                + '<td>' + (p.mark_price || 0).toFixed(2) + '</td>'
+                + '<td style="color:' + pColor + '">' + (pnlMoney >= 0 ? '+' : '') + pnlMoney.toFixed(2) + '</td>'
+                + '<td style="color:' + pColor + '">' + (pnlPct  >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
+                + '</tr>';
+        });
+    }
+
+    // ── Cash ────────────────────────────────────────────────────
+    if (hasCash) {
+        html += sectionHdr('Cash');
+        cashItems.forEach(function(c) {
+            var amt = c.ending_cash || 0;
+            var amtColor = amt >= 0 ? 'var(--text)' : '#c0392b';
+            html += '<tr>'
+                + '<td style="font-weight:500">' + c.currency + '</td>'
+                + '<td style="color:var(--muted)">Cash</td>'
+                + '<td>—</td><td>—</td>'
+                + '<td style="color:' + amtColor + '">' + amt.toFixed(2) + '</td>'
+                + '<td>—</td><td>—</td>'
+                + '</tr>';
+        });
+    }
+
     tbody.innerHTML = html;
 
-    if (tfoot && totalValue !== 0) {
+    // ── Footer ──────────────────────────────────────────────────
+    var footHtml = '';
+    if (hasPosns && totalValue !== 0) {
         var tPnlPct = totalCost ? totalPnl / Math.abs(totalCost) * 100 : 0;
         var tc = totalPnl >= 0 ? '#2d8a4e' : '#c0392b';
-        tfoot.innerHTML = '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-            + '<td style="font-weight:700">TOTAL</td><td></td><td></td>'
+        footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
+            + '<td style="font-weight:700">Assets</td><td></td><td></td>'
             + '<td style="font-weight:700">' + totalCost.toFixed(0)  + '</td>'
             + '<td style="font-weight:700">' + totalValue.toFixed(0) + '</td>'
             + '<td style="font-weight:700;color:' + tc + '">' + (totalPnl  >= 0 ? '+' : '') + totalPnl.toFixed(2)  + '</td>'
             + '<td style="font-weight:700;color:' + tc + '">' + (tPnlPct   >= 0 ? '+' : '') + tPnlPct.toFixed(2)   + '%</td>'
             + '</tr>';
     }
+    if (cashBase) {
+        var cb = cashBase.ending_cash || 0;
+        footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
+            + '<td style="font-weight:700">Cash (Basis)</td><td colspan="3"></td>'
+            + '<td style="font-weight:700">' + cb.toFixed(2) + '</td>'
+            + '<td colspan="2"></td>'
+            + '</tr>';
+        if (hasPosns && totalValue !== 0) {
+            var grandTotal = totalValue + cb;
+            footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
+                + '<td style="font-weight:700">SUMME</td><td colspan="3"></td>'
+                + '<td style="font-weight:700">' + grandTotal.toFixed(2) + '</td>'
+                + '<td colspan="2"></td>'
+                + '</tr>';
+        }
+    }
+    if (tfoot) tfoot.innerHTML = footHtml;
 
     var syncEl = document.getElementById('ibkrLastSync');
     if (syncEl && ibkrLastSync) {
@@ -992,6 +1044,7 @@ async function ibkrSync() {
         if (result.ok) {
             ibkrLastSync = result.last_sync;
             await ibkrLoadPositions();
+            await ibkrLoadCash();
             ibkrRenderTable();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
