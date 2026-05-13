@@ -716,3 +716,19 @@ async def ibkr_cash(request: Request):
     rows  = conn.execute("SELECT * FROM cash_balances ORDER BY currency").fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
+
+@app.get("/api/test-ibkr")
+async def test_ibkr():
+    """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
+    import urllib.request as urlreq
+    url = "http://ibkr-gateway.gtech01.de/v1/api/iserver/auth/status"
+    try:
+        req = urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlreq.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8")
+        try:
+            return JSONResponse(content=json.loads(raw))
+        except Exception:
+            return JSONResponse(content={"raw": raw})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=502)
