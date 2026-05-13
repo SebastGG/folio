@@ -721,7 +721,7 @@ async def ibkr_cash(request: Request):
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
     import urllib.request as urlreq
-    url = "http://ibkr-gateway.gtech01.de/v1/api/iserver/auth/status"
+    url = "http://172.18.20.229:8080/v1/api/iserver/auth/status"
     try:
         req = urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urlreq.urlopen(req, timeout=10) as resp:
