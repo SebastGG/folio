@@ -721,10 +721,14 @@ async def ibkr_cash(request: Request):
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
     import urllib.request as urlreq
-    url = "http://172.18.20.229:5000/v1/api/iserver/auth/status"
+    import ssl
+    url = "https://172.18.20.229:5000/v1/api/iserver/auth/status"
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     try:
         req = urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlreq.urlopen(req, timeout=10) as resp:
+        with urlreq.urlopen(req, timeout=10, context=ctx) as resp:
             raw = resp.read().decode("utf-8")
         try:
             return JSONResponse(content=json.loads(raw))
