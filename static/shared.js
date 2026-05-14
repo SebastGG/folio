@@ -723,11 +723,36 @@ async function updateAllPrices() {
 }
 
 /**
+ * Refresh-Button-Handler: sperrt den Button während Update + Laden,
+ * verhindert Doppelklick und Race Conditions durch parallele loadData-Aufrufe.
+ */
+async function doRefresh() {
+    var btn = document.getElementById('refreshBtn') || document.getElementById('m-refresh-btn');
+    if (btn && btn.disabled) return;
+    var origText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.55';
+        btn.textContent = btn.id === 'm-refresh-btn' ? '…' : '⟳ Laden…';
+    }
+    try {
+        await updateAllPrices();
+        await loadData();
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = '';
+            btn.textContent = origText;
+        }
+    }
+}
+
+/**
  * Lädt Kursdaten für einen einzelnen Ticker.
  */
 async function fetchTicker(sym) {
     try {
-        var r    = await fetch('/api/prices/' + sym);
+        var r    = await fetch('/api/prices/' + sym, { cache: 'no-store' });
         var data = await r.json();
         return data.map(function(d) {
             return {

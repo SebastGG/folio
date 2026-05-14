@@ -14,7 +14,7 @@
   <select id="m-basket-select" onchange="switchBasket(this.value)"></select>
   <span class="m-app-version">v{{APP_VERSION}}</span>
   <button id="m-refresh-btn" class="m-header-btn"
-    onclick="updateAllPrices().then(loadData)">↻</button>
+    onclick="doRefresh()">↻</button>
   <button id="m-save-btn" class="m-header-btn"
     onclick="saveAll(this)">💾</button>
 </div>
