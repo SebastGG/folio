@@ -463,7 +463,23 @@ function initDrawingManager() {
     var lcd = window.LightweightChartsDrawing;
     if (!lcd || !chart || !csSeries) return;
     drawingManager = new lcd.DrawingManager();
-    drawingManager.attach(chart, csSeries, document.getElementById('chartContainer'));
+    var _dmContainer = document.getElementById('chartContainer');
+    drawingManager.attach(chart, csSeries, _dmContainer);
+
+    // Disable chart panning while dragging a drawing anchor
+    _dmContainer.addEventListener('mousedown', function(e) {
+        if (!drawingManager) return;
+        var rect = _dmContainer.getBoundingClientRect();
+        var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        if (drawingManager.hitTestAnchor(pt) !== null) {
+            chart.applyOptions({ handleScroll: false, handleScale: false });
+        }
+    }, true);
+    var _reenableScroll = function() {
+        chart.applyOptions({ handleScroll: true, handleScale: true });
+    };
+    _dmContainer.addEventListener('mouseup', _reenableScroll, true);
+    _dmContainer.addEventListener('mouseleave', _reenableScroll, true);
 
     // DrawingManager handles selection only; creation is wired here via subscribeClick
     chart.subscribeClick(function(param) {
