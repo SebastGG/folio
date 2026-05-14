@@ -31,6 +31,7 @@ var _sincePl = null; // Seit-Datum Plugin
 var drawingManager = null;   // LightweightChartsDrawing.DrawingManager Instanz
 var _drawSelected  = null;   // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
 var _activeToolType = null;  // aktiver Tool-Typ (kebab-case)
+var _pendingAnchors = [];    // Ankerpunkte während der Zeichnung
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║  2. LOADING-OVERLAY                                       ║
@@ -464,11 +465,32 @@ function initDrawingManager() {
     drawingManager = new lcd.DrawingManager();
     drawingManager.attach(chart, csSeries, document.getElementById('chartContainer'));
 
+    // DrawingManager handles selection only; creation is wired here via subscribeClick
+    chart.subscribeClick(function(param) {
+        if (!_activeToolType || !drawingManager) return;
+        if (!param.point) return;
+        var ts = chart.timeScale();
+        var time = ts.coordinateToTime(param.point.x);
+        var price = csSeries.coordinateToPrice(param.point.y);
+        if (time === null || price === null) return;
+        _pendingAnchors.push({ time: time, price: price });
+        var toolDef = lcd.TOOL_DEFINITIONS.find(function(t) { return t.type === _activeToolType; });
+        var required = toolDef ? toolDef.requiredAnchors : 2;
+        if (_pendingAnchors.length >= required) {
+            var id = 'draw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+            var drawing = lcd.getToolRegistry().createDrawing(_activeToolType, id, _pendingAnchors.slice(), {}, {});
+            _pendingAnchors = [];
+            if (drawing) {
+                drawingManager.addDrawing(drawing);
+                // saveDrawing is triggered via drawing:added event below
+            }
+            setDrawTool(null);
+        }
+    });
+
     drawingManager.on('drawing:added', function(evt) {
         var d = evt.drawing || evt;
         try { saveDrawing(d.toJSON ? d.toJSON() : d); } catch(e) {}
-        // Tool nach Abschluss deaktivieren
-        setDrawTool(null);
     });
     drawingManager.on('drawing:removed', function(evt) {
         var id = evt.drawingId || ((evt.drawing || {}).id);
@@ -506,6 +528,7 @@ function setDrawTool(type) {
     var current = drawingManager.getActiveTool ? drawingManager.getActiveTool() : _activeToolType;
     if (current === type) type = null;
     _activeToolType = type;
+    _pendingAnchors = [];
     drawingManager.setActiveTool(type);
     document.querySelectorAll('.dtool-btn').forEach(function(b) {
         b.classList.toggle('active', b.dataset.tool === type);
