@@ -848,6 +848,7 @@ function switchView(view) {
     currentView = view;
     allCandles  = [];
     _lastCandles = [];
+    drawings    = [];   // sofort leeren, damit redrawAll() während loadData keine alten Drawings zeigt
     loadData().then(function() {
         if (typeof renderWatchlist === 'function') renderWatchlist();
         loadDrawings();
@@ -922,9 +923,11 @@ async function switchBasket(id) {
     updateDerivedConfig();
     if (typeof renderBasketSelect === 'function') renderBasketSelect();
     if (typeof updateChartTitle   === 'function') updateChartTitle();
-    allCandles = [];
+    allCandles  = [];
     currentView = 'index';
+    drawings    = [];
     await loadData();
+    loadDrawings();
 }
 
 /**
