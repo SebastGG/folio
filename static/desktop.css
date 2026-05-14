@@ -109,57 +109,57 @@ header {
 .btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
 .btn.ind-active { background: #555; color: white; border-color: #555; }
 .sep { width: 1px; background: var(--border); margin: 0 4px; align-self: stretch; }
-/* ── Chart-Body + Draw Sidebar (TradingView-style) ──────────────────────────── */
+/* ── Chart-Body + Draw Sidebar ───────────────────────────────────────────────── */
 .chart-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .draw-sidebar {
   width: 40px; flex-shrink: 0; overflow: visible;
-  background: #131722; border-right: 1px solid #2a2e39;
+  background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center;
   padding: 4px 0; z-index: 50; user-select: none;
 }
-.ds-divider { width: 24px; height: 1px; background: #2a2e39; margin: 3px 0; flex-shrink: 0; }
+.ds-divider { width: 24px; height: 1px; background: var(--border); margin: 3px 0; flex-shrink: 0; }
 .ds-spacer  { flex: 1; }
 .ds-btn {
   position: relative; width: 32px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   background: none; border: none; cursor: pointer;
-  color: #787b86; border-radius: 3px; margin: 1px 0;
+  color: var(--muted); border-radius: 2px; margin: 1px 0;
   font-family: inherit; line-height: 1; padding: 0;
   transition: background 0.1s, color 0.1s;
 }
-.ds-btn:hover { background: #2a2e39; color: #d1d4dc; }
-.ds-btn.active { background: #2962ff22; color: #2962ff; }
-.ds-btn.util-active { color: #2962ff; }
+.ds-btn:hover { background: var(--bg); color: var(--text); }
+.ds-btn.active { background: rgba(45,107,62,0.1); color: var(--accent); }
+.ds-btn.util-active { color: var(--accent); }
 .ds-icon { font-size: 13px; pointer-events: none; }
 .ds-arrow {
   position: absolute; bottom: 1px; right: 2px;
-  font-size: 6px; opacity: 0.55; line-height: 1; pointer-events: none;
+  font-size: 6px; opacity: 0.45; line-height: 1; pointer-events: none;
 }
-.ds-delete:hover { color: #ef5350; }
+.ds-delete:hover { color: var(--red); }
 .draw-sidebar .draw-group {
   position: relative; width: 40px;
   display: flex; flex-direction: column; align-items: center;
 }
 .draw-sidebar .draw-flyout {
   display: none; position: absolute; left: 40px; top: 0;
-  background: #1e222d; border: 1px solid #2a2e39;
+  background: var(--surface); border: 1px solid var(--border);
   z-index: 300; flex-direction: column; min-width: 165px;
-  box-shadow: 4px 4px 16px rgba(0,0,0,0.5);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.13);
   max-height: 75vh; overflow-y: auto;
 }
 .draw-sidebar .draw-group.open > .draw-flyout { display: flex; }
 .flyout-title {
   padding: 5px 10px 4px; font-size: 9px; text-transform: uppercase;
-  letter-spacing: .07em; color: #787b86; border-bottom: 1px solid #2a2e39;
+  letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .draw-sidebar .dtool-btn {
   background: none; border: none; text-align: left; width: 100%;
-  color: #d1d4dc; padding: 5px 12px; cursor: pointer; white-space: nowrap;
+  color: var(--text); padding: 5px 12px; cursor: pointer; white-space: nowrap;
   font-size: 10px; font-family: inherit;
 }
-.draw-sidebar .dtool-btn:hover { background: #2a2e39; color: #fff; }
-.draw-sidebar .dtool-btn.active { background: #2962ff22; color: #2962ff; font-weight: 600; }
+.draw-sidebar .dtool-btn:hover { background: var(--bg); }
+.draw-sidebar .dtool-btn.active { background: rgba(45,107,62,0.1); color: var(--accent); font-weight: 600; }
 
 /* ── Chart-Container ───────────────────────────────────────────────────────── */
 .chart-wrap {
