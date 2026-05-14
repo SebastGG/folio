@@ -432,6 +432,76 @@ function onSearch(val) {
 // ║  7. DRAWING MANAGER (lightweight-charts-drawing)          ║
 // ╚══════════════════════════════════════════════════════════╝
 
+// Tool → Gruppen-ID
+var _TOOL_GROUP = {
+    'trend-line':'dg-lines','extended-line':'dg-lines','horizontal-line':'dg-lines',
+    'horizontal-ray':'dg-lines','vertical-line':'dg-lines','ray':'dg-lines',
+    'cross-line':'dg-lines','info-line':'dg-lines','trend-angle':'dg-lines',
+    'fib-retracement':'dg-fib','fib-extension':'dg-fib','fib-circles':'dg-fib',
+    'fib-speed-fan':'dg-fib','fib-arcs':'dg-fib','fib-channel':'dg-fib',
+    'fib-time-zone':'dg-fib','fib-time-extension':'dg-fib','fib-spiral':'dg-fib','fib-wedge':'dg-fib',
+    'gann-box':'dg-gann','gann-fan':'dg-gann','gann-square':'dg-gann','gann-square-fixed':'dg-gann',
+    'parallel-channel':'dg-ch','regression-trend':'dg-ch','flat-top-bottom':'dg-ch','disjoint-channel':'dg-ch',
+    'andrews-pitchfork':'dg-pf','schiff-pitchfork':'dg-pf','modified-schiff-pitchfork':'dg-pf',
+    'inside-pitchfork':'dg-pf','pitchfan':'dg-pf',
+    'rectangle':'dg-sh','triangle':'dg-sh','circle':'dg-sh','ellipse':'dg-sh',
+    'arc':'dg-sh','rotated-rectangle':'dg-sh','polyline':'dg-sh',
+    'curve':'dg-sh','double-curve':'dg-sh','path':'dg-sh',
+    'text-annotation':'dg-an','callout':'dg-an','arrow':'dg-an','brush':'dg-an',
+    'highlighter':'dg-an','arrow-marker':'dg-an','arrow-mark-up':'dg-an','arrow-mark-down':'dg-an',
+    'anchored-text':'dg-an','note':'dg-an','price-note':'dg-an','price-label':'dg-an',
+    'flag-mark':'dg-an','pin':'dg-an','comment':'dg-an','signpost':'dg-an','table':'dg-an',
+    'price-range':'dg-fc','projection':'dg-fc','long-position':'dg-fc','short-position':'dg-fc',
+    'date-range':'dg-fc','date-price-range':'dg-fc','forecast':'dg-fc','bars-pattern':'dg-fc',
+};
+
+// Tool → Gruppen-Icon (letztes genutztes Tool als Gruppen-Icon)
+var _TOOL_ICON = {
+    'trend-line':'╱','extended-line':'↔','horizontal-line':'—','horizontal-ray':'→',
+    'vertical-line':'│','ray':'⟶','cross-line':'✛','info-line':'ℹ','trend-angle':'∠',
+    'fib-retracement':'Φ','fib-extension':'Φ↑','fib-circles':'Φ○','fib-speed-fan':'Φ⑂',
+    'fib-arcs':'Φ⌒','fib-channel':'Φ⋕','fib-time-zone':'Φ|','fib-time-extension':'Φ→',
+    'fib-spiral':'Φ@','fib-wedge':'Φ∨',
+    'gann-box':'G□','gann-fan':'G⑂','gann-square':'G◼','gann-square-fixed':'G◻',
+    'parallel-channel':'⋕','regression-trend':'≈','flat-top-bottom':'⊟','disjoint-channel':'≋',
+    'andrews-pitchfork':'⑂','schiff-pitchfork':'⑂s','modified-schiff-pitchfork':'⑂m',
+    'inside-pitchfork':'⑂i','pitchfan':'⑂f',
+    'rectangle':'□','triangle':'△','circle':'○','ellipse':'⬭','arc':'⌒',
+    'rotated-rectangle':'◱','polyline':'∧','curve':'∿','double-curve':'≈','path':'⤡',
+    'text-annotation':'T','callout':'💬','arrow':'→','brush':'✎','highlighter':'▬',
+    'arrow-marker':'▲','arrow-mark-up':'↑','arrow-mark-down':'↓','anchored-text':'⚓',
+    'note':'📌','price-note':'$n','price-label':'$l','flag-mark':'⚑',
+    'pin':'●','comment':'💭','signpost':'▷','table':'▦',
+    'price-range':'↕','projection':'⊿','long-position':'▲','short-position':'▼',
+    'date-range':'📅','date-price-range':'⊞','forecast':'∿','bars-pattern':'⬛',
+};
+
+// Utility-Toggle-States
+var _drawSnap = false;
+var _drawLock = false;
+var _drawVisible = true;
+
+function toggleSnap() {
+    _drawSnap = !_drawSnap;
+    var btn = document.getElementById('dsSnap');
+    if (btn) btn.classList.toggle('util-active', _drawSnap);
+}
+
+function toggleDrawLock() {
+    _drawLock = !_drawLock;
+    var btn = document.getElementById('dsLock');
+    if (btn) btn.classList.toggle('util-active', _drawLock);
+}
+
+function toggleDrawVisibility() {
+    _drawVisible = !_drawVisible;
+    var btn = document.getElementById('dsVis');
+    if (btn) btn.classList.toggle('util-active', !_drawVisible);
+    if (drawingManager && typeof drawingManager.setVisible === 'function') {
+        drawingManager.setVisible(_drawVisible);
+    }
+}
+
 // Kebab-Type → Klassen-Name für importDrawings-Factory
 var _TOOL_CLASS = {
     'line':'TrendLine','trend-line':'TrendLine','extended-line':'ExtendedLine',
@@ -582,6 +652,16 @@ function setDrawTool(type) {
     drawingManager.setActiveTool(type);
     document.querySelectorAll('.dtool-btn').forEach(function(b) {
         b.classList.toggle('active', b.dataset.tool === type);
+    });
+    // Letztes genutztes Tool als Gruppen-Icon anzeigen
+    if (type && _TOOL_GROUP[type] && _TOOL_ICON[type]) {
+        var iconEl = document.getElementById(_TOOL_GROUP[type] + '-icon');
+        if (iconEl) iconEl.textContent = _TOOL_ICON[type];
+    }
+    // Aktive Gruppe blau hervorheben
+    document.querySelectorAll('.ds-group-btn').forEach(function(b) {
+        var gId = b.closest('.draw-group') ? b.closest('.draw-group').id : null;
+        b.classList.toggle('active', !!type && _TOOL_GROUP[type] === gId);
     });
     var ptr = document.getElementById('drawPtr');
     if (ptr) ptr.classList.toggle('active', !type);
@@ -991,7 +1071,7 @@ function ibkrExport() {
 
 // Flyouts und Modal bei Klick außerhalb schließen
 document.addEventListener('click', function(e) {
-    if (!e.target.closest || !e.target.closest('.draw-group')) {
+    if (!e.target.closest || !e.target.closest('.draw-sidebar')) {
         document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
     }
     var modal = document.getElementById('ibkrModal');

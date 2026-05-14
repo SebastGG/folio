@@ -74,76 +74,111 @@
       </div>
       <div class="sep"></div>
       <button class="btn" onclick="if(chart){chart.timeScale().fitContent();if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();}" title="Chart einpassen">⤢ Fit</button>
-      <div class="sep"></div>
-      <!-- ── Draw Toolbar ───────────────────────────────────────────────────── -->
-      <div class="draw-toolbar" id="drawToolbar">
-        <button class="dtool-ptr" id="drawPtr" onclick="setDrawTool(null)" title="Auswahl / Tool deaktivieren">▶</button>
+    </div>
+
+    <div class="chart-body">
+      <!-- ── Draw Sidebar (TradingView-style) ───────────────────────────────── -->
+      <div class="draw-sidebar" id="drawSidebar">
+        <button class="ds-btn" id="drawPtr" onclick="setDrawTool(null)" title="Auswahl / Tool deaktivieren">
+          <span class="ds-icon">↖</span>
+        </button>
+        <div class="ds-divider"></div>
+
         <!-- Linien -->
         <div class="draw-group" id="dg-lines">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-lines',event)" title="Linien">╱</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-lines',event)" title="Linien">
+            <span class="ds-icon" id="dg-lines-icon">╱</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
+            <div class="flyout-title">Linien</div>
             <button class="dtool-btn" data-tool="trend-line"      onclick="setDrawTool('trend-line')">╱ Trendlinie</button>
             <button class="dtool-btn" data-tool="extended-line"   onclick="setDrawTool('extended-line')">↔ Ext. Linie</button>
             <button class="dtool-btn" data-tool="horizontal-line" onclick="setDrawTool('horizontal-line')">— H-Linie</button>
             <button class="dtool-btn" data-tool="horizontal-ray"  onclick="setDrawTool('horizontal-ray')">→ H-Ray</button>
-            <button class="dtool-btn" data-tool="vertical-line"   onclick="setDrawTool('vertical-line')">| V-Linie</button>
+            <button class="dtool-btn" data-tool="vertical-line"   onclick="setDrawTool('vertical-line')">│ V-Linie</button>
             <button class="dtool-btn" data-tool="ray"             onclick="setDrawTool('ray')">⟶ Ray</button>
             <button class="dtool-btn" data-tool="cross-line"      onclick="setDrawTool('cross-line')">✛ Kreuzlinie</button>
             <button class="dtool-btn" data-tool="info-line"       onclick="setDrawTool('info-line')">ℹ Info-Linie</button>
             <button class="dtool-btn" data-tool="trend-angle"     onclick="setDrawTool('trend-angle')">∠ Winkel</button>
           </div>
         </div>
+
         <!-- Fibonacci -->
         <div class="draw-group" id="dg-fib">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-fib',event)" title="Fibonacci">Φ</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-fib',event)" title="Fibonacci">
+            <span class="ds-icon" id="dg-fib-icon">Φ</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
-            <button class="dtool-btn" data-tool="fib-retracement"    onclick="setDrawTool('fib-retracement')">Fib Retracement</button>
-            <button class="dtool-btn" data-tool="fib-extension"      onclick="setDrawTool('fib-extension')">Fib Extension</button>
-            <button class="dtool-btn" data-tool="fib-circles"        onclick="setDrawTool('fib-circles')">Fib Kreise</button>
-            <button class="dtool-btn" data-tool="fib-speed-fan"      onclick="setDrawTool('fib-speed-fan')">Fib Speed Fan</button>
-            <button class="dtool-btn" data-tool="fib-arcs"           onclick="setDrawTool('fib-arcs')">Fib Bögen</button>
-            <button class="dtool-btn" data-tool="fib-channel"        onclick="setDrawTool('fib-channel')">Fib Kanal</button>
-            <button class="dtool-btn" data-tool="fib-time-zone"      onclick="setDrawTool('fib-time-zone')">Fib Zeitzone</button>
-            <button class="dtool-btn" data-tool="fib-time-extension" onclick="setDrawTool('fib-time-extension')">Fib Zeit Ext.</button>
-            <button class="dtool-btn" data-tool="fib-spiral"         onclick="setDrawTool('fib-spiral')">Fib Spirale</button>
-            <button class="dtool-btn" data-tool="fib-wedge"          onclick="setDrawTool('fib-wedge')">Fib Keil</button>
+            <div class="flyout-title">Fibonacci</div>
+            <button class="dtool-btn" data-tool="fib-retracement"    onclick="setDrawTool('fib-retracement')">Φ Retracement</button>
+            <button class="dtool-btn" data-tool="fib-extension"      onclick="setDrawTool('fib-extension')">Φ Extension</button>
+            <button class="dtool-btn" data-tool="fib-circles"        onclick="setDrawTool('fib-circles')">Φ Kreise</button>
+            <button class="dtool-btn" data-tool="fib-speed-fan"      onclick="setDrawTool('fib-speed-fan')">Φ Speed Fan</button>
+            <button class="dtool-btn" data-tool="fib-arcs"           onclick="setDrawTool('fib-arcs')">Φ Bögen</button>
+            <button class="dtool-btn" data-tool="fib-channel"        onclick="setDrawTool('fib-channel')">Φ Kanal</button>
+            <button class="dtool-btn" data-tool="fib-time-zone"      onclick="setDrawTool('fib-time-zone')">Φ Zeitzone</button>
+            <button class="dtool-btn" data-tool="fib-time-extension" onclick="setDrawTool('fib-time-extension')">Φ Zeit Ext.</button>
+            <button class="dtool-btn" data-tool="fib-spiral"         onclick="setDrawTool('fib-spiral')">Φ Spirale</button>
+            <button class="dtool-btn" data-tool="fib-wedge"          onclick="setDrawTool('fib-wedge')">Φ Keil</button>
           </div>
         </div>
+
         <!-- Gann -->
         <div class="draw-group" id="dg-gann">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-gann',event)" title="Gann">G</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-gann',event)" title="Gann">
+            <span class="ds-icon" id="dg-gann-icon">G</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
-            <button class="dtool-btn" data-tool="gann-box"          onclick="setDrawTool('gann-box')">Gann Box</button>
-            <button class="dtool-btn" data-tool="gann-fan"          onclick="setDrawTool('gann-fan')">Gann Fan</button>
-            <button class="dtool-btn" data-tool="gann-square"       onclick="setDrawTool('gann-square')">Gann Square</button>
-            <button class="dtool-btn" data-tool="gann-square-fixed" onclick="setDrawTool('gann-square-fixed')">Gann Sq. Fixed</button>
+            <div class="flyout-title">Gann</div>
+            <button class="dtool-btn" data-tool="gann-box"          onclick="setDrawTool('gann-box')">□ Box</button>
+            <button class="dtool-btn" data-tool="gann-fan"          onclick="setDrawTool('gann-fan')">⑂ Fan</button>
+            <button class="dtool-btn" data-tool="gann-square"       onclick="setDrawTool('gann-square')">◼ Square</button>
+            <button class="dtool-btn" data-tool="gann-square-fixed" onclick="setDrawTool('gann-square-fixed')">◻ Sq. Fixed</button>
           </div>
         </div>
+
         <!-- Kanäle -->
         <div class="draw-group" id="dg-ch">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-ch',event)" title="Kanäle">⋕</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-ch',event)" title="Kanäle">
+            <span class="ds-icon" id="dg-ch-icon">⋕</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
-            <button class="dtool-btn" data-tool="parallel-channel"  onclick="setDrawTool('parallel-channel')">Parallel-Kanal</button>
-            <button class="dtool-btn" data-tool="regression-trend"  onclick="setDrawTool('regression-trend')">Regressions-K.</button>
-            <button class="dtool-btn" data-tool="flat-top-bottom"   onclick="setDrawTool('flat-top-bottom')">Flat-Top-Bottom</button>
-            <button class="dtool-btn" data-tool="disjoint-channel"  onclick="setDrawTool('disjoint-channel')">Disjoint-Kanal</button>
+            <div class="flyout-title">Kanäle</div>
+            <button class="dtool-btn" data-tool="parallel-channel"  onclick="setDrawTool('parallel-channel')">⋕ Parallel</button>
+            <button class="dtool-btn" data-tool="regression-trend"  onclick="setDrawTool('regression-trend')">≈ Regression</button>
+            <button class="dtool-btn" data-tool="flat-top-bottom"   onclick="setDrawTool('flat-top-bottom')">⊟ Flat-Top-Bot.</button>
+            <button class="dtool-btn" data-tool="disjoint-channel"  onclick="setDrawTool('disjoint-channel')">≋ Disjoint</button>
           </div>
         </div>
+
         <!-- Pitchforks -->
         <div class="draw-group" id="dg-pf">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-pf',event)" title="Pitchforks">⑂</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-pf',event)" title="Pitchforks">
+            <span class="ds-icon" id="dg-pf-icon">⑂</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
-            <button class="dtool-btn" data-tool="andrews-pitchfork"         onclick="setDrawTool('andrews-pitchfork')">Andrews</button>
-            <button class="dtool-btn" data-tool="schiff-pitchfork"          onclick="setDrawTool('schiff-pitchfork')">Schiff</button>
-            <button class="dtool-btn" data-tool="modified-schiff-pitchfork" onclick="setDrawTool('modified-schiff-pitchfork')">Mod. Schiff</button>
-            <button class="dtool-btn" data-tool="inside-pitchfork"          onclick="setDrawTool('inside-pitchfork')">Inside</button>
-            <button class="dtool-btn" data-tool="pitchfan"                  onclick="setDrawTool('pitchfan')">Pitchfan</button>
+            <div class="flyout-title">Pitchforks</div>
+            <button class="dtool-btn" data-tool="andrews-pitchfork"         onclick="setDrawTool('andrews-pitchfork')">⑂ Andrews</button>
+            <button class="dtool-btn" data-tool="schiff-pitchfork"          onclick="setDrawTool('schiff-pitchfork')">⑂ Schiff</button>
+            <button class="dtool-btn" data-tool="modified-schiff-pitchfork" onclick="setDrawTool('modified-schiff-pitchfork')">⑂ Mod. Schiff</button>
+            <button class="dtool-btn" data-tool="inside-pitchfork"          onclick="setDrawTool('inside-pitchfork')">⑂ Inside</button>
+            <button class="dtool-btn" data-tool="pitchfan"                  onclick="setDrawTool('pitchfan')">⑂ Pitchfan</button>
           </div>
         </div>
+
         <!-- Formen -->
         <div class="draw-group" id="dg-sh">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-sh',event)" title="Formen">□</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-sh',event)" title="Formen">
+            <span class="ds-icon" id="dg-sh-icon">□</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
+            <div class="flyout-title">Formen</div>
             <button class="dtool-btn" data-tool="rectangle"         onclick="setDrawTool('rectangle')">□ Rechteck</button>
             <button class="dtool-btn" data-tool="triangle"          onclick="setDrawTool('triangle')">△ Dreieck</button>
             <button class="dtool-btn" data-tool="circle"            onclick="setDrawTool('circle')">○ Kreis</button>
@@ -156,15 +191,20 @@
             <button class="dtool-btn" data-tool="path"              onclick="setDrawTool('path')">⤡ Pfad</button>
           </div>
         </div>
+
         <!-- Annotationen -->
         <div class="draw-group" id="dg-an">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-an',event)" title="Annotationen">T</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-an',event)" title="Annotationen">
+            <span class="ds-icon" id="dg-an-icon">T</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
+            <div class="flyout-title">Annotationen</div>
             <button class="dtool-btn" data-tool="text-annotation"   onclick="setDrawTool('text-annotation')">T Text</button>
             <button class="dtool-btn" data-tool="callout"           onclick="setDrawTool('callout')">💬 Callout</button>
             <button class="dtool-btn" data-tool="arrow"             onclick="setDrawTool('arrow')">→ Pfeil</button>
             <button class="dtool-btn" data-tool="brush"             onclick="setDrawTool('brush')">✎ Pinsel</button>
-            <button class="dtool-btn" data-tool="highlighter"       onclick="setDrawTool('highlighter')">🖍 Marker</button>
+            <button class="dtool-btn" data-tool="highlighter"       onclick="setDrawTool('highlighter')">▬ Marker</button>
             <button class="dtool-btn" data-tool="arrow-marker"      onclick="setDrawTool('arrow-marker')">▲ Pfeil-Marker</button>
             <button class="dtool-btn" data-tool="arrow-mark-up"     onclick="setDrawTool('arrow-mark-up')">↑ Pfeil oben</button>
             <button class="dtool-btn" data-tool="arrow-mark-down"   onclick="setDrawTool('arrow-mark-down')">↓ Pfeil unten</button>
@@ -173,46 +213,60 @@
             <button class="dtool-btn" data-tool="price-note"        onclick="setDrawTool('price-note')">$ Preis-Notiz</button>
             <button class="dtool-btn" data-tool="price-label"       onclick="setDrawTool('price-label')">$ Preis-Label</button>
             <button class="dtool-btn" data-tool="flag-mark"         onclick="setDrawTool('flag-mark')">⚑ Flag</button>
-            <button class="dtool-btn" data-tool="pin"               onclick="setDrawTool('pin')">📍 Pin</button>
+            <button class="dtool-btn" data-tool="pin"               onclick="setDrawTool('pin')">● Pin</button>
             <button class="dtool-btn" data-tool="comment"           onclick="setDrawTool('comment')">💭 Kommentar</button>
-            <button class="dtool-btn" data-tool="signpost"          onclick="setDrawTool('signpost')">🔰 Schild</button>
+            <button class="dtool-btn" data-tool="signpost"          onclick="setDrawTool('signpost')">▷ Schild</button>
             <button class="dtool-btn" data-tool="table"             onclick="setDrawTool('table')">▦ Tabelle</button>
           </div>
         </div>
-        <!-- Prognose -->
+
+        <!-- Prognose / Positionen -->
         <div class="draw-group" id="dg-fc">
-          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-fc',event)" title="Prognose">⬆</button>
+          <button class="ds-btn ds-group-btn" onclick="toggleDrawFlyout('dg-fc',event)" title="Prognose / Positionen">
+            <span class="ds-icon" id="dg-fc-icon">⬆</span>
+            <span class="ds-arrow">▾</span>
+          </button>
           <div class="draw-flyout">
+            <div class="flyout-title">Prognose</div>
             <button class="dtool-btn" data-tool="price-range"       onclick="setDrawTool('price-range')">↕ Preis-Range</button>
             <button class="dtool-btn" data-tool="projection"        onclick="setDrawTool('projection')">⊿ Projektion</button>
             <button class="dtool-btn" data-tool="long-position"     onclick="setDrawTool('long-position')">▲ Long Position</button>
             <button class="dtool-btn" data-tool="short-position"    onclick="setDrawTool('short-position')">▼ Short Position</button>
             <button class="dtool-btn" data-tool="date-range"        onclick="setDrawTool('date-range')">📅 Datum-Range</button>
-            <button class="dtool-btn" data-tool="date-price-range"  onclick="setDrawTool('date-price-range')">📅 D+P Range</button>
-            <button class="dtool-btn" data-tool="forecast"          onclick="setDrawTool('forecast')">🔮 Forecast</button>
+            <button class="dtool-btn" data-tool="date-price-range"  onclick="setDrawTool('date-price-range')">⊞ D+P Range</button>
+            <button class="dtool-btn" data-tool="forecast"          onclick="setDrawTool('forecast')">∿ Forecast</button>
             <button class="dtool-btn" data-tool="bars-pattern"      onclick="setDrawTool('bars-pattern')">⬛ Bar-Muster</button>
           </div>
         </div>
-        <button class="clear-btn" onclick="clearAllDrawings()" title="Alle Zeichnungen löschen">🗑</button>
-      </div>
-    </div>
-    <div class="chart-wrap">
-      <div id="chartContainer"></div>
 
-      <div id="statusOverlay" style="display:none;">
-        <div class="spinner"></div>
-        <div class="status-text">Lade Kursdaten...</div>
+        <!-- Untere Hilfswerkzeuge -->
+        <div class="ds-spacer"></div>
+        <div class="ds-divider"></div>
+        <button class="ds-btn ds-util" id="dsSnap" onclick="toggleSnap()" title="Magnet (Snap zu Kurs)">🧲</button>
+        <button class="ds-btn ds-util" id="dsLock" onclick="toggleDrawLock()" title="Zeichnungen sperren">🔒</button>
+        <button class="ds-btn ds-util" id="dsVis" onclick="toggleDrawVisibility()" title="Zeichnungen ein/ausblenden">👁</button>
+        <button class="ds-btn ds-delete" onclick="clearAllDrawings()" title="Alle Zeichnungen löschen">🗑</button>
       </div>
-      <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:rgba(255,255,255,0.85);padding:4px 8px;border:1px solid var(--border);">
-        <span id="ov-date" style="color:var(--muted);"></span><br>
-        O <span id="ov" class="stat-val">-</span>
-        H <span id="oh" class="stat-val">-</span>
-        L <span id="ol" class="stat-val">-</span>
-        C <span id="oc" class="stat-val">-</span><br>
-        Vol <span id="ovol" class="stat-val">-</span>
-        Vol∅ <span id="ovola" class="stat-val">-</span>
+
+      <!-- ── Chart ──────────────────────────────────────────────────────────── -->
+      <div class="chart-wrap">
+        <div id="chartContainer"></div>
+
+        <div id="statusOverlay" style="display:none;">
+          <div class="spinner"></div>
+          <div class="status-text">Lade Kursdaten...</div>
+        </div>
+        <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:rgba(255,255,255,0.85);padding:4px 8px;border:1px solid var(--border);">
+          <span id="ov-date" style="color:var(--muted);"></span><br>
+          O <span id="ov" class="stat-val">-</span>
+          H <span id="oh" class="stat-val">-</span>
+          L <span id="ol" class="stat-val">-</span>
+          C <span id="oc" class="stat-val">-</span><br>
+          Vol <span id="ovol" class="stat-val">-</span>
+          Vol∅ <span id="ovola" class="stat-val">-</span>
+        </div>
+        <div class="cursor-hint" id="cursorHint"></div>
       </div>
-      <div class="cursor-hint" id="cursorHint"></div>
     </div>
   </div>
 
