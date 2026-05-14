@@ -28,10 +28,12 @@ var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS;
 var _sincePl = null; // Seit-Datum Plugin
 
 // Drawing Manager
-var drawingManager = null;   // LightweightChartsDrawing.DrawingManager Instanz
-var _drawSelected  = null;   // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
-var _activeToolType = null;  // aktiver Tool-Typ (kebab-case)
-var _pendingAnchors = [];    // Ankerpunkte während der Zeichnung
+var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
+var _drawSelected    = null;  // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
+var _activeToolType  = null;  // aktiver Tool-Typ (kebab-case)
+var _pendingAnchors  = [];    // Ankerpunkte während der Zeichnung
+var _previewDrawing  = null;  // temporäre Vorschau-Zeichnung
+var _crosshairCb     = null;  // CrosshairMove-Callback-Referenz (zum Abmelden)
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║  2. LOADING-OVERLAY                                       ║
