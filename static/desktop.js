@@ -482,7 +482,6 @@ function initDrawingManager() {
             _pendingAnchors = [];
             if (drawing) {
                 drawingManager.addDrawing(drawing);
-                // saveDrawing is triggered via drawing:added event below
             }
             setDrawTool(null);
         }
