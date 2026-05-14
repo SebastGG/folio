@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src\")",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src/tools/lines\")",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src/tools/fibonacci\")",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src/tools/channels\")",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src/tools/pitchforks\")",
+      "Bash(curl -s \"https://api.github.com/repos/deepentropy/lightweight-charts-drawing/contents/src/tools/gann\")",
+      "Bash(git push *)"
     ]
   }
 }
