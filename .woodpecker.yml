@@ -12,6 +12,7 @@ steps:
       REGISTRY_PASSWORD:
         from_secret: registry_password
     commands:
+
       - docker login registry.gtech01.de -u $REGISTRY_USER -p $REGISTRY_PASSWORD
       - docker build --build-arg BUILD_HASH=${CI_COMMIT_SHA} -t registry.gtech01.de/folio:latest .
       - docker push registry.gtech01.de/folio:latest
