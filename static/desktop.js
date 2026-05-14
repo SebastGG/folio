@@ -483,6 +483,18 @@ function initDrawingManager() {
     _dmContainer.addEventListener('mouseup', _reenableScroll, true);
     _dmContainer.addEventListener('mouseleave', _reenableScroll, true);
 
+    // Hilfsfunktion: Preview-Zeichnung erstellen/aktualisieren
+    function _refreshPreview(anchors) {
+        if (_previewDrawing) {
+            drawingManager.removeDrawing(_previewDrawing.id);
+            _previewDrawing = null;
+        }
+        // Platzhalter: letzter Ankerpunkt wird vom Crosshair überschrieben
+        var previewAnchors = anchors.concat([anchors[anchors.length - 1]]);
+        _previewDrawing = lcd.getToolRegistry().createDrawing(_activeToolType, '__preview__', previewAnchors, {}, {});
+        if (_previewDrawing) drawingManager.addDrawing(_previewDrawing);
+    }
+
     // DrawingManager handles selection only; creation is wired here via subscribeClick
     chart.subscribeClick(function(param) {
         if (!_activeToolType || !drawingManager) return;
@@ -494,24 +506,43 @@ function initDrawingManager() {
         _pendingAnchors.push({ time: time, price: price });
         var toolDef = lcd.TOOL_DEFINITIONS.find(function(t) { return t.type === _activeToolType; });
         var required = toolDef ? toolDef.requiredAnchors : 2;
+
         if (_pendingAnchors.length >= required) {
+            // Finaler Klick: Preview entfernen, echte Zeichnung erstellen
+            if (_crosshairCb) { chart.unsubscribeCrosshairMove(_crosshairCb); _crosshairCb = null; }
+            if (_previewDrawing) { drawingManager.removeDrawing(_previewDrawing.id); _previewDrawing = null; }
             var id = 'draw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
             var drawing = lcd.getToolRegistry().createDrawing(_activeToolType, id, _pendingAnchors.slice(), {}, {});
             _pendingAnchors = [];
-            if (drawing) {
-                drawingManager.addDrawing(drawing);
-            }
+            if (drawing) drawingManager.addDrawing(drawing);
             setDrawTool(null);
+        } else {
+            // Zwischenklick: Preview-Zeichnung aufbauen/aktualisieren
+            _refreshPreview(_pendingAnchors);
+            // Crosshair-Listener starten falls noch nicht aktiv
+            if (!_crosshairCb) {
+                _crosshairCb = function(param) {
+                    if (!_previewDrawing || !param.point) return;
+                    var t2 = chart.timeScale().coordinateToTime(param.point.x);
+                    var p2 = csSeries.coordinateToPrice(param.point.y);
+                    if (t2 !== null && p2 !== null) {
+                        _previewDrawing.updateAnchor(_previewDrawing.anchors.length - 1, { time: t2, price: p2 });
+                    }
+                };
+                chart.subscribeCrosshairMove(_crosshairCb);
+            }
         }
     });
 
     drawingManager.on('drawing:added', function(evt) {
         var d = evt.drawing || evt;
+        if (d.id === '__preview__') return; // Preview nicht speichern
         try { saveDrawing(d.toJSON ? d.toJSON() : d); } catch(e) {}
     });
     drawingManager.on('drawing:removed', function(evt) {
         var id = evt.drawingId || ((evt.drawing || {}).id);
-        if (id) deleteDrawing(id);
+        if (!id || id === '__preview__') return; // Preview nicht löschen
+        deleteDrawing(id);
     });
     drawingManager.on('drawing:selected', function(evt) {
         _drawSelected = evt && (evt.drawing || null);
@@ -546,6 +577,8 @@ function setDrawTool(type) {
     if (current === type) type = null;
     _activeToolType = type;
     _pendingAnchors = [];
+    if (_crosshairCb) { chart.unsubscribeCrosshairMove(_crosshairCb); _crosshairCb = null; }
+    if (_previewDrawing) { drawingManager.removeDrawing(_previewDrawing.id); _previewDrawing = null; }
     drawingManager.setActiveTool(type);
     document.querySelectorAll('.dtool-btn').forEach(function(b) {
         b.classList.toggle('active', b.dataset.tool === type);
