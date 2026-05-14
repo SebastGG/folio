@@ -27,14 +27,10 @@
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS;
 var _sincePl = null; // Seit-Datum Plugin
 
-// Zeichnungen
-var drawMode      = null;  // 'line'|'trend'|'hline'|'ray'|'rect'|'select'|null
-var currentDraw   = null;  // Aktuelle Zeichnung in Bearbeitung
-var selectedDraw  = null;  // Ausgewählte Zeichnung im Select-Modus
-var _dragHandle   = -1;    // Index des gezogenen Handles (-1 = kein Drag)
-var _dragStartX   = 0;
-var _dragStartY   = 0;
-var canvas, ctx;           // Draw-Canvas Referenzen
+// Drawing Manager
+var drawingManager = null;   // LightweightChartsDrawing.DrawingManager Instanz
+var _drawSelected  = null;   // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
+var _activeToolType = null;  // aktiver Tool-Typ (kebab-case)
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║  2. LOADING-OVERLAY                                       ║
@@ -157,8 +153,6 @@ function initChart() {
         }
     });
 
-    // Zeichnungen neu zeichnen bei Pan/Zoom
-    chart.timeScale().subscribeVisibleTimeRangeChange(function() { redrawAll(); });
 }
 
 function fitChart() {
@@ -234,8 +228,6 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Fit
     chart.timeScale().fitContent();
 
-    // Zeichnungen neu zeichnen
-    redrawAll();
 }
 
 function applyLogReg(regResult, rS, rUS, rLS) {
@@ -434,265 +426,107 @@ function onSearch(val) {
 }
 
 // ╔══════════════════════════════════════════════════════════╗
-// ║  7. ZEICHNUNGEN (Draw Canvas)                             ║
+// ║  7. DRAWING MANAGER (lightweight-charts-drawing)          ║
 // ╚══════════════════════════════════════════════════════════╝
 
-function initDrawCanvas() {
-    canvas = document.getElementById('drawCanvas');
-    if (!canvas) return;
-    ctx    = canvas.getContext('2d');
-    resizeCanvas();
-    canvas.addEventListener('mousedown',    onCanvasMouseDown);
-    canvas.addEventListener('mousemove',    onCanvasMove);
-    canvas.addEventListener('mouseup',      onCanvasMouseUp);
-    canvas.addEventListener('click',        onCanvasClick);
-    canvas.addEventListener('dblclick',     onCanvasDbl);
-    canvas.addEventListener('contextmenu',  onCanvasContextMenu);
-}
+// Kebab-Type → Klassen-Name für importDrawings-Factory
+var _TOOL_CLASS = {
+    'line':'TrendLine','trend-line':'TrendLine','extended-line':'ExtendedLine',
+    'horizontal-line':'HorizontalLine','horizontal-ray':'HorizontalRay',
+    'vertical-line':'VerticalLine','ray':'Ray','cross-line':'CrossLine',
+    'info-line':'InfoLine','trend-angle':'TrendAngle',
+    'fib-retracement':'FibRetracement','fib-extension':'FibExtension',
+    'fib-circles':'FibCircles','fib-speed-fan':'FibSpeedFan',
+    'fib-arcs':'FibArcs','fib-channel':'FibChannel','fib-time-zone':'FibTimeZone',
+    'fib-time-extension':'FibTimeExtension','fib-spiral':'FibSpiral','fib-wedge':'FibWedge',
+    'gann-box':'GannBox','gann-fan':'GannFan','gann-square':'GannSquare','gann-square-fixed':'GannSquareFixed',
+    'parallel-channel':'ParallelChannel','regression-trend':'RegressionTrend',
+    'flat-top-bottom':'FlatTopBottom','disjoint-channel':'DisjointChannel',
+    'andrews-pitchfork':'AndrewsPitchfork','schiff-pitchfork':'SchiffPitchfork',
+    'modified-schiff-pitchfork':'ModifiedSchiffPitchfork','inside-pitchfork':'InsidePitchfork',
+    'pitchfan':'Pitchfan',
+    'rectangle':'Rectangle','triangle':'Triangle','circle':'Circle','ellipse':'Ellipse',
+    'arc':'Arc','rotated-rectangle':'RotatedRectangle','polyline':'Polyline',
+    'curve':'Curve','double-curve':'DoubleCurve','path':'Path',
+    'text-annotation':'TextAnnotation','callout':'Callout','arrow':'Arrow','brush':'Brush',
+    'highlighter':'Highlighter','arrow-marker':'ArrowMarker','arrow-mark-up':'ArrowMarkUp',
+    'arrow-mark-down':'ArrowMarkDown','anchored-text':'AnchoredText','note':'Note',
+    'price-note':'PriceNote','price-label':'PriceLabel','flag-mark':'FlagMark','pin':'Pin',
+    'comment':'Comment','signpost':'Signpost','table':'Table',
+    'price-range':'PriceRange','projection':'Projection','long-position':'LongPosition',
+    'short-position':'ShortPosition','date-range':'DateRange','date-price-range':'DatePriceRange',
+    'forecast':'Forecast','bars-pattern':'BarsPattern',
+};
 
-function resizeCanvas() {
-    var container = document.getElementById('chartContainer');
-    if (!canvas || !container) return;
-    canvas.width  = container.clientWidth;
-    canvas.height = container.clientHeight;
-    canvas.style.width  = container.clientWidth  + 'px';
-    canvas.style.height = container.clientHeight + 'px';
-    redrawAll();
-}
+function initDrawingManager() {
+    var lcd = window.LightweightChartsDrawing;
+    if (!lcd || !chart || !csSeries) return;
+    drawingManager = new lcd.DrawingManager();
+    drawingManager.attach(chart, csSeries, document.getElementById('chartContainer'));
 
-// Koordinaten-Konversion (Chart ↔ Canvas)
-function p2y(price) {
-    if (!csSeries) return 0;
-    return csSeries.priceToCoordinate ? csSeries.priceToCoordinate(price) || 0 : 0;
-}
-function t2x(time) {
-    if (!chart) return 0;
-    return chart.timeScale().timeToCoordinate ? chart.timeScale().timeToCoordinate(time) || 0 : 0;
-}
-function y2p(y) {
-    if (!chart || !csSeries) return 0;
-    return csSeries.coordinateToPrice ? csSeries.coordinateToPrice(y) || 0 : 0;
-}
-function x2t(x) {
-    if (!chart) return null;
-    return chart.timeScale().coordinateToTime ? chart.timeScale().coordinateToTime(x) : null;
-}
-
-function drawOne(d, preview) {
-    if (!ctx || !canvas) return;
-    ctx.save();
-    ctx.strokeStyle = d.color || '#e67e22';
-    ctx.lineWidth   = 1.5;
-    ctx.setLineDash(d.type === 'hline' || d.type === 'ray' ? [4, 3] : []);
-
-    var pts = (preview ? d.points.concat([preview]) : d.points).map(function(p) {
-        return { x: t2x(p.time), y: p2y(p.price) };
+    drawingManager.on('drawing:added', function(evt) {
+        var d = evt.drawing || evt;
+        try { saveDrawing(d.toJSON ? d.toJSON() : d); } catch(e) {}
+        // Tool nach Abschluss deaktivieren
+        setDrawTool(null);
     });
+    drawingManager.on('drawing:removed', function(evt) {
+        var id = evt.drawingId || ((evt.drawing || {}).id);
+        if (id) deleteDrawing(id);
+    });
+    drawingManager.on('drawing:selected', function(evt) {
+        _drawSelected = evt && (evt.drawing || null);
+    });
+}
 
-    if (pts.length < 1) { ctx.restore(); return; }
-
-    if (d.type === 'hline') {
-        ctx.beginPath();
-        ctx.moveTo(0, pts[0].y);
-        ctx.lineTo(canvas.width, pts[0].y);
-        ctx.stroke();
-    } else if (d.type === 'ray' && pts.length >= 2) {
-        var dx = pts[1].x - pts[0].x;
-        var dy = pts[1].y - pts[0].y;
-        var len = Math.sqrt(dx*dx + dy*dy);
-        if (len > 0) {
-            var ext = 5000;
-            ctx.beginPath();
-            ctx.moveTo(pts[0].x, pts[0].y);
-            ctx.lineTo(pts[0].x + dx / len * ext, pts[0].y + dy / len * ext);
-            ctx.stroke();
-        }
-    } else if (d.type === 'rect' && pts.length >= 2) {
-        ctx.fillStyle = (d.color || '#e67e22').replace(')', ',0.07)').replace('rgb', 'rgba');
-        var rx = Math.min(pts[0].x, pts[1].x);
-        var ry = Math.min(pts[0].y, pts[1].y);
-        var rw = Math.abs(pts[1].x - pts[0].x);
-        var rh = Math.abs(pts[1].y - pts[0].y);
-        ctx.fillRect(rx, ry, rw, rh);
-        ctx.strokeRect(rx, ry, rw, rh);
-    } else {
-        // line / trend
-        if (pts.length >= 2) {
-            ctx.beginPath();
-            ctx.moveTo(pts[0].x, pts[0].y);
-            for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-            ctx.stroke();
-        }
-    }
-
-    // Handles bei ausgewählter Zeichnung
-    if (selectedDraw && d.id === selectedDraw.id && !preview) {
-        pts.forEach(function(p) {
-            ctx.fillStyle = '#2962ff';
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
+// Wird von shared.js loadDrawings() aufgerufen
+function onDrawingsLoaded(data) {
+    if (!drawingManager) return;
+    drawingManager.clearAll();
+    if (!data || !data.length) return;
+    try {
+        drawingManager.importDrawings(data, function(type, d) {
+            var lcd = window.LightweightChartsDrawing;
+            if (!lcd) return null;
+            var Cls = lcd[_TOOL_CLASS[type]];
+            if (typeof Cls !== 'function') return null;
+            try { return new Cls(d.id, d.anchors || [], d.style || {}, d.options || {}); }
+            catch(e) { console.warn('importDrawings factory:', type, e); return null; }
         });
-    }
-    ctx.restore();
+    } catch(e) { console.warn('importDrawings failed:', e); }
 }
 
-function drawPreview(e) {
-    if (!currentDraw || !ctx || !canvas) return;
-    var rect = canvas.getBoundingClientRect();
-    var x = e.clientX - rect.left;
-    var y = e.clientY - rect.top;
-    var previewPt = { time: x2t(x), price: y2p(y) };
-    redrawAll();
-    drawOne(currentDraw, previewPt);
+// Wird von shared.js clearAllDrawings() aufgerufen
+function onDrawingsCleared() {
+    if (drawingManager) drawingManager.clearAll();
 }
 
-function redrawAll() {
-    if (!ctx || !canvas) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawings.forEach(function(d) { drawOne(d); });
-}
-
-function hitTest(x, y, d) {
-    var pts = d.points.map(function(p) { return { x: t2x(p.time), y: p2y(p.price) }; });
-    if (pts.length === 0) return false;
-    if (d.type === 'hline') return Math.abs(y - pts[0].y) < 6;
-    for (var i = 0; i < pts.length - 1; i++) {
-        var dx = pts[i+1].x - pts[i].x;
-        var dy = pts[i+1].y - pts[i].y;
-        var len = Math.sqrt(dx*dx + dy*dy);
-        if (len === 0) continue;
-        var t = ((x-pts[i].x)*dx + (y-pts[i].y)*dy) / (len*len);
-        t = Math.max(0, Math.min(1, t));
-        var dist = Math.sqrt(Math.pow(x - (pts[i].x + t*dx), 2) + Math.pow(y - (pts[i].y + t*dy), 2));
-        if (dist < 6) return true;
-    }
-    return false;
-}
-
-function getHandles(d) {
-    return d.points.map(function(p) { return { x: t2x(p.time), y: p2y(p.price) }; });
-}
-
-function hitHandle(x, y, d) {
-    return getHandles(d).findIndex(function(h) {
-        return Math.sqrt((x-h.x)*(x-h.x) + (y-h.y)*(y-h.y)) < 8;
+function setDrawTool(type) {
+    if (!drawingManager) return;
+    var current = drawingManager.getActiveTool ? drawingManager.getActiveTool() : _activeToolType;
+    if (current === type) type = null;
+    _activeToolType = type;
+    drawingManager.setActiveTool(type);
+    document.querySelectorAll('.dtool-btn').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.tool === type);
     });
-}
-
-function setDraw(type, btn) {
-    // Nochmaliger Klick auf aktiven Button → Modus ausschalten
-    if (drawMode === type) type = null;
-    drawMode = type;
-    currentDraw = null;
-    document.querySelectorAll('.draw-btn').forEach(function(b) { b.classList.remove('active'); });
-    if (type && btn) btn.classList.add('active');
-    if (canvas) canvas.style.pointerEvents = type ? 'all' : 'none';
+    var ptr = document.getElementById('drawPtr');
+    if (ptr) ptr.classList.toggle('active', !type);
+    document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
     var hint = document.getElementById('cursorHint');
     if (hint) {
-        hint.textContent = type ? 'Klicken zum Zeichnen • Doppelklick beendet • Rechtsklick löscht' : '';
+        hint.textContent = type ? 'Klicken zum Zeichnen  •  Escape bricht ab' : '';
         hint.classList.toggle('show', !!type);
     }
 }
 
-function onCanvasMouseDown(e) {
-    if (!drawMode) return;
-    if (e.button !== 0) return;  // nur linke Maustaste
-    if (drawMode === 'select') {
-        var rect = canvas.getBoundingClientRect();
-        var x = e.clientX - rect.left, y = e.clientY - rect.top;
-        // Prüfe ob Handle eines ausgewählten Objekts getroffen
-        if (selectedDraw) {
-            var hi = hitHandle(x, y, selectedDraw);
-            if (hi >= 0) {
-                _dragHandle = hi;
-                _dragStartX = x; _dragStartY = y;
-                return;
-            }
-        }
-        // Neues Objekt auswählen
-        var found = drawings.find(function(d) { return hitTest(x, y, d); });
-        selectedDraw = found || null;
-        _dragHandle = -1;
-        redrawAll();
-        return;
-    }
-    var rect = canvas.getBoundingClientRect();
-    var x = e.clientX - rect.left;
-    var y = e.clientY - rect.top;
-    var pt = { time: x2t(x), price: y2p(y) };
-    if (!pt.time) return;
-    if (!currentDraw) {
-        currentDraw = { id: 'draw_' + Date.now(), type: drawMode, points: [pt], color: '#e67e22' };
-        // hline braucht nur einen Punkt → sofort finalisieren
-        if (drawMode === 'hline') finalizeDraw();
-    } else {
-        currentDraw.points.push(pt);
-        // line, trend, ray, rect → nach 2 Punkten finalisieren
-        // (Doppelklick finalisiert auch bei mehr Punkten)
-        if (['line','trend','ray','rect'].includes(drawMode) && currentDraw.points.length >= 2) {
-            finalizeDraw();
-        }
-    }
-}
-
-function onCanvasMouseUp(e) {
-    if (drawMode === 'select' && selectedDraw && _dragHandle >= 0) {
-        _dragHandle = -1;
-        saveDrawing(selectedDraw);  // Geänderte Position speichern
-        redrawAll();
-    }
-}
-
-function onCanvasClick(e) {
-    // Linksklick ohne Zeichenmodus: nichts tun
-}
-
-function onCanvasContextMenu(e) {
-    e.preventDefault();
-    var rect = canvas.getBoundingClientRect();
-    var x = e.clientX - rect.left, y = e.clientY - rect.top;
-    // Zeichnung unter Cursor löschen
-    var idx = drawings.findIndex(function(d) { return hitTest(x, y, d); });
-    if (idx >= 0) {
-        deleteDrawing(drawings[idx].id);
-        drawings.splice(idx, 1);
-        redrawAll();
-    }
-    // Aktive Zeichnung abbrechen
-    if (currentDraw) { currentDraw = null; redrawAll(); }
-}
-
-function onCanvasDbl(e) {
-    if (currentDraw && currentDraw.points.length >= 2) finalizeDraw();
-}
-
-function onCanvasMove(e) {
-    if (currentDraw) { drawPreview(e); return; }
-    if (drawMode === 'select' && selectedDraw && _dragHandle >= 0) {
-        var rect = canvas.getBoundingClientRect();
-        var x = e.clientX - rect.left;
-        var y = e.clientY - rect.top;
-        var pt = selectedDraw.points[_dragHandle];
-        if (pt) {
-            pt.time  = x2t(x) || pt.time;
-            pt.price = y2p(y) || pt.price;
-            redrawAll();
-        }
-    }
-}
-
-function finalizeDraw() {
-    if (!currentDraw || currentDraw.points.length < 1) return;
-    drawings.push(currentDraw);
-    saveDrawing(currentDraw);
-    currentDraw = null;
-    setDraw(null, null);  // Zeichenmodus nach Abschluss beenden
-    redrawAll();
+function toggleDrawFlyout(id, event) {
+    if (event) event.stopPropagation();
+    var group = document.getElementById(id);
+    if (!group) return;
+    var wasOpen = group.classList.contains('open');
+    document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
+    if (!wasOpen) group.classList.add('open');
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -837,17 +671,15 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
     // Delete/Backspace → ausgewählte Zeichnung löschen
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDraw) {
-        var idx = drawings.findIndex(function(d) { return d.id === selectedDraw.id; });
-        if (idx >= 0) {
-            deleteDrawing(selectedDraw.id);
-            drawings.splice(idx, 1);
-            selectedDraw = null;
-            redrawAll();
-        }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && _drawSelected) {
+        if (drawingManager) drawingManager.removeDrawing(_drawSelected.id);
+        _drawSelected = null;
     }
-    // Escape → Auswahl aufheben
-    if (e.key === 'Escape') { selectedDraw = null; currentDraw = null; setDraw(null, null); redrawAll(); }
+    // Escape → Zeichnungsmodus beenden
+    if (e.key === 'Escape') {
+        if (typeof setDrawTool === 'function') setDrawTool(null);
+        document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
+    }
 });
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -878,7 +710,7 @@ updateClock();
  */
 (function startup() {
     initChart();
-    initDrawCanvas();
+    initDrawingManager();
     loadLayout();  // Layout wiederherstellen nachdem Chart initialisiert
     fitChart();
 
@@ -1084,8 +916,11 @@ function ibkrExport() {
     a.click();
 }
 
-// Modal bei Klick außerhalb schließen
+// Flyouts und Modal bei Klick außerhalb schließen
 document.addEventListener('click', function(e) {
+    if (!e.target.closest || !e.target.closest('.draw-group')) {
+        document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
+    }
     var modal = document.getElementById('ibkrModal');
     if (modal && modal.style.display === 'flex' && e.target === modal) {
         ibkrCloseSettings();

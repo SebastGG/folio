@@ -10,7 +10,8 @@
       window.location.replace('/mobile');
     }
   </script>
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/lib/lightweight-charts-drawing.umd.js"></script>
   <link rel="stylesheet" href="/static/desktop.css">
 </head>
 <body>
@@ -72,18 +73,133 @@
         <button class="btn" id="blog"   onclick="togLog()">Log</button>
       </div>
       <div class="sep"></div>
-      <button class="draw-btn" onclick="setDraw('line',this)">/ Linie</button>
-      <button class="draw-btn" onclick="setDraw('trend',this)">↗ Trend</button>
-      <button class="draw-btn" onclick="setDraw('hline',this)">— H-Linie</button>
-      <button class="draw-btn" onclick="setDraw('ray',this)">→ Ray</button>
-      <button class="draw-btn" onclick="setDraw('rect',this)">□ Rect</button>
-      <button class="draw-btn" onclick="setDraw('select',this)">▶ Sel</button>
-      <button class="draw-btn" onclick="if(chart){chart.timeScale().fitContent();chart.priceScale('right').applyOptions({autoScale:true});if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();}">⤢ Fit</button>
-      <button class="clear-btn" onclick="clearAllDrawings()">🗑 Clear</button>
+      <button class="btn" onclick="if(chart){chart.timeScale().fitContent();if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();}" title="Chart einpassen">⤢ Fit</button>
+      <div class="sep"></div>
+      <!-- ── Draw Toolbar ───────────────────────────────────────────────────── -->
+      <div class="draw-toolbar" id="drawToolbar">
+        <button class="dtool-ptr" id="drawPtr" onclick="setDrawTool(null)" title="Auswahl / Tool deaktivieren">▶</button>
+        <!-- Linien -->
+        <div class="draw-group" id="dg-lines">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-lines',event)" title="Linien">╱</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="trend-line"      onclick="setDrawTool('trend-line')">↗ Trend</button>
+            <button class="dtool-btn" data-tool="line"            onclick="setDrawTool('line')">╱ Linie</button>
+            <button class="dtool-btn" data-tool="extended-line"   onclick="setDrawTool('extended-line')">↔ Ext. Linie</button>
+            <button class="dtool-btn" data-tool="horizontal-line" onclick="setDrawTool('horizontal-line')">— H-Linie</button>
+            <button class="dtool-btn" data-tool="horizontal-ray"  onclick="setDrawTool('horizontal-ray')">→ H-Ray</button>
+            <button class="dtool-btn" data-tool="vertical-line"   onclick="setDrawTool('vertical-line')">| V-Linie</button>
+            <button class="dtool-btn" data-tool="ray"             onclick="setDrawTool('ray')">⟶ Ray</button>
+            <button class="dtool-btn" data-tool="cross-line"      onclick="setDrawTool('cross-line')">✛ Kreuzlinie</button>
+            <button class="dtool-btn" data-tool="info-line"       onclick="setDrawTool('info-line')">ℹ Info-Linie</button>
+            <button class="dtool-btn" data-tool="trend-angle"     onclick="setDrawTool('trend-angle')">∠ Winkel</button>
+          </div>
+        </div>
+        <!-- Fibonacci -->
+        <div class="draw-group" id="dg-fib">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-fib',event)" title="Fibonacci">Φ</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="fib-retracement"    onclick="setDrawTool('fib-retracement')">Fib Retracement</button>
+            <button class="dtool-btn" data-tool="fib-extension"      onclick="setDrawTool('fib-extension')">Fib Extension</button>
+            <button class="dtool-btn" data-tool="fib-circles"        onclick="setDrawTool('fib-circles')">Fib Kreise</button>
+            <button class="dtool-btn" data-tool="fib-speed-fan"      onclick="setDrawTool('fib-speed-fan')">Fib Speed Fan</button>
+            <button class="dtool-btn" data-tool="fib-arcs"           onclick="setDrawTool('fib-arcs')">Fib Bögen</button>
+            <button class="dtool-btn" data-tool="fib-channel"        onclick="setDrawTool('fib-channel')">Fib Kanal</button>
+            <button class="dtool-btn" data-tool="fib-time-zone"      onclick="setDrawTool('fib-time-zone')">Fib Zeitzone</button>
+            <button class="dtool-btn" data-tool="fib-time-extension" onclick="setDrawTool('fib-time-extension')">Fib Zeit Ext.</button>
+            <button class="dtool-btn" data-tool="fib-spiral"         onclick="setDrawTool('fib-spiral')">Fib Spirale</button>
+            <button class="dtool-btn" data-tool="fib-wedge"          onclick="setDrawTool('fib-wedge')">Fib Keil</button>
+          </div>
+        </div>
+        <!-- Gann -->
+        <div class="draw-group" id="dg-gann">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-gann',event)" title="Gann">G</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="gann-box"          onclick="setDrawTool('gann-box')">Gann Box</button>
+            <button class="dtool-btn" data-tool="gann-fan"          onclick="setDrawTool('gann-fan')">Gann Fan</button>
+            <button class="dtool-btn" data-tool="gann-square"       onclick="setDrawTool('gann-square')">Gann Square</button>
+            <button class="dtool-btn" data-tool="gann-square-fixed" onclick="setDrawTool('gann-square-fixed')">Gann Sq. Fixed</button>
+          </div>
+        </div>
+        <!-- Kanäle -->
+        <div class="draw-group" id="dg-ch">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-ch',event)" title="Kanäle">⋕</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="parallel-channel"  onclick="setDrawTool('parallel-channel')">Parallel-Kanal</button>
+            <button class="dtool-btn" data-tool="regression-trend"  onclick="setDrawTool('regression-trend')">Regressions-K.</button>
+            <button class="dtool-btn" data-tool="flat-top-bottom"   onclick="setDrawTool('flat-top-bottom')">Flat-Top-Bottom</button>
+            <button class="dtool-btn" data-tool="disjoint-channel"  onclick="setDrawTool('disjoint-channel')">Disjoint-Kanal</button>
+          </div>
+        </div>
+        <!-- Pitchforks -->
+        <div class="draw-group" id="dg-pf">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-pf',event)" title="Pitchforks">⑂</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="andrews-pitchfork"         onclick="setDrawTool('andrews-pitchfork')">Andrews</button>
+            <button class="dtool-btn" data-tool="schiff-pitchfork"          onclick="setDrawTool('schiff-pitchfork')">Schiff</button>
+            <button class="dtool-btn" data-tool="modified-schiff-pitchfork" onclick="setDrawTool('modified-schiff-pitchfork')">Mod. Schiff</button>
+            <button class="dtool-btn" data-tool="inside-pitchfork"          onclick="setDrawTool('inside-pitchfork')">Inside</button>
+            <button class="dtool-btn" data-tool="pitchfan"                  onclick="setDrawTool('pitchfan')">Pitchfan</button>
+          </div>
+        </div>
+        <!-- Formen -->
+        <div class="draw-group" id="dg-sh">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-sh',event)" title="Formen">□</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="rectangle"         onclick="setDrawTool('rectangle')">□ Rechteck</button>
+            <button class="dtool-btn" data-tool="triangle"          onclick="setDrawTool('triangle')">△ Dreieck</button>
+            <button class="dtool-btn" data-tool="circle"            onclick="setDrawTool('circle')">○ Kreis</button>
+            <button class="dtool-btn" data-tool="ellipse"           onclick="setDrawTool('ellipse')">⬭ Ellipse</button>
+            <button class="dtool-btn" data-tool="arc"               onclick="setDrawTool('arc')">⌒ Bogen</button>
+            <button class="dtool-btn" data-tool="rotated-rectangle" onclick="setDrawTool('rotated-rectangle')">◱ Rot. Rect</button>
+            <button class="dtool-btn" data-tool="polyline"          onclick="setDrawTool('polyline')">∧ Polyline</button>
+            <button class="dtool-btn" data-tool="curve"             onclick="setDrawTool('curve')">∿ Kurve</button>
+            <button class="dtool-btn" data-tool="double-curve"      onclick="setDrawTool('double-curve')">∿∿ Dopp.-Kurve</button>
+            <button class="dtool-btn" data-tool="path"              onclick="setDrawTool('path')">⤡ Pfad</button>
+          </div>
+        </div>
+        <!-- Annotationen -->
+        <div class="draw-group" id="dg-an">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-an',event)" title="Annotationen">T</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="text-annotation"   onclick="setDrawTool('text-annotation')">T Text</button>
+            <button class="dtool-btn" data-tool="callout"           onclick="setDrawTool('callout')">💬 Callout</button>
+            <button class="dtool-btn" data-tool="arrow"             onclick="setDrawTool('arrow')">→ Pfeil</button>
+            <button class="dtool-btn" data-tool="brush"             onclick="setDrawTool('brush')">✎ Pinsel</button>
+            <button class="dtool-btn" data-tool="highlighter"       onclick="setDrawTool('highlighter')">🖍 Marker</button>
+            <button class="dtool-btn" data-tool="arrow-marker"      onclick="setDrawTool('arrow-marker')">▲ Pfeil-Marker</button>
+            <button class="dtool-btn" data-tool="arrow-mark-up"     onclick="setDrawTool('arrow-mark-up')">↑ Pfeil oben</button>
+            <button class="dtool-btn" data-tool="arrow-mark-down"   onclick="setDrawTool('arrow-mark-down')">↓ Pfeil unten</button>
+            <button class="dtool-btn" data-tool="anchored-text"     onclick="setDrawTool('anchored-text')">⚓ Anker-Text</button>
+            <button class="dtool-btn" data-tool="note"              onclick="setDrawTool('note')">📌 Notiz</button>
+            <button class="dtool-btn" data-tool="price-note"        onclick="setDrawTool('price-note')">$ Preis-Notiz</button>
+            <button class="dtool-btn" data-tool="price-label"       onclick="setDrawTool('price-label')">$ Preis-Label</button>
+            <button class="dtool-btn" data-tool="flag-mark"         onclick="setDrawTool('flag-mark')">⚑ Flag</button>
+            <button class="dtool-btn" data-tool="pin"               onclick="setDrawTool('pin')">📍 Pin</button>
+            <button class="dtool-btn" data-tool="comment"           onclick="setDrawTool('comment')">💭 Kommentar</button>
+            <button class="dtool-btn" data-tool="signpost"          onclick="setDrawTool('signpost')">🔰 Schild</button>
+            <button class="dtool-btn" data-tool="table"             onclick="setDrawTool('table')">▦ Tabelle</button>
+          </div>
+        </div>
+        <!-- Prognose -->
+        <div class="draw-group" id="dg-fc">
+          <button class="draw-group-btn" onclick="toggleDrawFlyout('dg-fc',event)" title="Prognose">⬆</button>
+          <div class="draw-flyout">
+            <button class="dtool-btn" data-tool="price-range"       onclick="setDrawTool('price-range')">↕ Preis-Range</button>
+            <button class="dtool-btn" data-tool="projection"        onclick="setDrawTool('projection')">⊿ Projektion</button>
+            <button class="dtool-btn" data-tool="long-position"     onclick="setDrawTool('long-position')">▲ Long Position</button>
+            <button class="dtool-btn" data-tool="short-position"    onclick="setDrawTool('short-position')">▼ Short Position</button>
+            <button class="dtool-btn" data-tool="date-range"        onclick="setDrawTool('date-range')">📅 Datum-Range</button>
+            <button class="dtool-btn" data-tool="date-price-range"  onclick="setDrawTool('date-price-range')">📅 D+P Range</button>
+            <button class="dtool-btn" data-tool="forecast"          onclick="setDrawTool('forecast')">🔮 Forecast</button>
+            <button class="dtool-btn" data-tool="bars-pattern"      onclick="setDrawTool('bars-pattern')">⬛ Bar-Muster</button>
+          </div>
+        </div>
+        <button class="clear-btn" onclick="clearAllDrawings()" title="Alle Zeichnungen löschen">🗑</button>
+      </div>
     </div>
     <div class="chart-wrap">
       <div id="chartContainer"></div>
-      <canvas id="drawCanvas"></canvas>
+
       <div id="statusOverlay" style="display:none;">
         <div class="spinner"></div>
         <div class="status-text">Lade Kursdaten...</div>

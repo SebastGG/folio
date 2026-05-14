@@ -109,14 +109,32 @@ header {
 .btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
 .btn.ind-active { background: #555; color: white; border-color: #555; }
 .sep { width: 1px; background: var(--border); margin: 0 4px; align-self: stretch; }
-.draw-btn {
+/* ── Draw Toolbar (Flyout-Gruppen) ─────────────────────────────────────────── */
+.draw-toolbar { display: flex; align-items: center; gap: 2px; }
+.draw-group { position: relative; display: inline-flex; }
+.draw-group-btn, .dtool-ptr {
   background: none; border: 1px solid transparent;
-  color: var(--muted); padding: 3px 8px; cursor: pointer;
+  color: var(--muted); padding: 3px 7px; cursor: pointer; line-height: 1;
 }
-.draw-btn:hover { border-color: var(--border); color: var(--text); }
-.draw-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(45,107,62,0.07); }
+.draw-group-btn:hover, .dtool-ptr:hover { border-color: var(--border); color: var(--text); }
+.draw-group.open > .draw-group-btn { border-color: var(--accent); color: var(--accent); background: rgba(45,107,62,0.07); }
+.dtool-ptr.active { border-color: var(--accent); color: var(--accent); background: rgba(45,107,62,0.07); }
+.draw-flyout {
+  display: none; position: absolute; top: calc(100% + 2px); left: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  z-index: 300; flex-direction: column; min-width: 140px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.13);
+}
+.draw-group.open > .draw-flyout { display: flex; }
+.dtool-btn {
+  background: none; border: none; text-align: left;
+  color: var(--text); padding: 5px 10px; cursor: pointer; white-space: nowrap;
+  font-size: 10px; font-family: inherit;
+}
+.dtool-btn:hover { background: var(--bg); }
+.dtool-btn.active { background: rgba(45,107,62,0.1); color: var(--accent); font-weight: 600; }
 .clear-btn {
-  border: 1px solid var(--red); color: var(--red); padding: 3px 10px;
+  border: 1px solid var(--red); color: var(--red); padding: 3px 8px;
   cursor: pointer; background: none;
 }
 .clear-btn:hover { background: var(--red); color: white; }
@@ -126,10 +144,6 @@ header {
   position: relative; flex: 1; min-height: 0; overflow: hidden;
 }
 #chartContainer { width: 100%; height: 100%; }
-#drawCanvas {
-  position: absolute; top: 0; left: 0;
-  z-index: 10; pointer-events: none;
-}
 .chart-overlay {
   position: absolute; top: 14px; left: 16px;
   pointer-events: none; z-index: 5;

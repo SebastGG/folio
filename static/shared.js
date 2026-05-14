@@ -1019,9 +1019,10 @@ function getViewKey() {
 
 async function loadDrawings() {
     try {
-        var r = await fetch('/api/drawings?view=' + getViewKey());
+        var r = await fetch('/api/drawings?view=' + getViewKey(), { cache: 'no-store' });
         drawings = await r.json();
-        if (typeof redrawAll === 'function') redrawAll();
+        if (typeof onDrawingsLoaded === 'function') onDrawingsLoaded(drawings);
+        else if (typeof redrawAll === 'function') redrawAll();
     } catch (e) {
         console.warn('loadDrawings failed:', e);
     }
@@ -1051,7 +1052,8 @@ async function clearAllDrawings() {
     try {
         await fetch('/api/drawings?view=' + getViewKey(), { method: 'DELETE' });
         drawings = [];
-        if (typeof redrawAll === 'function') redrawAll();
+        if (typeof onDrawingsCleared === 'function') onDrawingsCleared();
+        else if (typeof redrawAll === 'function') redrawAll();
     } catch (e) {
         console.warn('clearAllDrawings failed:', e);
     }
