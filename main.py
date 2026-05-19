@@ -742,12 +742,17 @@ async def ibkr_cash(request: Request):
 @app.get("/api/test-ibkr")
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
+    import urllib.error
     try:
         with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
-            raw = resp.read().decode("utf-8")
+            status  = resp.status
+            headers = dict(resp.headers)
+            raw     = resp.read().decode("utf-8")
         try:
-            return JSONResponse(content=json.loads(raw))
+            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
         except Exception:
-            return JSONResponse(content={"raw": raw})
+            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
+    except urllib.error.HTTPError as e:
+        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers)}, status_code=502)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=502)
