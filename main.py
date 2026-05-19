@@ -45,7 +45,7 @@ else:
     BASE_DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
-load_dotenv("/app/data/.env")
+load_dotenv("/app/data/.env", override=True)
 
 IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
 
