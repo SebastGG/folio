@@ -22,7 +22,9 @@
       "Bash(python3 -c \"import uvicorn; print\\(uvicorn.__version__\\)\")",
       "Bash(python3 -m uvicorn main:app --host 127.0.0.1 --port 8000)",
       "Bash(curl -s http://127.0.0.1:8000/static/lib/lightweight-charts-drawing.umd.js)",
-      "Bash(curl -s http://127.0.0.1:8000/static/desktop.js)"
+      "Bash(curl -s http://127.0.0.1:8000/static/desktop.js)",
+      "WebSearch",
+      "Bash(docker push *)"
     ]
   }
 }
