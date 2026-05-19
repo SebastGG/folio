@@ -1205,3 +1205,14 @@ function ibkrBuildExportCsv() {
 
     return rows.length > 1 ? rows.map(function(r) { return r.join(','); }).join('\n') : null;
 }
+
+async function ibkrGatewayStatus() {
+    try {
+        var r = await fetch('/api/ibkr/gateway/status');
+        return await r.json();
+    } catch(e) { return { authenticated: false }; }
+}
+
+async function ibkrGatewayLogout() {
+    try { await fetch('/api/ibkr/gateway/logout', { method: 'POST' }); } catch(e) {}
+}

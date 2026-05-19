@@ -736,6 +736,24 @@ async def ibkr_cash(request: Request):
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+@app.get("/api/ibkr/gateway/status")
+async def ibkr_gateway_status():
+    try:
+        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
+            data = json.loads(resp.read().decode())
+            return JSONResponse({"authenticated": data.get("authenticated", False)})
+    except Exception:
+        return JSONResponse({"authenticated": False})
+
+@app.post("/api/ibkr/gateway/logout")
+async def ibkr_gateway_logout():
+    try:
+        with _ibkr_gateway_request("/v1/api/logout", method="POST") as resp:
+            resp.read()
+            return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
 @app.get("/api/test-ibkr")
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
