@@ -753,16 +753,34 @@ async def ibkr_cash(request: Request):
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
     import urllib.error
+    redirects = []
+
+    class _DebugRedirectHandler(_AuthPreservingRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            redirects.append({"from": req.full_url, "to": newurl, "code": code})
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    ibkr_user = os.environ.get("IBKR_USER", "")
+    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
+    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
+    auth = f"Basic {creds}"
+    opener = _urlreq.build_opener(_DebugRedirectHandler(auth))
+    req = _urlreq.Request(
+        f"{IBKR_GATEWAY_BASE}/v1/api/iserver/auth/status",
+        headers={"Authorization": auth, "Accept": "application/json"},
+        method="GET",
+    )
     try:
-        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
+        with opener.open(req, timeout=10) as resp:
             status  = resp.status
             headers = dict(resp.headers)
             raw     = resp.read().decode("utf-8")
         try:
-            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
+            body = json.loads(raw)
         except Exception:
-            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
+            body = raw[:500]
+        return JSONResponse(content={"status": status, "redirects": redirects, "headers": headers, "body": body})
     except urllib.error.HTTPError as e:
-        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers)}, status_code=502)
+        return JSONResponse(content={"error": str(e), "status": e.code, "redirects": redirects, "headers": dict(e.headers)}, status_code=502)
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=502)
+        return JSONResponse(content={"error": str(e), "redirects": redirects}, status_code=502)
