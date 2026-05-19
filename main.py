@@ -55,7 +55,10 @@ def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = N
     creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
     req = _urlreq.Request(
         f"{IBKR_GATEWAY_BASE}{path}",
-        headers={"Authorization": f"Basic {creds}"},
+        headers={
+            "Authorization": f"Basic {creds}",
+            "Accept": "application/json",
+        },
         method=method,
         data=data,
     )
