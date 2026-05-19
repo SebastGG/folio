@@ -764,18 +764,22 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
         symbol = (p.get("symbol") or p.get("contractDesc") or "").strip()
         if not symbol:
             continue
-        qty           = float(p.get("position")     or 0)
-        avg_cost      = float(p.get("avgCost")      or 0)
-        mkt_price     = float(p.get("mktPrice")     or 0)
-        mkt_value     = float(p.get("mktValue")     or 0)
+        qty           = float(p.get("position")      or 0)
+        avg_cost      = float(p.get("avgCost")       or 0)
+        # avgPrice = per-unit fill price (same units as mktPrice)
+        # avgCost  = per-contract dollar cost = avgPrice × multiplier
+        # → use avgPrice for display so Einstand/Aktuell are comparable
+        avg_price     = float(p.get("avgPrice")      or 0) or avg_cost
+        mkt_price     = float(p.get("mktPrice")      or 0)
+        mkt_value     = float(p.get("mktValue")      or 0)
         unrealized    = float(p.get("unrealizedPnl") or 0)
         currency      = (p.get("currency") or "USD").strip()
         fx            = fx_rates.get(currency, 1.0)
-        # cost_basis_money = current_value - unrealized_pnl
-        # works for stocks AND futures (mktValue already includes contract multiplier)
+        # cost_basis_money: mktValue already includes multiplier, so subtract
+        # unrealizedPnl (same units) to get the original cost basis
         cbm           = mkt_value - unrealized
         asset_cls     = (p.get("assetClass") or "STK").strip()
-        position_rows.append((symbol, qty, avg_cost, cbm, mkt_price, mkt_value, asset_cls, now, fx))
+        position_rows.append((symbol, qty, avg_price, cbm, mkt_price, mkt_value, asset_cls, now, fx))
 
     if not position_rows and not cash_rows:
         return {"ok": False, "error": "Keine Positionen oder Cash-Daten vom Gateway"}
