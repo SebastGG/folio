@@ -764,14 +764,17 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
         symbol = (p.get("symbol") or p.get("contractDesc") or "").strip()
         if not symbol:
             continue
-        qty       = float(p.get("position") or 0)
-        avg_cost  = float(p.get("avgCost")  or 0)
-        mkt_price = float(p.get("mktPrice") or 0)
-        mkt_value = float(p.get("mktValue") or 0)
-        currency  = (p.get("currency") or "USD").strip()
-        fx        = fx_rates.get(currency, 1.0)
-        cbm       = avg_cost * qty
-        asset_cls = (p.get("assetClass") or "STK").strip()
+        qty           = float(p.get("position")     or 0)
+        avg_cost      = float(p.get("avgCost")      or 0)
+        mkt_price     = float(p.get("mktPrice")     or 0)
+        mkt_value     = float(p.get("mktValue")     or 0)
+        unrealized    = float(p.get("unrealizedPnl") or 0)
+        currency      = (p.get("currency") or "USD").strip()
+        fx            = fx_rates.get(currency, 1.0)
+        # cost_basis_money = current_value - unrealized_pnl
+        # works for stocks AND futures (mktValue already includes contract multiplier)
+        cbm           = mkt_value - unrealized
+        asset_cls     = (p.get("assetClass") or "STK").strip()
         position_rows.append((symbol, qty, avg_cost, cbm, mkt_price, mkt_value, asset_cls, now, fx))
 
     if not position_rows and not cash_rows:
@@ -844,6 +847,27 @@ async def ibkr_gateway_logout():
             return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.get("/api/test-ibkr-positions")
+async def test_ibkr_positions():
+    """Temporärer Test-Endpunkt: Rohe Positionsdaten vom IBKR Gateway (Seite 0)."""
+    import urllib.error
+    try:
+        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=15) as resp:
+            accounts = json.loads(resp.read().decode())
+        if not accounts:
+            return JSONResponse({"error": "Keine Konten"}, status_code=502)
+        acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
+        with _ibkr_gateway_request(
+            f"/v1/api/portfolio/{acct_id}/positions/0?invalidatecache=1", timeout=20
+        ) as resp:
+            raw = resp.read().decode("utf-8")
+        return JSONResponse(content={"acct_id": acct_id, "positions": json.loads(raw)})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        return JSONResponse(content={"error": str(e), "status": e.code, "body": body}, status_code=502)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=502)
 
 @app.get("/api/test-ibkr-logout")
 async def test_ibkr_logout():
