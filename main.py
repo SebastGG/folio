@@ -29,7 +29,6 @@ import shutil
 import tempfile
 import base64
 import urllib.request as _urlreq
-import urllib.parse as _urlparse
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -50,12 +49,30 @@ load_dotenv("/app/data/.env", override=True)
 
 IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
 
+class _AuthPreservingRedirectHandler(_urlreq.HTTPRedirectHandler):
+    """Re-attaches the Authorization header after Cloudron's proxyAuth redirect."""
+    def __init__(self, auth_header: str):
+        self._auth = auth_header
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None:
+            new_req.add_unredirected_header("Authorization", self._auth)
+        return new_req
+
 def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
-    ibkr_user = _urlparse.quote(os.environ.get("IBKR_USER", ""), safe="")
-    ibkr_password = _urlparse.quote(os.environ.get("IBKR_PASSWORD", ""), safe="")
-    url = f"https://{ibkr_user}:{ibkr_password}@ibkr-gateway.gtech01.de{path}"
-    req = _urlreq.Request(url, headers={"Accept": "application/json"}, method=method, data=data)
-    return _urlreq.urlopen(req, timeout=timeout)
+    ibkr_user = os.environ.get("IBKR_USER", "")
+    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
+    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
+    auth = f"Basic {creds}"
+    opener = _urlreq.build_opener(_AuthPreservingRedirectHandler(auth))
+    req = _urlreq.Request(
+        f"{IBKR_GATEWAY_BASE}{path}",
+        headers={"Authorization": auth, "Accept": "application/json"},
+        method=method,
+        data=data,
+    )
+    return opener.open(req, timeout=timeout)
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
 with open(_manifest_path) as _f:
