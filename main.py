@@ -748,11 +748,30 @@ async def ibkr_gateway_status():
 @app.post("/api/ibkr/gateway/logout")
 async def ibkr_gateway_logout():
     try:
-        with _ibkr_gateway_request("/v1/api/logout", method="POST") as resp:
+        with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
             resp.read()
             return JSONResponse({"ok": True})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.get("/api/test-ibkr-logout")
+async def test_ibkr_logout():
+    """Temporärer Test-Endpunkt: Roher Logout-Request ans IBKR Gateway."""
+    import urllib.error
+    try:
+        with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
+            status  = resp.status
+            headers = dict(resp.headers)
+            raw     = resp.read().decode("utf-8")
+        try:
+            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
+        except Exception:
+            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8") if e.fp else ""
+        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers), "body": body}, status_code=502)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=502)
 
 @app.get("/api/test-ibkr")
 async def test_ibkr():
