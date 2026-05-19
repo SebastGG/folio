@@ -29,6 +29,7 @@ import shutil
 import tempfile
 import base64
 import urllib.request as _urlreq
+import urllib.parse as _urlparse
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -50,18 +51,10 @@ load_dotenv("/app/data/.env", override=True)
 IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
 
 def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
-    ibkr_user = os.environ.get("IBKR_USER", "")
-    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
-    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
-    req = _urlreq.Request(
-        f"{IBKR_GATEWAY_BASE}{path}",
-        headers={
-            "Authorization": f"Basic {creds}",
-            "Accept": "application/json",
-        },
-        method=method,
-        data=data,
-    )
+    ibkr_user = _urlparse.quote(os.environ.get("IBKR_USER", ""), safe="")
+    ibkr_password = _urlparse.quote(os.environ.get("IBKR_PASSWORD", ""), safe="")
+    url = f"https://{ibkr_user}:{ibkr_password}@ibkr-gateway.gtech01.de{path}"
+    req = _urlreq.Request(url, headers={"Accept": "application/json"}, method=method, data=data)
     return _urlreq.urlopen(req, timeout=timeout)
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
