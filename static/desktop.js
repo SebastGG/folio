@@ -913,23 +913,26 @@ function ibkrRenderTable() {
         ibkrPositions.forEach(function(p) {
             var fx       = p.fx_rate_to_base || 1.0;
             var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
+            var cbmEur   = (p.cost_basis_money || 0) * fx;
+            var pvEur    = (p.position_value  || 0) * fx;
+            var pnlEur   = pnlMoney * fx;
             var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
             totalPnl      += pnlMoney;
             totalValue    += (p.position_value || 0);
             totalCost     += (p.cost_basis_money || 0);
-            totalValueEur += (p.position_value || 0) * fx;
-            totalCostEur  += (p.cost_basis_money || 0) * fx;
-            totalPnlEur   += pnlMoney * fx;
-            var pColor = pnlMoney >= 0 ? '#2d8a4e' : '#c0392b';
+            totalValueEur += pvEur;
+            totalCostEur  += cbmEur;
+            totalPnlEur   += pnlEur;
+            var pColor = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
             html += '<tr>'
                 + '<td style="font-weight:500">' + p.symbol + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
-                + '<td>' + (p.cost_basis_price || 0).toFixed(2) + '</td>'
-                + '<td>' + (p.mark_price || 0).toFixed(2) + '</td>'
-                + '<td style="color:' + pColor + '">' + (pnlMoney >= 0 ? '+' : '') + pnlMoney.toFixed(2) + '</td>'
-                + '<td style="color:' + pColor + '">' + (pnlPct  >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
+                + '<td>' + cbmEur.toFixed(0) + '</td>'
+                + '<td>' + pvEur.toFixed(0) + '</td>'
+                + '<td style="color:' + pColor + '">' + (pnlEur >= 0 ? '+' : '') + pnlEur.toFixed(0) + '</td>'
+                + '<td style="color:' + pColor + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
                 + '</tr>';
         });
     }
