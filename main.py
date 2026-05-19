@@ -49,30 +49,17 @@ load_dotenv("/app/data/.env", override=True)
 
 IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
 
-class _AuthPreservingRedirectHandler(_urlreq.HTTPRedirectHandler):
-    """Re-attaches the Authorization header after Cloudron's proxyAuth redirect."""
-    def __init__(self, auth_header: str):
-        self._auth = auth_header
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new_req is not None:
-            new_req.add_unredirected_header("Authorization", self._auth)
-        return new_req
-
 def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
     ibkr_user = os.environ.get("IBKR_USER", "")
     ibkr_password = os.environ.get("IBKR_PASSWORD", "")
     creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
-    auth = f"Basic {creds}"
-    opener = _urlreq.build_opener(_AuthPreservingRedirectHandler(auth))
     req = _urlreq.Request(
         f"{IBKR_GATEWAY_BASE}{path}",
-        headers={"Authorization": auth, "Accept": "application/json"},
+        headers={"Authorization": f"Basic {creds}", "Accept": "application/json"},
         method=method,
         data=data,
     )
-    return opener.open(req, timeout=timeout)
+    return _urlreq.urlopen(req, timeout=timeout)
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
 with open(_manifest_path) as _f:
@@ -753,35 +740,16 @@ async def ibkr_cash(request: Request):
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
     import urllib.error
-    redirects = []
-
-    class _DebugRedirectHandler(_AuthPreservingRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
-            redirects.append({"from": req.full_url, "to": newurl, "code": code})
-            return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-    ibkr_user = os.environ.get("IBKR_USER", "")
-    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
-    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
-    auth = f"Basic {creds}"
-    debug_creds = {"user": ibkr_user, "pass_len": len(ibkr_password), "pass_prefix": ibkr_password[:4] if ibkr_password else ""}
-    opener = _urlreq.build_opener(_DebugRedirectHandler(auth))
-    req = _urlreq.Request(
-        f"{IBKR_GATEWAY_BASE}/v1/api/iserver/auth/status",
-        headers={"Authorization": auth, "Accept": "application/json"},
-        method="GET",
-    )
     try:
-        with opener.open(req, timeout=10) as resp:
+        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
             status  = resp.status
             headers = dict(resp.headers)
             raw     = resp.read().decode("utf-8")
         try:
-            body = json.loads(raw)
+            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
         except Exception:
-            body = raw[:500]
-        return JSONResponse(content={"status": status, "redirects": redirects, "headers": headers, "body": body, "debug_creds": debug_creds})
+            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
     except urllib.error.HTTPError as e:
-        return JSONResponse(content={"error": str(e), "status": e.code, "redirects": redirects, "headers": dict(e.headers), "debug_creds": debug_creds}, status_code=502)
+        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers)}, status_code=502)
     except Exception as e:
-        return JSONResponse(content={"error": str(e), "redirects": redirects, "debug_creds": debug_creds}, status_code=502)
+        return JSONResponse(content={"error": str(e)}, status_code=502)
