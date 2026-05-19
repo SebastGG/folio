@@ -699,16 +699,107 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn.close()
     return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "last_sync": now}
 
+def _do_ibkr_gateway_sync(db_file: str) -> dict:
+    """Sync via IBKR Client Portal Gateway API — läuft im ThreadPoolExecutor."""
+    import datetime as dt_
+    import urllib.error
+
+    now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1 — Konto-ID ermitteln
+    try:
+        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=15) as resp:
+            accounts = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": f"Gateway accounts {e.code}: {e.read().decode()[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Gateway nicht erreichbar: {e}"}
+
+    if not accounts:
+        return {"ok": False, "error": "Keine IBKR Konten — ist das Gateway eingeloggt?"}
+
+    acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
+    if not acct_id:
+        return {"ok": False, "error": f"Kein accountId im Gateway-Response: {accounts[0]}"}
+    print(f"[IBKR GW] Konto: {acct_id}")
+
+    # 2 — Positionen seitenweise abrufen
+    raw_positions = []
+    for page in range(50):  # max 50 × 30 = 1 500 Positionen
+        params = "?invalidatecache=1" if page == 0 else ""
+        try:
+            with _ibkr_gateway_request(
+                f"/v1/api/portfolio/{acct_id}/positions/{page}{params}", timeout=20
+            ) as resp:
+                page_data = json.loads(resp.read().decode())
+        except Exception as e:
+            print(f"[IBKR GW] Positionen Seite {page} Fehler: {e}")
+            break
+        if not page_data:
+            break
+        raw_positions.extend(page_data)
+        if len(page_data) < 30:
+            break
+
+    print(f"[IBKR GW] {len(raw_positions)} Positionen empfangen")
+
+    # 3 — Ledger: Cash-Salden + FX-Kurse
+    fx_rates: dict[str, float] = {}
+    cash_rows = []
+    try:
+        with _ibkr_gateway_request(f"/v1/api/portfolio/{acct_id}/ledger", timeout=15) as resp:
+            ledger = json.loads(resp.read().decode())
+        for ccy, data in ledger.items():
+            rate = float(data.get("exchangerate") or 1.0)
+            if ccy != "BASE":
+                fx_rates[ccy] = rate
+            cash_bal = float(data.get("cashbalance") or 0.0)
+            cash_rows.append((ccy, cash_bal, now))
+    except Exception as e:
+        print(f"[IBKR GW] Ledger Fehler (nicht fatal): {e}")
+
+    # 4 — Positionen mappen
+    position_rows = []
+    for p in raw_positions:
+        symbol = (p.get("symbol") or p.get("contractDesc") or "").strip()
+        if not symbol:
+            continue
+        qty       = float(p.get("position") or 0)
+        avg_cost  = float(p.get("avgCost")  or 0)
+        mkt_price = float(p.get("mktPrice") or 0)
+        mkt_value = float(p.get("mktValue") or 0)
+        currency  = (p.get("currency") or "USD").strip()
+        fx        = fx_rates.get(currency, 1.0)
+        cbm       = avg_cost * qty
+        asset_cls = (p.get("assetClass") or "STK").strip()
+        position_rows.append((symbol, qty, avg_cost, cbm, mkt_price, mkt_value, asset_cls, now, fx))
+
+    if not position_rows and not cash_rows:
+        return {"ok": False, "error": "Keine Positionen oder Cash-Daten vom Gateway"}
+
+    # 5 — In DB schreiben
+    conn = get_db(db_file)
+    conn.execute("DELETE FROM positions")
+    if position_rows:
+        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?)", position_rows)
+    conn.execute("DELETE FROM cash_balances")
+    if cash_rows:
+        conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
+    conn.commit()
+    conn.close()
+
+    return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "last_sync": now}
+
 @app.get("/api/ibkr/sync")
 async def ibkr_sync(request: Request):
-    """Ruft IBKR Flex API ab und befüllt die positions-Tabelle."""
+    """Ruft IBKR Gateway API ab und befüllt die positions-Tabelle."""
     import asyncio
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
     try:
         loop   = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_ibkr_sync, files["db"], files["data_dir"])
+        result = await loop.run_in_executor(None, _do_ibkr_gateway_sync, files["db"])
         return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
     except Exception as e:
         print(f"ibkr_sync error: {e}")

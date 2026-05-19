@@ -624,32 +624,6 @@ function mIbkrGatewayConnect() {
     }, 5000);
 }
 
-function mIbkrShowSettings() {
-    var el = document.getElementById('m-ibkr-settings');
-    if (!el) return;
-    el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-async function mIbkrSaveSettings() {
-    var token = (document.getElementById('m-ibkr-token') || {}).value || '';
-    var qid   = (document.getElementById('m-ibkr-qid')   || {}).value || '';
-    var msg   = document.getElementById('m-ibkr-settings-msg');
-    if (!token || !qid) {
-        if (msg) { msg.textContent = 'Bitte beide Felder ausfüllen.'; msg.style.color = 'var(--red)'; }
-        return;
-    }
-    try {
-        var result = await ibkrSaveConfig(token, qid);
-        if (result.ok) {
-            if (msg) { msg.textContent = 'Gespeichert.'; msg.style.color = 'var(--green)'; }
-            setTimeout(mIbkrShowSettings, 1000);
-        } else {
-            if (msg) { msg.textContent = result.error || 'Fehler'; msg.style.color = 'var(--red)'; }
-        }
-    } catch(e) {
-        if (msg) { msg.textContent = 'Fehler: ' + e.message; msg.style.color = 'var(--red)'; }
-    }
-}
 
 async function mIbkrSync(btn) {
     if (btn) { btn.textContent = '...'; btn.disabled = true; }

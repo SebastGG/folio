@@ -996,43 +996,6 @@ function ibkrRenderTable() {
     }
 }
 
-function ibkrShowSettings() {
-    var modal = document.getElementById('ibkrModal');
-    if (modal) { modal.style.display = 'flex'; modal.classList.add('open'); }
-    var msg = document.getElementById('ibkrModalMsg');
-    if (msg) msg.textContent = '';
-}
-
-function ibkrCloseSettings() {
-    var modal = document.getElementById('ibkrModal');
-    if (modal) { modal.style.display = 'none'; modal.classList.remove('open'); }
-}
-
-async function ibkrSaveSettings() {
-    var token = (document.getElementById('ibkrTokenInput') || {}).value || '';
-    var qid   = (document.getElementById('ibkrQueryInput') || {}).value || '';
-    var msg   = document.getElementById('ibkrModalMsg');
-    var btn   = document.getElementById('ibkrSaveBtn');
-    if (!token || !qid) {
-        if (msg) { msg.textContent = 'Bitte beide Felder ausfüllen.'; msg.style.color = 'var(--red)'; }
-        return;
-    }
-    if (btn) { btn.textContent = '...'; btn.disabled = true; }
-    try {
-        var result = await ibkrSaveConfig(token, qid);
-        if (result.ok) {
-            if (msg) { msg.textContent = 'Gespeichert.'; msg.style.color = 'var(--green)'; }
-            setTimeout(ibkrCloseSettings, 1000);
-        } else {
-            if (msg) { msg.textContent = result.error || 'Fehler'; msg.style.color = 'var(--red)'; }
-        }
-    } catch(e) {
-        if (msg) { msg.textContent = 'Verbindungsfehler: ' + e.message; msg.style.color = 'var(--red)'; }
-    } finally {
-        if (btn) { btn.textContent = 'Speichern'; btn.disabled = false; }
-    }
-}
-
 async function ibkrSync() {
     var btn = document.getElementById('ibkrSyncBtn');
     if (btn) { btn.textContent = '...'; btn.disabled = true; }

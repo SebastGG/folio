@@ -131,20 +131,6 @@
       <span id="m-ibkr-last-sync" style="font-size:9px;color:var(--muted);">—</span>
       <span id="m-ibkr-gw-status" title="IBKR Gateway" style="font-size:13px;cursor:default;">⬜</span>
       <button id="m-ibkr-connect-btn" onclick="mIbkrGatewayConnect()" class="m-ibkr-btn-secondary" style="display:none;">⚡</button>
-      <button onclick="mIbkrShowSettings()" class="m-ibkr-btn-secondary">⚙</button>
-    </div>
-    <div id="m-ibkr-settings" style="display:none;padding:12px;border-bottom:1px solid var(--border);background:var(--surface);">
-      <label style="font-size:9px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:4px;">Flex Token</label>
-      <input type="password" id="m-ibkr-token" placeholder="Token (numerisch)"
-        style="width:100%;border:1px solid var(--border);padding:8px;background:var(--bg);color:var(--text);font-family:inherit;font-size:12px;margin-bottom:10px;outline:none;">
-      <label style="font-size:9px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:4px;">Query ID</label>
-      <input type="text" id="m-ibkr-qid" placeholder="z.B. 123456"
-        style="width:100%;border:1px solid var(--border);padding:8px;background:var(--bg);color:var(--text);font-family:inherit;font-size:12px;margin-bottom:12px;outline:none;">
-      <div style="display:flex;gap:8px;">
-        <button onclick="mIbkrSaveSettings()" style="flex:1;background:var(--accent);color:white;border:none;padding:12px;font-family:inherit;font-size:12px;cursor:pointer;touch-action:manipulation;">Speichern</button>
-        <button onclick="mIbkrShowSettings()" style="background:none;border:1px solid var(--border);padding:12px 16px;font-family:inherit;font-size:12px;cursor:pointer;touch-action:manipulation;">×</button>
-      </div>
-      <div id="m-ibkr-settings-msg" style="margin-top:8px;font-size:10px;min-height:14px;"></div>
     </div>
     <div style="overflow-x:auto;">
       <table class="m-perf-table" style="min-width:480px;">
