@@ -847,9 +847,12 @@ async def ibkr_gateway_status():
 async def ibkr_gateway_logout():
     try:
         with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
-            resp.read()
-            return JSONResponse({"ok": True})
+            status = resp.status
+            body   = resp.read().decode("utf-8", errors="replace")
+            print(f"[IBKR GW] logout response {status}: {body[:200]}")
+            return JSONResponse({"ok": True, "status": status})
     except Exception as e:
+        print(f"[IBKR GW] logout FEHLER: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
 @app.get("/api/test-ibkr-positions")
