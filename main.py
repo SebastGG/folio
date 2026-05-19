@@ -27,7 +27,10 @@ import time
 import sqlite3
 import shutil
 import tempfile
+import base64
+import urllib.request as _urlreq
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +44,22 @@ if os.path.exists("/app/data"):
 else:
     BASE_DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
+
+load_dotenv("/app/data/.env")
+
+IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
+
+def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
+    ibkr_user = os.environ.get("IBKR_USER", "")
+    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
+    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
+    req = _urlreq.Request(
+        f"{IBKR_GATEWAY_BASE}{path}",
+        headers={"Authorization": f"Basic {creds}"},
+        method=method,
+        data=data,
+    )
+    return _urlreq.urlopen(req, timeout=timeout)
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
 with open(_manifest_path) as _f:
@@ -720,18 +739,8 @@ async def ibkr_cash(request: Request):
 @app.get("/api/test-ibkr")
 async def test_ibkr():
     """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
-    import urllib.request as urlreq
-    import base64
-    url = "http://172.18.20.229:8080/v1/api/iserver/auth/status"
-    user = os.environ.get("IBKR_AUTH_USER", "")
-    pw   = os.environ.get("IBKR_AUTH_PASS", "")
-    creds = base64.b64encode(f"{user}:{pw}".encode()).decode()
     try:
-        req = urlreq.Request(url, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Authorization": f"Basic {creds}",
-        })
-        with urlreq.urlopen(req, timeout=10) as resp:
+        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
             raw = resp.read().decode("utf-8")
         try:
             return JSONResponse(content=json.loads(raw))
