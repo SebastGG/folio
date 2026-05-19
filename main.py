@@ -764,6 +764,7 @@ async def test_ibkr():
     ibkr_password = os.environ.get("IBKR_PASSWORD", "")
     creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
     auth = f"Basic {creds}"
+    debug_creds = {"user": ibkr_user, "pass_len": len(ibkr_password), "pass_prefix": ibkr_password[:4] if ibkr_password else ""}
     opener = _urlreq.build_opener(_DebugRedirectHandler(auth))
     req = _urlreq.Request(
         f"{IBKR_GATEWAY_BASE}/v1/api/iserver/auth/status",
@@ -779,8 +780,8 @@ async def test_ibkr():
             body = json.loads(raw)
         except Exception:
             body = raw[:500]
-        return JSONResponse(content={"status": status, "redirects": redirects, "headers": headers, "body": body})
+        return JSONResponse(content={"status": status, "redirects": redirects, "headers": headers, "body": body, "debug_creds": debug_creds})
     except urllib.error.HTTPError as e:
-        return JSONResponse(content={"error": str(e), "status": e.code, "redirects": redirects, "headers": dict(e.headers)}, status_code=502)
+        return JSONResponse(content={"error": str(e), "status": e.code, "redirects": redirects, "headers": dict(e.headers), "debug_creds": debug_creds}, status_code=502)
     except Exception as e:
-        return JSONResponse(content={"error": str(e), "redirects": redirects}, status_code=502)
+        return JSONResponse(content={"error": str(e), "redirects": redirects, "debug_creds": debug_creds}, status_code=502)
