@@ -995,7 +995,7 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
-        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); });
+        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable(); });
     });
 })();
 
@@ -1130,6 +1130,7 @@ async function ibkrSync() {
             await ibkrLoadCash();
             ibkrRenderTable();
             refreshIbkrCostLine(_lastCandles);
+            renderPerfTable();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }

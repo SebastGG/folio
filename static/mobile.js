@@ -663,6 +663,7 @@ async function mIbkrSync(btn) {
             await ibkrLoadPositions();
             mIbkrRenderTable();
             refreshMobileIbkrCostLine(_lastCandles);
+            renderMobilePerf();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannt'));
         }
@@ -760,7 +761,7 @@ async function mAddTicker(sym) {
                 syncMobileNotes();
                 initMobileChart();
                 syncMobileInd();
-                ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); });
+                ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); renderMobilePerf(); });
             });
         });
     });
