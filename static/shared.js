@@ -855,6 +855,8 @@ async function loadData() {
  * Wechselt zwischen Index und Ticker-View.
  */
 function switchView(view) {
+    if (typeof saveChartRange === 'function') saveChartRange();
+    if (typeof saveMobileChartRange === 'function') saveMobileChartRange();
     currentView = view;
     allCandles  = [];
     _lastCandles = [];

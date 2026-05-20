@@ -28,6 +28,13 @@ var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
+var _savedLogicalRange = null;   // Gespeicherter Zoom beim Ticker-Wechsel
+
+function saveChartRange() {
+    if (!chart) return;
+    var r = chart.timeScale().getVisibleLogicalRange();
+    if (r) _savedLogicalRange = r;
+}
 
 // ── VRVP ──────────────────────────────────────────────────────────────────────
 var _vrvpEnabled  = false;
@@ -449,8 +456,16 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Log-Skala
     chart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
 
-    // Fit + Zeitachse 1 Jahr in die Zukunft verlängern
-    fitWithFuture();
+    // Zoom-Range wiederherstellen (Ticker-Wechsel) oder auf Inhalt fitten
+    if (_savedLogicalRange !== null) {
+        var _rangeToRestore = _savedLogicalRange;
+        _savedLogicalRange = null;
+        requestAnimationFrame(function() {
+            if (chart) try { chart.timeScale().setVisibleLogicalRange(_rangeToRestore); } catch(e) { fitWithFuture(); }
+        });
+    } else {
+        fitWithFuture();
+    }
 
     // VRVP neu zeichnen nach Datenwechsel
     if (_vrvpEnabled) _scheduleVRVP();

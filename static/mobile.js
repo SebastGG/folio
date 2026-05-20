@@ -34,7 +34,14 @@ var mRegL     = null;   // LogReg Lower Band
 var _mIbkrCostLine  = null; // Einstandskurs-Preislinie
 var _mMarkersPlugin = null; // LWC v5 SeriesMarkers-Plugin
 
-var mCurrentScreen = 'chart'; // Aktiver Screen
+var mCurrentScreen     = 'chart'; // Aktiver Screen
+var _mSavedLogicalRange = null;  // Gespeicherter Zoom beim Ticker-Wechsel
+
+function saveMobileChartRange() {
+    if (!mChart) return;
+    var r = mChart.timeScale().getVisibleLogicalRange();
+    if (r) _mSavedLogicalRange = r;
+}
 
 // Positionen (berechnet nach Layout-Init)
 var _mHeaderH = 48;  // Header-Höhe
@@ -371,7 +378,15 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
     }
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
-    if (mChart) mChart.timeScale().fitContent();
+    if (_mSavedLogicalRange !== null) {
+        var _mRangeToRestore = _mSavedLogicalRange;
+        _mSavedLogicalRange = null;
+        if (mChart) requestAnimationFrame(function() {
+            try { mChart.timeScale().setVisibleLogicalRange(_mRangeToRestore); } catch(e) { if (mChart) mChart.timeScale().fitContent(); }
+        });
+    } else {
+        if (mChart) mChart.timeScale().fitContent();
+    }
     fitMobileChart();
 
     // Aktiven Screen ggf. aktualisieren
