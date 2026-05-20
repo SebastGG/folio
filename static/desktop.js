@@ -25,7 +25,8 @@
 
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
-var _ibkrCostLine = null;  // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
+var _ibkrCostLine   = null;  // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
+var _markersPlugin  = null;  // LWC v5 SeriesMarkers-Plugin
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
@@ -226,7 +227,13 @@ function refreshTradeMarkers() {
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
     }
-    try { csSeries.setMarkers(markers); } catch(e) { console.warn('setMarkers:', e); }
+    try {
+        if (!_markersPlugin) {
+            _markersPlugin = LightweightCharts.createSeriesMarkers(csSeries, markers);
+        } else {
+            _markersPlugin.setData(markers);
+        }
+    } catch(e) { console.warn('refreshTradeMarkers:', e); }
 }
 
 /**

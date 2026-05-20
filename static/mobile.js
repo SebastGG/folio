@@ -31,7 +31,8 @@ var mMa200    = null;   // MA200 Series
 var mReg      = null;   // LogReg Series
 var mRegU     = null;   // LogReg Upper Band
 var mRegL     = null;   // LogReg Lower Band
-var _mIbkrCostLine = null; // Einstandskurs-Preislinie
+var _mIbkrCostLine  = null; // Einstandskurs-Preislinie
+var _mMarkersPlugin = null; // LWC v5 SeriesMarkers-Plugin
 
 var mCurrentScreen = 'chart'; // Aktiver Screen
 
@@ -299,7 +300,13 @@ function refreshMobileTradeMarkers() {
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
     }
-    try { mCs.setMarkers(markers); } catch(e) { console.warn('setMarkers:', e); }
+    try {
+        if (!_mMarkersPlugin) {
+            _mMarkersPlugin = LightweightCharts.createSeriesMarkers(mCs, markers);
+        } else {
+            _mMarkersPlugin.setData(markers);
+        }
+    } catch(e) { console.warn('refreshMobileTradeMarkers:', e); }
 }
 
 /**
