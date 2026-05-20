@@ -1123,9 +1123,9 @@ function renderPortfolioReport() {
         var qty = p.quantity || 0;
         var cb  = (p.cost_basis_money || 0) * fx;
         var cls = (p.asset_class || 'OTHER').toUpperCase();
-        // STK: live-Kurs aus Yahoo Finance wenn vorhanden
+        // Live-Kurs aus Yahoo Finance wenn vorhanden, sonst IBKR-Wert
         var liveP = perfData[p.symbol];
-        var pv = (cls === 'STK' && liveP && liveP.price)
+        var pv = (liveP && liveP.price)
             ? qty * liveP.price * fx
             : (p.position_value || 0) * fx;
         var grp = qty >= 0 ? longG : shortG;
