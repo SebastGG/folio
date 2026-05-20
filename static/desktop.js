@@ -24,7 +24,7 @@
 // ╚══════════════════════════════════════════════════════════╝
 
 // Lightweight Charts Instanzen
-var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS;
+var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
 var _sincePl = null; // Seit-Datum Plugin
 
 // Drawing Manager
@@ -96,6 +96,14 @@ function initChart() {
         borderUpColor:  '#2d8a4e', borderDownColor: '#c0392b',
         wickUpColor:    '#2d8a4e', wickDownColor:   '#c0392b',
     });
+
+    // Ghost-Serie: unsichtbar, nur für Zeitachsenbeschriftung in der Zukunft
+    ghostSeries = chart.addSeries(LightweightCharts.LineSeries, {
+        color: 'rgba(0,0,0,0)', lineWidth: 0,
+        lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        priceScaleId: 'ghost',
+    });
+    chart.priceScale('ghost').applyOptions({ visible: false });
 
     // Indikatoren
     ma50S  = chart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
@@ -177,6 +185,16 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Kerzen
     csSeries.setData(colored);
 
+    // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
+    if (ghostSeries && colored.length) {
+        var lastC    = colored[colored.length - 1];
+        var count    = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+        var fDates   = generateFutureDates(lastC.time, currentTF, count);
+        try {
+            ghostSeries.setData(fDates.map(function(d) { return { time: d, value: lastC.close }; }));
+        } catch(e) {}
+    }
+
     // Volumen
     if (volSeries && volAgg.length) {
         var cmap = {};
@@ -244,14 +262,37 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
  * fitContent() + Zeitachse ~1 Jahr in die Zukunft verlängern.
  * setVisibleLogicalRange() nach fitContent() — rightOffset wird von fitContent() ignoriert.
  */
+/**
+ * Erzeugt zukünftige Datumswerte im gleichen Format wie aggregateCandles().
+ * 1D: Werktage (Mo–Fr), 1W: Montage, 1M: Monatserste.
+ */
+function generateFutureDates(lastDate, tf, count) {
+    var dates = [];
+    var d = new Date(lastDate + 'T12:00:00Z');
+    if (tf === '1W') {
+        for (var i = 0; i < count; i++) {
+            d.setUTCDate(d.getUTCDate() + 7);
+            dates.push(d.toISOString().slice(0, 10));
+        }
+    } else if (tf === '1M') {
+        for (var i = 0; i < count; i++) {
+            d.setUTCMonth(d.getUTCMonth() + 1);
+            d.setUTCDate(1);
+            dates.push(d.toISOString().slice(0, 10));
+        }
+    } else {
+        while (dates.length < count) {
+            d.setUTCDate(d.getUTCDate() + 1);
+            var day = d.getUTCDay();
+            if (day !== 0 && day !== 6) dates.push(d.toISOString().slice(0, 10));
+        }
+    }
+    return dates;
+}
+
 function fitWithFuture() {
     if (!chart) return;
     chart.timeScale().fitContent();
-    var rightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
-    var range = chart.timeScale().getVisibleLogicalRange();
-    if (range) {
-        chart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.to + rightBars });
-    }
 }
 
 function applyLogReg(regResult, rS, rUS, rLS) {
