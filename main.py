@@ -158,7 +158,8 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
         meta  = chart.get("meta", {})
         count = 0
 
-        today_obj = datetime.date.today()
+        # UTC konsistent mit utcfromtimestamp — verhindert Datum-Mismatch auf UTC+X Servern
+        today_obj = datetime.datetime.utcnow().date()
         today = today_obj.strftime("%Y-%m-%d")
 
         for i, ts in enumerate(timestamps):
@@ -182,7 +183,9 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
         # Kein Eintrag für Wochenenden: regularMarketPrice wäre der letzte Schlusskurs und
         # würde als Samstag/Sonntag-Kerze in der DB landen.
         live_price = meta.get("regularMarketPrice")
-        if live_price and live_price > 0 and today_obj.weekday() < 5:
+        market_time = meta.get("regularMarketTime") or 0
+        market_date = datetime.datetime.utcfromtimestamp(market_time).strftime("%Y-%m-%d") if market_time else ""
+        if live_price and live_price > 0 and today_obj.weekday() < 5 and market_date == today:
             existing = conn.execute(
                 "SELECT open, high, low FROM prices WHERE ticker=? AND date=?",
                 (ticker, today)
@@ -201,7 +204,7 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
                 h = meta.get("regularMarketDayHigh") or live_price
                 l = meta.get("regularMarketDayLow")  or live_price
                 conn.execute(
-                    "INSERT INTO prices VALUES (?,?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)",
                     (ticker, today, o, max(h, live_price), min(l, live_price), live_price, 0)
                 )
             count += 1
