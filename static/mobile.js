@@ -264,11 +264,26 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
 
     // IBKR Einstandskurs
     if (_mIbkrCostLine) { try { mCs.removePriceLine(_mIbkrCostLine); } catch(e) {} _mIbkrCostLine = null; }
-    if (currentView !== 'index' && typeof ibkrPositions !== 'undefined' && ibkrPositions.length) {
-        var _mIbkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
-        if (_mIbkrPos && _mIbkrPos.cost_basis_price > 0) {
+    if (typeof ibkrPositions !== 'undefined' && ibkrPositions.length && colored.length) {
+        var _mCbPrice = 0;
+        if (currentView !== 'index') {
+            var _mIbkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+            if (_mIbkrPos && _mIbkrPos.cost_basis_price > 0) _mCbPrice = _mIbkrPos.cost_basis_price;
+        } else {
+            var _mTotalCost = 0, _mTotalValue = 0;
+            ibkrPositions.forEach(function(p) {
+                if ((WEIGHTS[p.symbol] || 0) > 0) {
+                    var fx = p.fx_rate_to_base || 1;
+                    _mTotalCost  += (p.cost_basis_money || 0) * fx;
+                    _mTotalValue += (p.position_value   || 0) * fx;
+                }
+            });
+            if (_mTotalValue > 0 && _mTotalCost > 0)
+                _mCbPrice = colored[colored.length - 1].close * _mTotalCost / _mTotalValue;
+        }
+        if (_mCbPrice > 0) {
             _mIbkrCostLine = mCs.createPriceLine({
-                price:            _mIbkrPos.cost_basis_price,
+                price:            _mCbPrice,
                 color:            '#e67e22',
                 lineWidth:        1,
                 lineStyle:        2,

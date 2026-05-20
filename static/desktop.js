@@ -186,13 +186,31 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Kerzen
     csSeries.setData(colored);
 
-    // IBKR Einstandskurs — horizontale Linie wenn Ticker in Positionen vorhanden
+    // IBKR Einstandskurs — horizontale Linie
     if (_ibkrCostLine) { try { csSeries.removePriceLine(_ibkrCostLine); } catch(e) {} _ibkrCostLine = null; }
-    if (currentView !== 'index' && typeof ibkrPositions !== 'undefined' && ibkrPositions.length) {
-        var _ibkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
-        if (_ibkrPos && _ibkrPos.cost_basis_price > 0) {
+    if (typeof ibkrPositions !== 'undefined' && ibkrPositions.length && colored.length) {
+        var _cbPrice = 0;
+        if (currentView !== 'index') {
+            // Einzel-Ticker: direkt cost_basis_price
+            var _ibkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+            if (_ibkrPos && _ibkrPos.cost_basis_price > 0) _cbPrice = _ibkrPos.cost_basis_price;
+        } else {
+            // Index: gewichteter Einstand = last_close × (Σ cost_basis_money_eur / Σ position_value_eur)
+            // nur Ticker die gleichzeitig im Basket (WEIGHTS) und in IBKR-Positionen sind
+            var _totalCost = 0, _totalValue = 0;
+            ibkrPositions.forEach(function(p) {
+                if ((WEIGHTS[p.symbol] || 0) > 0) {
+                    var fx = p.fx_rate_to_base || 1;
+                    _totalCost  += (p.cost_basis_money || 0) * fx;
+                    _totalValue += (p.position_value   || 0) * fx;
+                }
+            });
+            if (_totalValue > 0 && _totalCost > 0)
+                _cbPrice = colored[colored.length - 1].close * _totalCost / _totalValue;
+        }
+        if (_cbPrice > 0) {
             _ibkrCostLine = csSeries.createPriceLine({
-                price:            _ibkrPos.cost_basis_price,
+                price:            _cbPrice,
                 color:            '#e67e22',
                 lineWidth:        1,
                 lineStyle:        2,
