@@ -412,7 +412,7 @@ async def search_ticker(query: str, request: Request):
         results = [
             {"symbol": q["symbol"], "name": q.get("shortname", q.get("longname", ""))}
             for q in data.get("quotes", [])
-            if q.get("quoteType") in ("EQUITY", "ETF", "FUTURE", "INDEX")
+            if q.get("quoteType") in ("EQUITY", "ETF", "FUTURE", "INDEX", "CURRENCY")
         ]
         return JSONResponse(content=results)
     except Exception as e:
