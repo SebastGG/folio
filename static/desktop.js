@@ -368,6 +368,30 @@ function fitWithFuture() {
     chart.timeScale().fitContent();
 }
 
+function fitView() {
+    fitChart();
+    if (!chart || !csSeries) return;
+    csSeries.priceScale().applyOptions({ autoScale: true });
+    var candles = allCandles;
+    if (!candles || !candles.length) { chart.timeScale().fitContent(); return; }
+    var toDate   = candles[candles.length - 1].time;
+    var fromDate;
+    if (currentPeriod > 0) {
+        var cut = new Date();
+        cut.setDate(cut.getDate() - currentPeriod);
+        fromDate = cut.toISOString().slice(0, 10);
+        // nicht vor dem ersten verfügbaren Kerze
+        if (fromDate < candles[0].time) fromDate = candles[0].time;
+    } else {
+        fromDate = candles[0].time;
+    }
+    try {
+        chart.timeScale().setVisibleRange({ from: fromDate, to: toDate });
+    } catch(e) {
+        chart.timeScale().fitContent();
+    }
+}
+
 function applyLogReg(regResult, rS, rUS, rLS) {
     if (!rS) return;
     if (regResult) {
