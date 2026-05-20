@@ -982,7 +982,6 @@ updateClock();
         loadDrawings();
         loadNotes();
         ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); });
-        ibkrUpdateGatewayStatus();
     });
 })();
 
@@ -1126,28 +1125,7 @@ async function ibkrSync() {
     }
 }
 
-async function ibkrUpdateGatewayStatus() {
-    var statusEl   = document.getElementById('ibkrGwStatus');
-    var connectBtn = document.getElementById('ibkrConnectBtn');
-    var data = await ibkrGatewayStatus();
-    if (statusEl) {
-        statusEl.textContent = data.authenticated ? '🟢' : '🔴';
-        statusEl.title = data.authenticated ? 'IBKR Gateway verbunden' : 'IBKR Gateway nicht verbunden';
-    }
-    if (connectBtn) connectBtn.style.display = data.authenticated ? 'none' : '';
-}
-
-function ibkrGatewayConnect() {
-    window.open('https://ibkr-gateway.gtech01.de/sso/Login?forwardTo=22&RL=1&ip2loc=on', '_blank');
-    var check = setInterval(function() {
-        ibkrGatewayStatus().then(function(d) {
-            if (d.authenticated) { clearInterval(check); ibkrUpdateGatewayStatus(); }
-        });
-    }, 5000);
-}
-
-async function doLogout() {
-    await ibkrGatewayLogout();
+function doLogout() {
     window.location.href = '/logout';
 }
 

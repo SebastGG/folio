@@ -143,7 +143,7 @@ function mNav(screen, btn) {
         if (screen === 'notes')   syncMobileNotes();
         if (screen === 'ind')     syncMobileInd();
         if (screen === 'manage')  renderMobileManage();
-        if (screen === 'ibkr')    { mIbkrRenderTable(); mIbkrUpdateGatewayStatus(); }
+        if (screen === 'ibkr')    { mIbkrRenderTable(); }
         if (screen === 'search')  { renderMobileManage(); document.getElementById('m-search-input') && (document.getElementById('m-search-input').value='') && (document.getElementById('m-search-results').innerHTML=''); }
     }
 }
@@ -624,26 +624,6 @@ function mIbkrRenderTable() {
     if (syncEl && ibkrLastSync) {
         syncEl.textContent = ibkrLastSync.slice(0, 16).replace('T', ' ') + ' UTC';
     }
-}
-
-async function mIbkrUpdateGatewayStatus() {
-    var statusEl   = document.getElementById('m-ibkr-gw-status');
-    var connectBtn = document.getElementById('m-ibkr-connect-btn');
-    var data = await ibkrGatewayStatus();
-    if (statusEl) {
-        statusEl.textContent = data.authenticated ? '🟢' : '🔴';
-        statusEl.title = data.authenticated ? 'IBKR Gateway verbunden' : 'IBKR Gateway nicht verbunden';
-    }
-    if (connectBtn) connectBtn.style.display = data.authenticated ? 'none' : '';
-}
-
-function mIbkrGatewayConnect() {
-    window.open('https://ibkr-gateway.gtech01.de/sso/Login?forwardTo=22&RL=1&ip2loc=on', '_blank');
-    var check = setInterval(function() {
-        ibkrGatewayStatus().then(function(d) {
-            if (d.authenticated) { clearInterval(check); mIbkrUpdateGatewayStatus(); }
-        });
-    }, 5000);
 }
 
 

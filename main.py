@@ -27,8 +27,6 @@ import time
 import sqlite3
 import shutil
 import tempfile
-import base64
-import urllib.request as _urlreq
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -47,19 +45,6 @@ os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 load_dotenv("/app/data/.env", override=True)
 
-IBKR_GATEWAY_BASE = "https://ibkr-gateway.gtech01.de"
-
-def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
-    ibkr_user = os.environ.get("IBKR_USER", "")
-    ibkr_password = os.environ.get("IBKR_PASSWORD", "")
-    creds = base64.b64encode(f"{ibkr_user}:{ibkr_password}".encode()).decode()
-    req = _urlreq.Request(
-        f"{IBKR_GATEWAY_BASE}{path}",
-        headers={"Authorization": f"Basic {creds}", "Accept": "application/json"},
-        method=method,
-        data=data,
-    )
-    return _urlreq.urlopen(req, timeout=timeout)
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
 with open(_manifest_path) as _f:
@@ -699,114 +684,17 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn.close()
     return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "last_sync": now}
 
-def _do_ibkr_gateway_sync(db_file: str) -> dict:
-    """Sync via IBKR Client Portal Gateway API — läuft im ThreadPoolExecutor."""
-    import datetime as dt_
-    import urllib.error
-
-    now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # 1 — Konto-ID ermitteln
-    try:
-        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=15) as resp:
-            accounts = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        return {"ok": False, "error": f"Gateway accounts {e.code}: {e.read().decode()[:200]}"}
-    except Exception as e:
-        return {"ok": False, "error": f"Gateway nicht erreichbar: {e}"}
-
-    if not accounts:
-        return {"ok": False, "error": "Keine IBKR Konten — ist das Gateway eingeloggt?"}
-
-    acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
-    if not acct_id:
-        return {"ok": False, "error": f"Kein accountId im Gateway-Response: {accounts[0]}"}
-    print(f"[IBKR GW] Konto: {acct_id}")
-
-    # 2 — Positionen seitenweise abrufen
-    raw_positions = []
-    for page in range(50):  # max 50 × 30 = 1 500 Positionen
-        params = "?invalidatecache=1" if page == 0 else ""
-        try:
-            with _ibkr_gateway_request(
-                f"/v1/api/portfolio/{acct_id}/positions/{page}{params}", timeout=20
-            ) as resp:
-                page_data = json.loads(resp.read().decode())
-        except Exception as e:
-            print(f"[IBKR GW] Positionen Seite {page} Fehler: {e}")
-            break
-        if not page_data:
-            break
-        raw_positions.extend(page_data)
-        if len(page_data) < 30:
-            break
-
-    print(f"[IBKR GW] {len(raw_positions)} Positionen empfangen")
-
-    # 3 — Ledger: Cash-Salden + FX-Kurse
-    fx_rates: dict[str, float] = {}
-    cash_rows = []
-    try:
-        with _ibkr_gateway_request(f"/v1/api/portfolio/{acct_id}/ledger", timeout=15) as resp:
-            ledger = json.loads(resp.read().decode())
-        for ccy, data in ledger.items():
-            rate = float(data.get("exchangerate") or 1.0)
-            if ccy != "BASE":
-                fx_rates[ccy] = rate
-            cash_bal = float(data.get("cashbalance") or 0.0)
-            cash_rows.append((ccy, cash_bal, now))
-    except Exception as e:
-        print(f"[IBKR GW] Ledger Fehler (nicht fatal): {e}")
-
-    # 4 — Positionen mappen
-    position_rows = []
-    for p in raw_positions:
-        symbol = (p.get("symbol") or p.get("contractDesc") or "").strip()
-        if not symbol:
-            continue
-        qty           = float(p.get("position")      or 0)
-        avg_cost      = float(p.get("avgCost")       or 0)
-        # avgPrice = per-unit fill price (same units as mktPrice)
-        # avgCost  = per-contract dollar cost = avgPrice × multiplier
-        # → use avgPrice for display so Einstand/Aktuell are comparable
-        avg_price     = float(p.get("avgPrice")      or 0) or avg_cost
-        mkt_price     = float(p.get("mktPrice")      or 0)
-        mkt_value     = float(p.get("mktValue")      or 0)
-        unrealized    = float(p.get("unrealizedPnl") or 0)
-        currency      = (p.get("currency") or "USD").strip()
-        fx            = fx_rates.get(currency, 1.0)
-        # cost_basis_money: mktValue already includes multiplier, so subtract
-        # unrealizedPnl (same units) to get the original cost basis
-        cbm           = mkt_value - unrealized
-        asset_cls     = (p.get("assetClass") or "STK").strip()
-        position_rows.append((symbol, qty, avg_price, cbm, mkt_price, mkt_value, asset_cls, now, fx))
-
-    if not position_rows and not cash_rows:
-        return {"ok": False, "error": "Keine Positionen oder Cash-Daten vom Gateway"}
-
-    # 5 — In DB schreiben
-    conn = get_db(db_file)
-    conn.execute("DELETE FROM positions")
-    if position_rows:
-        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?)", position_rows)
-    conn.execute("DELETE FROM cash_balances")
-    if cash_rows:
-        conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
-    conn.commit()
-    conn.close()
-
-    return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "last_sync": now}
 
 @app.get("/api/ibkr/sync")
 async def ibkr_sync(request: Request):
-    """Ruft IBKR Gateway API ab und befüllt die positions-Tabelle."""
+    """IBKR Flex Query: Positionen und Cash-Salden synchronisieren."""
     import asyncio
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
     try:
         loop   = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_ibkr_gateway_sync, files["db"])
+        result = await loop.run_in_executor(None, _do_ibkr_sync, files["db"], files["data_dir"])
         return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
     except Exception as e:
         print(f"ibkr_sync error: {e}")
@@ -834,81 +722,3 @@ async def ibkr_cash(request: Request):
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
-@app.get("/api/ibkr/gateway/status")
-async def ibkr_gateway_status():
-    try:
-        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
-            data = json.loads(resp.read().decode())
-            return JSONResponse({"authenticated": data.get("authenticated", False)})
-    except Exception:
-        return JSONResponse({"authenticated": False})
-
-@app.post("/api/ibkr/gateway/logout")
-async def ibkr_gateway_logout():
-    try:
-        with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
-            status = resp.status
-            body   = resp.read().decode("utf-8", errors="replace")
-            print(f"[IBKR GW] logout response {status}: {body[:200]}")
-            return JSONResponse({"ok": True, "status": status})
-    except Exception as e:
-        print(f"[IBKR GW] logout FEHLER: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
-
-@app.get("/api/test-ibkr-positions")
-async def test_ibkr_positions():
-    """Temporärer Test-Endpunkt: Rohe Positionsdaten vom IBKR Gateway (Seite 0)."""
-    import urllib.error
-    try:
-        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=15) as resp:
-            accounts = json.loads(resp.read().decode())
-        if not accounts:
-            return JSONResponse({"error": "Keine Konten"}, status_code=502)
-        acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
-        with _ibkr_gateway_request(
-            f"/v1/api/portfolio/{acct_id}/positions/0?invalidatecache=1", timeout=20
-        ) as resp:
-            raw = resp.read().decode("utf-8")
-        return JSONResponse(content={"acct_id": acct_id, "positions": json.loads(raw)})
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8") if e.fp else ""
-        return JSONResponse(content={"error": str(e), "status": e.code, "body": body}, status_code=502)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=502)
-
-@app.get("/api/test-ibkr-logout")
-async def test_ibkr_logout():
-    """Temporärer Test-Endpunkt: Roher Logout-Request ans IBKR Gateway."""
-    import urllib.error
-    try:
-        with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
-            status  = resp.status
-            headers = dict(resp.headers)
-            raw     = resp.read().decode("utf-8")
-        try:
-            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
-        except Exception:
-            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8") if e.fp else ""
-        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers), "body": body}, status_code=502)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=502)
-
-@app.get("/api/test-ibkr")
-async def test_ibkr():
-    """Temporärer Test-Endpunkt: Roher Auth-Status vom IBKR Gateway."""
-    import urllib.error
-    try:
-        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
-            status  = resp.status
-            headers = dict(resp.headers)
-            raw     = resp.read().decode("utf-8")
-        try:
-            return JSONResponse(content={"status": status, "headers": headers, "body": json.loads(raw)})
-        except Exception:
-            return JSONResponse(content={"status": status, "headers": headers, "raw": raw})
-    except urllib.error.HTTPError as e:
-        return JSONResponse(content={"error": str(e), "status": e.code, "headers": dict(e.headers)}, status_code=502)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=502)
