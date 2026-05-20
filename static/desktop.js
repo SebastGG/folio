@@ -899,132 +899,120 @@ function toggleDrawFlyout(id, event) {
 // ╚══════════════════════════════════════════════════════════╝
 
 // ── Layouts speichern / laden ──
-// Gespeichert im globalen layout-Objekt, persistiert via /api/config
 var _layout = {};
 
 function saveLayout() {
-    var sb = document.getElementById('sidebarPane');
-    var ba = document.getElementById('bottomArea');
-    var pn = document.getElementById('panel-notes');
-    var pp = document.getElementById('panel-perf');
+    var rc = document.getElementById('right-col');
+    var ib = document.getElementById('ibkr-col-pane');
+    var rp = document.getElementById('r-perf');
+    var rn = document.getElementById('r-notes');
+    var ri = document.getElementById('r-import');
     _layout = {
-        sidebarW:    sb ? sb.offsetWidth  : null,
-        bottomH:     ba ? ba.offsetHeight : null,
-        panelNotesW: pn ? pn.offsetWidth  : null,
-        panelPerfW:  pp ? pp.offsetWidth  : null,
+        rightColW: rc ? rc.offsetWidth  : null,
+        ibkrH:    ib ? ib.offsetHeight : null,
+        rPerfH:   rp ? rp.offsetHeight : null,
+        rNotesH:  rn ? rn.offsetHeight : null,
+        rImportH: ri ? ri.offsetHeight : null,
     };
-    // Layout wird über saveBasketsToServer() persistiert
     saveBasketsToServer();
 }
 
 function loadLayout() {
     var lay = _layout || {};
-    var sb  = document.getElementById('sidebarPane');
-    var ba  = document.getElementById('bottomArea');
-    var pn  = document.getElementById('panel-notes');
-    var pp  = document.getElementById('panel-perf');
-    if (lay.sidebarW    != null && sb) sb.style.width  = lay.sidebarW    + 'px';
-    if (lay.bottomH     != null && ba) ba.style.height = lay.bottomH     + 'px';
-    if (lay.panelNotesW != null && pn) { pn.style.flex = 'none'; pn.style.width = lay.panelNotesW + 'px'; }
-    if (lay.panelPerfW  != null && pp) { pp.style.flex = 'none'; pp.style.width = lay.panelPerfW  + 'px'; }
+    var rc = document.getElementById('right-col');
+    var ib = document.getElementById('ibkr-col-pane');
+    var rp = document.getElementById('r-perf');
+    var rn = document.getElementById('r-notes');
+    var ri = document.getElementById('r-import');
+    if (lay.rightColW != null && rc) rc.style.width  = lay.rightColW + 'px';
+    if (lay.ibkrH    != null && ib) ib.style.height = lay.ibkrH     + 'px';
+    if (lay.rPerfH   != null && rp) rp.style.height = lay.rPerfH    + 'px';
+    if (lay.rNotesH  != null && rn) rn.style.height = lay.rNotesH   + 'px';
+    if (lay.rImportH != null && ri) ri.style.height = lay.rImportH  + 'px';
     if (chart) fitChart();
 }
 
 (function() {
-    // ── Horizontal: Chart vs Sidebar ──
-    var hResizer = document.getElementById('resizer');
-    var sidebar  = document.getElementById('sidebarPane');
-    if (hResizer && sidebar) {
-        var dragging = false, startX = 0, startW = 0;
-        hResizer.addEventListener('mousedown', function(e) {
-            dragging = true; startX = e.clientX; startW = sidebar.offsetWidth;
-            hResizer.classList.add('dragging');
-            document.body.style.userSelect = 'none';
-            document.body.style.cursor = 'col-resize';
+    // Hilfsfunktion: Resizer für Panel UNTERHALB (down = Panel kleiner)
+    function makeBottomResizer(resizerId, belowId, minH, maxH, cb) {
+        var res = document.getElementById(resizerId);
+        var pan = document.getElementById(belowId);
+        if (!res || !pan) return;
+        var drag = false, startY = 0, startH = 0;
+        res.addEventListener('mousedown', function(e) {
+            drag = true; startY = e.clientY; startH = pan.offsetHeight;
+            res.classList.add('dragging');
+            document.body.style.userSelect = 'none'; document.body.style.cursor = 'row-resize';
             e.preventDefault();
         });
         window.addEventListener('mousemove', function(e) {
-            if (!dragging) return;
-            var delta = startX - e.clientX;
-            var newW  = Math.max(180, Math.min(500, startW + delta));
-            sidebar.style.width = newW + 'px';
-            fitChart();
+            if (!drag) return;
+            var newH = Math.max(minH, Math.min(maxH, startH - (e.clientY - startY)));
+            pan.style.height = newH + 'px';
+            if (cb) cb();
         });
         window.addEventListener('mouseup', function() {
-            if (dragging) {
-                dragging = false;
-                hResizer.classList.remove('dragging');
-                document.body.style.userSelect = '';
-                document.body.style.cursor = '';
-                saveLayout();
-            }
+            if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
         });
     }
 
-    // ── Vertikal: Chart | Bottom-Panels ──
-    var vResizer   = document.getElementById('vresizer');
-    var chartPane  = document.querySelector('.chart-pane');
-    var bottomArea = document.getElementById('bottomArea');
-    if (vResizer && chartPane && bottomArea) {
-        var vDragging = false, startY = 0, startH = 0;
-        vResizer.addEventListener('mousedown', function(e) {
-            vDragging = true;
-            startY = e.clientY;
-            startH = bottomArea.offsetHeight;
-            vResizer.classList.add('dragging');
-            document.body.style.userSelect = 'none';
-            document.body.style.cursor = 'row-resize';
+    // Hilfsfunktion: Resizer zwischen zwei Fixed-Panels (split)
+    function makeSplitResizer(resizerId, aboveId, belowId, minH) {
+        var res   = document.getElementById(resizerId);
+        var above = document.getElementById(aboveId);
+        var below = document.getElementById(belowId);
+        if (!res || !above || !below) return;
+        var drag = false, startY = 0, aboveH = 0, belowH = 0;
+        res.addEventListener('mousedown', function(e) {
+            drag = true; startY = e.clientY; aboveH = above.offsetHeight; belowH = below.offsetHeight;
+            res.classList.add('dragging');
+            document.body.style.userSelect = 'none'; document.body.style.cursor = 'row-resize';
             e.preventDefault();
         });
         window.addEventListener('mousemove', function(e) {
-            if (!vDragging) return;
-            var delta = startY - e.clientY;
-            var newH  = Math.max(80, Math.min(window.innerHeight - 200, startH + delta));
-            bottomArea.style.height = newH + 'px';
-            fitChart();
+            if (!drag) return;
+            var d = e.clientY - startY;
+            above.style.height = Math.max(minH, aboveH + d) + 'px';
+            below.style.height = Math.max(minH, belowH - d) + 'px';
         });
         window.addEventListener('mouseup', function() {
-            if (vDragging) {
-                vDragging = false;
-                vResizer.classList.remove('dragging');
-                document.body.style.userSelect = '';
-                document.body.style.cursor = '';
-                saveLayout();
-            }
+            if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
         });
     }
 
-    // ── Panel-Resizer (horizontal zwischen Bottom-Panels) ──
-    [['panel-resizer-1', 'panel-notes',   'panel-perf'],
-     ['panel-resizer-2', 'panel-perf',    'panel-import'],
-     ['panel-resizer-3', 'panel-import',  'panel-ibkr']].forEach(function(cfg) {
-        var pr   = document.getElementById(cfg[0]);
-        var left = document.getElementById(cfg[1]);
-        if (!pr || !left) return;
-        var pDragging = false, pStartX = 0, pLeftW = 0;
-        pr.addEventListener('mousedown', function(e) {
-            pDragging = true; pStartX = e.clientX; pLeftW = left.offsetWidth;
-            pr.classList.add('dragging');
-            document.body.style.userSelect = 'none';
-            document.body.style.cursor = 'col-resize';
+    // ── Horizontal: Rechte Spalte breite ──
+    var colRes  = document.getElementById('col-resizer');
+    var rightCol = document.getElementById('right-col');
+    if (colRes && rightCol) {
+        var cDrag = false, cStartX = 0, cStartW = 0;
+        colRes.addEventListener('mousedown', function(e) {
+            cDrag = true; cStartX = e.clientX; cStartW = rightCol.offsetWidth;
+            colRes.classList.add('dragging');
+            document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize';
             e.preventDefault();
         });
         window.addEventListener('mousemove', function(e) {
-            if (!pDragging) return;
-            var newW = Math.max(80, pLeftW + (e.clientX - pStartX));
-            left.style.flex  = 'none';
-            left.style.width = newW + 'px';
+            if (!cDrag) return;
+            var newW = Math.max(180, Math.min(600, cStartW - (e.clientX - cStartX)));
+            rightCol.style.width = newW + 'px';
+            fitChart();
         });
         window.addEventListener('mouseup', function() {
-            if (pDragging) {
-                pDragging = false;
-                pr.classList.remove('dragging');
-                document.body.style.userSelect = '';
-                document.body.style.cursor = '';
-                saveLayout();
-            }
+            if (cDrag) { cDrag = false; colRes.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
         });
-    });
+    }
+
+    // ── Vertikal Links: IBKR-Panel Höhe (lv-resizer oben vom IBKR-Panel) ──
+    makeBottomResizer('lv-resizer', 'ibkr-col-pane', 80, 600, fitChart);
+
+    // ── Vertikal Rechts: zwischen Watchlist und Perf (perf schrumpft beim Ziehen nach unten) ──
+    makeBottomResizer('rv-resizer-1', 'r-perf', 60, 500, null);
+
+    // ── Vertikal Rechts: zwischen Perf und Notes (split) ──
+    makeSplitResizer('rv-resizer-2', 'r-perf', 'r-notes', 60);
+
+    // ── Vertikal Rechts: zwischen Notes und Import (split) ──
+    makeSplitResizer('rv-resizer-3', 'r-notes', 'r-import', 50);
 })();
 
 // ╔══════════════════════════════════════════════════════════╗

@@ -40,7 +40,8 @@
   <span>TICKER <span id="sct" class="stat-val">-</span></span>
 </div>
 
-<div class="main" id="mainLayout">
+<div class="app-layout">
+  <div class="left-col">
   <div class="chart-pane">
     <div class="chart-toolbar">
       <span id="chartTitle" class="chart-title">Index</span>
@@ -267,83 +268,9 @@
     </div>
   </div>
 
-  <div class="resizer" id="resizer"></div>
+  <div class="lv-resizer" id="lv-resizer"></div>
 
-  <div class="sidebar" id="sidebarPane" style="width:280px;min-width:180px;max-width:500px;">
-    <div class="sidebar-tabs">
-      <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
-      <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
-    </div>
-    <div class="sidebar-content" id="content-kurse" style="padding:0;">
-      <div id="basket-pills-bar"></div>
-      <div id="watchlist" style="padding:0 12px;"></div>
-    </div>
-    <div class="sidebar-content" id="content-verwaltung" style="display:none;">
-      <div id="manageList"></div>
-      <div class="search-wrap">
-        <input type="text" id="searchInput" placeholder="Ticker suchen…"
-          oninput="onSearch(this.value)" autocomplete="off">
-      </div>
-      <div id="searchResults"></div>
-    </div>
-  </div>
-</div>
-
-<div class="vresizer" id="vresizer"></div>
-
-<div class="bottom-area" id="bottomArea" style="height:200px;">
-  <div class="panel" id="panel-notes">
-    <div class="panel-header">
-      <span class="panel-title">📝 Notizen</span>
-      <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:10px;" onclick="saveNotes()">Speichern</button>
-    </div>
-    <div class="panel-body">
-      <textarea id="notesArea" placeholder="Notizen, Beobachtungen, Trading-Ideen..."
-        oninput="clearTimeout(window._notesTimer);window._notesTimer=setTimeout(saveNotes,2000)"></textarea>
-    </div>
-  </div>
-  <div class="panel-resizer" id="panel-resizer-1"></div>
-  <div class="panel" id="panel-perf">
-    <div class="panel-header">
-      <span class="panel-title">📊 Performance</span>
-      <select id="perfSort" onchange="renderPerfTable()" style="border:1px solid var(--border);background:var(--bg);padding:2px 4px;font-size:9px;">
-        <option value="alpha">A-Z</option>
-        <option value="1d">1T</option>
-        <option value="1w">1W</option>
-        <option value="1m">1M</option>
-        <option value="3m">3M</option>
-        <option value="ytd">YTD</option>
-        <option value="ibkr">IBKR</option>
-      </select>
-    </div>
-    <div class="panel-body">
-      <table class="perf-table">
-        <thead><tr>
-          <th>Ticker</th><th>Kurs</th><th>Anz.</th><th>Position</th>
-          <th>IBKR P&amp;L</th><th>1T</th><th>1W</th><th>1M</th><th>3M</th><th>YTD</th>
-        </tr></thead>
-        <tbody id="perfBody"></tbody>
-        <tfoot id="perfFoot"></tfoot>
-      </table>
-    </div>
-  </div>
-  <div class="panel-resizer" id="panel-resizer-2"></div>
-  <div class="panel" id="panel-import">
-    <div class="panel-header"><span class="panel-title">📥 Import / Export</span></div>
-    <div class="panel-body" style="padding:8px;">
-      <div class="drop-zone" id="dropZone"
-        ondragover="event.preventDefault();this.classList.add('over')"
-        ondragleave="this.classList.remove('over')"
-        ondrop="event.preventDefault();this.classList.remove('over');readFile(event.dataTransfer.files[0])">
-        <div style="font-size:10px;color:var(--muted);">📄 Datei hierher ziehen oder klicken</div>
-        <input type="file" id="fileInput" style="display:none" accept=".txt" onchange="readFile(this.files[0])">
-      </div>
-      <div style="margin-top:6px;font-size:9px;color:var(--muted);">Format: AAPL 10 oder AAPL,10</div>
-      <button class="export-btn" onclick="exportTxt()">⬇ Als TXT herunterladen</button>
-    </div>
-  </div>
-  <div class="panel-resizer" id="panel-resizer-3"></div>
-  <div class="panel" id="panel-ibkr">
+  <div class="r-pane" id="ibkr-col-pane" style="height:220px;">
     <div class="panel-header">
       <span class="panel-title">📋 Positionen</span>
       <button id="ibkrSyncBtn" onclick="ibkrSync()" class="refresh-btn" style="font-size:9px;padding:3px 10px;">↻ Sync</button>
@@ -369,7 +296,92 @@
       </div>
     </div>
   </div>
-</div>
+
+  </div><!-- end .left-col -->
+
+  <div class="col-resizer" id="col-resizer"></div>
+
+  <div class="right-col" id="right-col">
+
+    <div class="r-pane" id="r-watch">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
+        <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
+      </div>
+      <div class="sidebar-content" id="content-kurse" style="padding:0;">
+        <div id="basket-pills-bar"></div>
+        <div id="watchlist" style="padding:0 12px;"></div>
+      </div>
+      <div class="sidebar-content" id="content-verwaltung" style="display:none;">
+        <div id="manageList"></div>
+        <div class="search-wrap">
+          <input type="text" id="searchInput" placeholder="Ticker suchen…"
+            oninput="onSearch(this.value)" autocomplete="off">
+        </div>
+        <div id="searchResults"></div>
+      </div>
+    </div>
+
+    <div class="rv-resizer" id="rv-resizer-1"></div>
+
+    <div class="r-pane" id="r-perf" style="height:200px;">
+      <div class="panel-header">
+        <span class="panel-title">📊 Performance</span>
+        <select id="perfSort" onchange="renderPerfTable()" style="border:1px solid var(--border);background:var(--bg);padding:2px 4px;font-size:9px;">
+          <option value="alpha">A-Z</option>
+          <option value="1d">1T</option>
+          <option value="1w">1W</option>
+          <option value="1m">1M</option>
+          <option value="3m">3M</option>
+          <option value="ytd">YTD</option>
+          <option value="ibkr">IBKR</option>
+        </select>
+      </div>
+      <div class="panel-body">
+        <table class="perf-table">
+          <thead><tr>
+            <th>Ticker</th><th>Kurs</th><th>Anz.</th><th>Position</th>
+            <th>IBKR P&amp;L</th><th>1T</th><th>1W</th><th>1M</th><th>3M</th><th>YTD</th>
+          </tr></thead>
+          <tbody id="perfBody"></tbody>
+          <tfoot id="perfFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="rv-resizer" id="rv-resizer-2"></div>
+
+    <div class="r-pane" id="r-notes" style="height:160px;">
+      <div class="panel-header">
+        <span class="panel-title">📝 Notizen</span>
+        <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:10px;" onclick="saveNotes()">Speichern</button>
+      </div>
+      <div class="panel-body" style="padding:0;">
+        <textarea id="notesArea" placeholder="Notizen, Beobachtungen, Trading-Ideen..."
+          oninput="clearTimeout(window._notesTimer);window._notesTimer=setTimeout(saveNotes,2000)"></textarea>
+      </div>
+    </div>
+
+    <div class="rv-resizer" id="rv-resizer-3"></div>
+
+    <div class="r-pane" id="r-import" style="height:140px;">
+      <div class="panel-header"><span class="panel-title">📥 Import / Export</span></div>
+      <div class="panel-body" style="padding:8px;">
+        <div class="drop-zone" id="dropZone"
+          ondragover="event.preventDefault();this.classList.add('over')"
+          ondragleave="this.classList.remove('over')"
+          ondrop="event.preventDefault();this.classList.remove('over');readFile(event.dataTransfer.files[0])">
+          <div style="font-size:10px;color:var(--muted);">📄 Datei hierher ziehen oder klicken</div>
+          <input type="file" id="fileInput" style="display:none" accept=".txt" onchange="readFile(this.files[0])">
+        </div>
+        <div style="margin-top:6px;font-size:9px;color:var(--muted);">Format: AAPL 10 oder AAPL,10</div>
+        <button class="export-btn" onclick="exportTxt()">⬇ Als TXT herunterladen</button>
+      </div>
+    </div>
+
+  </div><!-- end .right-col -->
+
+</div><!-- end .app-layout -->
 
 
 <footer>

@@ -83,13 +83,40 @@ header {
 .stats-bar span { white-space: nowrap; }
 .stat-val { color: var(--text); font-weight: 500; }
 
-/* ── Haupt-Layout (Chart + Sidebar) ───────────────────────────────────────── */
-.main {
+/* ── Haupt-Layout (zwei Spalten) ───────────────────────────────────────────── */
+.app-layout {
   display: flex; flex: 1; min-height: 0; overflow: hidden;
 }
-.chart-pane {
+.left-col {
   flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
 }
+.chart-pane {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.lv-resizer {
+  height: 5px; cursor: row-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; user-select: none;
+}
+.lv-resizer:hover, .lv-resizer.dragging { background: #aaa; }
+.col-resizer {
+  width: 5px; cursor: col-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; user-select: none;
+}
+.col-resizer:hover, .col-resizer.dragging { background: #aaa; }
+.right-col {
+  width: 300px; min-width: 180px; flex-shrink: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-left: 1px solid var(--border);
+}
+.r-pane {
+  display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; min-height: 60px;
+}
+#r-watch { flex: 1; flex-shrink: 1; min-height: 120px; }
+.rv-resizer {
+  height: 5px; cursor: row-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; user-select: none;
+}
+.rv-resizer:hover, .rv-resizer.dragging { background: #aaa; }
 
 /* ── Chart-Toolbar ─────────────────────────────────────────────────────────── */
 .chart-toolbar {
@@ -193,19 +220,7 @@ header {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Resizer (horizontal: Chart | Sidebar) ─────────────────────────────────── */
-.resizer {
-  width: 5px; cursor: col-resize; background: var(--border); flex-shrink: 0;
-  transition: background 0.15s; user-select: none;
-}
-.resizer:hover, .resizer.dragging { background: #aaa; }
-
-/* ── Sidebar ───────────────────────────────────────────────────────────────── */
-.sidebar {
-  display: flex; flex-direction: column;
-  background: var(--surface); border-left: 1px solid var(--border);
-  overflow: hidden; flex-shrink: 0;
-}
+/* ── Sidebar-Tabs (in right-col) ───────────────────────────────────────────── */
 .sidebar-tabs {
   display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
@@ -275,27 +290,6 @@ header {
 }
 .manage-del:hover { color: var(--red); }
 
-/* ── Vresizer (vertikal: Chart | Bottom-Panels) ────────────────────────────── */
-.vresizer {
-  height: 5px; cursor: row-resize; background: var(--border); flex-shrink: 0;
-  transition: background 0.15s; user-select: none;
-}
-.vresizer:hover, .vresizer.dragging { background: #aaa; }
-
-/* ── Bottom-Panels ─────────────────────────────────────────────────────────── */
-.bottom-area {
-  display: flex; flex-shrink: 0; background: var(--surface);
-  border-top: 1px solid var(--border); overflow: hidden;
-}
-.panel {
-  flex: 1; min-width: 0; display: flex; flex-direction: column;
-  overflow: hidden;
-}
-.panel-resizer {
-  width: 5px; cursor: col-resize; background: var(--border);
-  flex-shrink: 0; user-select: none; transition: background 0.15s;
-}
-.panel-resizer:hover, .panel-resizer.dragging { background: #aaa; }
 .panel-header {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 12px; border-bottom: 1px solid var(--border);
@@ -303,6 +297,7 @@ header {
 }
 .panel-title { font-weight: 700; font-size: 10px; text-transform: uppercase; color: var(--muted); }
 .panel-body { flex: 1; overflow-y: auto; }
+#notesArea { width: 100%; height: 100%; resize: none; border: none; background: var(--surface); padding: 8px; outline: none; }
 
 /* ── Performance-Tabelle ───────────────────────────────────────────────────── */
 .perf-table {
