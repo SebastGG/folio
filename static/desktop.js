@@ -207,14 +207,41 @@ function refreshIbkrCostLine(colored) {
  * Wird von shared.js applyPeriod() aufgerufen.
  * Rendert Kerzen, Volumen, Indikatoren, LogReg, Seit-Marker.
  */
+function refreshTradeMarkers() {
+    if (!csSeries) return;
+    var markers = [];
+    if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
+        ibkrTrades.filter(function(t) {
+            return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
+        }).forEach(function(t) {
+            if (!t.trade_date) return;
+            var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+            markers.push({
+                time: t.trade_date,
+                position: isBuy ? 'belowBar' : 'aboveBar',
+                color: isBuy ? '#2d8a4e' : '#c0392b',
+                shape: isBuy ? 'arrowUp' : 'arrowDown',
+                text: isBuy ? 'K' : 'V',
+            });
+        });
+        markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+    }
+    try { csSeries.setMarkers(markers); } catch(e) { console.warn('setMarkers:', e); }
+}
+
+/**
+ * Wird von shared.js applyPeriod() aufgerufen.
+ * Rendert Kerzen, Volumen, Indikatoren, LogReg, Seit-Marker.
+ */
 function renderDesktopChart(colored, volAgg, agg, regResult) {
     if (!chart || !csSeries) return;
 
     // Kerzen
     csSeries.setData(colored);
 
-    // IBKR Einstandskurs
+    // IBKR Einstandskurs + Trade-Marker
     refreshIbkrCostLine(colored);
+    refreshTradeMarkers();
 
     // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
     if (ghostSeries && colored.length) {
@@ -998,7 +1025,7 @@ updateClock();
         ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
             ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
         });
-        ibkrLoadTrades().then(function() { ibkrRenderTrades(); });
+        ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
     });
 })();
 
@@ -1136,6 +1163,7 @@ async function ibkrSync() {
             renderPerfTable();
             await ibkrLoadTrades();
             ibkrRenderTrades();
+            refreshTradeMarkers();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }

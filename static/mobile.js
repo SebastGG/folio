@@ -280,6 +280,28 @@ function refreshMobileIbkrCostLine(colored) {
     }
 }
 
+function refreshMobileTradeMarkers() {
+    if (!mCs) return;
+    var markers = [];
+    if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
+        ibkrTrades.filter(function(t) {
+            return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
+        }).forEach(function(t) {
+            if (!t.trade_date) return;
+            var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+            markers.push({
+                time: t.trade_date,
+                position: isBuy ? 'belowBar' : 'aboveBar',
+                color: isBuy ? '#2d8a4e' : '#c0392b',
+                shape: isBuy ? 'arrowUp' : 'arrowDown',
+                text: isBuy ? 'K' : 'V',
+            });
+        });
+        markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+    }
+    try { mCs.setMarkers(markers); } catch(e) { console.warn('setMarkers:', e); }
+}
+
 /**
  * Wird von shared.js applyPeriod() aufgerufen.
  * Rendert Mobile-Chart mit gefärbten Kerzen + Indikatoren.
@@ -289,8 +311,9 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
 
     mCs.setData(colored);
 
-    // IBKR Einstandskurs
+    // IBKR Einstandskurs + Trade-Marker
     refreshMobileIbkrCostLine(colored);
+    refreshMobileTradeMarkers();
 
     if (mVol && volAgg.length) {
         var cmap = {};
@@ -695,6 +718,7 @@ async function mIbkrSync(btn) {
             renderMobilePerf();
             await ibkrLoadTrades();
             mIbkrRenderTrades();
+            refreshMobileTradeMarkers();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannt'));
         }
@@ -793,7 +817,7 @@ async function mAddTicker(sym) {
                 initMobileChart();
                 syncMobileInd();
                 ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); renderMobilePerf(); });
-                ibkrLoadTrades().then(function() { mIbkrRenderTrades(); });
+                ibkrLoadTrades().then(function() { mIbkrRenderTrades(); refreshMobileTradeMarkers(); });
             });
         });
     });
