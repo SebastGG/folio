@@ -285,17 +285,26 @@ function refreshMobileTradeMarkers() {
     if (!mCs) return;
     var markers = [];
     if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
+        var agg = {};
         ibkrTrades.filter(function(t) {
             return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+            var key = t.trade_date + (isBuy ? '_B' : '_S');
+            if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0 };
+            agg[key].qty += Math.abs(t.quantity || 0);
+        });
+        Object.keys(agg).forEach(function(k) {
+            var g = agg[k];
+            var qty = g.qty === Math.floor(g.qty) ? g.qty : g.qty.toFixed(1);
             markers.push({
-                time: t.trade_date,
-                position: isBuy ? 'belowBar' : 'aboveBar',
-                color: isBuy ? '#2d8a4e' : '#c0392b',
-                shape: isBuy ? 'arrowUp' : 'arrowDown',
-                text: isBuy ? 'K' : 'V',
+                time: g.date,
+                position: g.isBuy ? 'belowBar' : 'aboveBar',
+                color: g.isBuy ? '#2d8a4e' : '#c0392b',
+                shape: g.isBuy ? 'arrowUp' : 'arrowDown',
+                text: (g.isBuy ? 'K ' : 'V ') + qty,
+                size: 2,
             });
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
