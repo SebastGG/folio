@@ -176,6 +176,34 @@ function fitChart() {
 // ║  4. CHART-RENDERING (Interface zu shared.js)             ║
 // ╚══════════════════════════════════════════════════════════╝
 
+function refreshIbkrCostLine(colored) {
+    if (!csSeries) return;
+    if (_ibkrCostLine) { try { csSeries.removePriceLine(_ibkrCostLine); } catch(e) {} _ibkrCostLine = null; }
+    if (!colored || !colored.length || !ibkrPositions || !ibkrPositions.length) return;
+    var cbPrice = 0;
+    if (currentView !== 'index') {
+        var pos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
+    } else {
+        var totalCost = 0, totalValue = 0;
+        ibkrPositions.forEach(function(p) {
+            if ((WEIGHTS[p.symbol] || 0) > 0) {
+                var fx = p.fx_rate_to_base || 1;
+                totalCost  += (p.cost_basis_money || 0) * fx;
+                totalValue += (p.position_value   || 0) * fx;
+            }
+        });
+        if (totalValue > 0 && totalCost > 0)
+            cbPrice = colored[colored.length - 1].close * totalCost / totalValue;
+    }
+    if (cbPrice > 0) {
+        _ibkrCostLine = csSeries.createPriceLine({
+            price: cbPrice, color: '#e67e22', lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: true, title: 'Einstand',
+        });
+    }
+}
+
 /**
  * Wird von shared.js applyPeriod() aufgerufen.
  * Rendert Kerzen, Volumen, Indikatoren, LogReg, Seit-Marker.
@@ -186,39 +214,8 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Kerzen
     csSeries.setData(colored);
 
-    // IBKR Einstandskurs — horizontale Linie
-    if (_ibkrCostLine) { try { csSeries.removePriceLine(_ibkrCostLine); } catch(e) {} _ibkrCostLine = null; }
-    if (typeof ibkrPositions !== 'undefined' && ibkrPositions.length && colored.length) {
-        var _cbPrice = 0;
-        if (currentView !== 'index') {
-            // Einzel-Ticker: direkt cost_basis_price
-            var _ibkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
-            if (_ibkrPos && _ibkrPos.cost_basis_price > 0) _cbPrice = _ibkrPos.cost_basis_price;
-        } else {
-            // Index: gewichteter Einstand = last_close × (Σ cost_basis_money_eur / Σ position_value_eur)
-            // nur Ticker die gleichzeitig im Basket (WEIGHTS) und in IBKR-Positionen sind
-            var _totalCost = 0, _totalValue = 0;
-            ibkrPositions.forEach(function(p) {
-                if ((WEIGHTS[p.symbol] || 0) > 0) {
-                    var fx = p.fx_rate_to_base || 1;
-                    _totalCost  += (p.cost_basis_money || 0) * fx;
-                    _totalValue += (p.position_value   || 0) * fx;
-                }
-            });
-            if (_totalValue > 0 && _totalCost > 0)
-                _cbPrice = colored[colored.length - 1].close * _totalCost / _totalValue;
-        }
-        if (_cbPrice > 0) {
-            _ibkrCostLine = csSeries.createPriceLine({
-                price:            _cbPrice,
-                color:            '#e67e22',
-                lineWidth:        1,
-                lineStyle:        2,
-                axisLabelVisible: true,
-                title:            'Einstand',
-            });
-        }
-    }
+    // IBKR Einstandskurs
+    refreshIbkrCostLine(colored);
 
     // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
     if (ghostSeries && colored.length) {
@@ -1016,7 +1013,7 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
-        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); });
+        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); });
     });
 })();
 
@@ -1150,6 +1147,7 @@ async function ibkrSync() {
             await ibkrLoadPositions();
             await ibkrLoadCash();
             ibkrRenderTable();
+            refreshIbkrCostLine(_lastCandles);
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }

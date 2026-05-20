@@ -253,6 +253,34 @@ function syncMobileChart() {
     fitMobileChart();
 }
 
+function refreshMobileIbkrCostLine(colored) {
+    if (!mCs) return;
+    if (_mIbkrCostLine) { try { mCs.removePriceLine(_mIbkrCostLine); } catch(e) {} _mIbkrCostLine = null; }
+    if (!colored || !colored.length || !ibkrPositions || !ibkrPositions.length) return;
+    var cbPrice = 0;
+    if (currentView !== 'index') {
+        var pos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
+    } else {
+        var totalCost = 0, totalValue = 0;
+        ibkrPositions.forEach(function(p) {
+            if ((WEIGHTS[p.symbol] || 0) > 0) {
+                var fx = p.fx_rate_to_base || 1;
+                totalCost  += (p.cost_basis_money || 0) * fx;
+                totalValue += (p.position_value   || 0) * fx;
+            }
+        });
+        if (totalValue > 0 && totalCost > 0)
+            cbPrice = colored[colored.length - 1].close * totalCost / totalValue;
+    }
+    if (cbPrice > 0) {
+        _mIbkrCostLine = mCs.createPriceLine({
+            price: cbPrice, color: '#e67e22', lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: true, title: 'Einstand',
+        });
+    }
+}
+
 /**
  * Wird von shared.js applyPeriod() aufgerufen.
  * Rendert Mobile-Chart mit gefärbten Kerzen + Indikatoren.
@@ -263,35 +291,7 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
     mCs.setData(colored);
 
     // IBKR Einstandskurs
-    if (_mIbkrCostLine) { try { mCs.removePriceLine(_mIbkrCostLine); } catch(e) {} _mIbkrCostLine = null; }
-    if (typeof ibkrPositions !== 'undefined' && ibkrPositions.length && colored.length) {
-        var _mCbPrice = 0;
-        if (currentView !== 'index') {
-            var _mIbkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
-            if (_mIbkrPos && _mIbkrPos.cost_basis_price > 0) _mCbPrice = _mIbkrPos.cost_basis_price;
-        } else {
-            var _mTotalCost = 0, _mTotalValue = 0;
-            ibkrPositions.forEach(function(p) {
-                if ((WEIGHTS[p.symbol] || 0) > 0) {
-                    var fx = p.fx_rate_to_base || 1;
-                    _mTotalCost  += (p.cost_basis_money || 0) * fx;
-                    _mTotalValue += (p.position_value   || 0) * fx;
-                }
-            });
-            if (_mTotalValue > 0 && _mTotalCost > 0)
-                _mCbPrice = colored[colored.length - 1].close * _mTotalCost / _mTotalValue;
-        }
-        if (_mCbPrice > 0) {
-            _mIbkrCostLine = mCs.createPriceLine({
-                price:            _mCbPrice,
-                color:            '#e67e22',
-                lineWidth:        1,
-                lineStyle:        2,
-                axisLabelVisible: true,
-                title:            'Einstand',
-            });
-        }
-    }
+    refreshMobileIbkrCostLine(colored);
 
     if (mVol && volAgg.length) {
         var cmap = {};
@@ -667,6 +667,7 @@ async function mIbkrSync(btn) {
             ibkrLastSync = result.last_sync;
             await ibkrLoadPositions();
             mIbkrRenderTable();
+            refreshMobileIbkrCostLine(_lastCandles);
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannt'));
         }
@@ -764,6 +765,7 @@ async function mAddTicker(sym) {
                 syncMobileNotes();
                 initMobileChart();
                 syncMobileInd();
+                ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); });
             });
         });
     });
