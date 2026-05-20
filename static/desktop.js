@@ -1154,7 +1154,7 @@ function ibkrRenderTrades() {
         return;
     }
     var html = '';
-    ibkrTrades.forEach(function(t) {
+    ibkrTrades.filter(function(t) { return (t.asset_class || '').toUpperCase() === 'STK'; }).forEach(function(t) {
         var fx      = t.fx_rate || 1;
         var valEur  = Math.abs(t.value || 0) * fx;
         var comEur  = Math.abs(t.commission || 0) * fx;
