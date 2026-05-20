@@ -29,6 +29,128 @@ var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker ne
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
 
+// ── VRVP ──────────────────────────────────────────────────────────────────────
+var _vrvpEnabled  = false;
+var _vrvpCanvas   = null;
+var _vrvpRaf      = null;
+var _vrvpRangeSub = null;
+
+function togVRVP(btn) {
+    _vrvpEnabled = !_vrvpEnabled;
+    if (btn) btn.classList.toggle('ind-active', _vrvpEnabled);
+    if (_vrvpEnabled) { _initVRVP(); } else { _clearVRVP(); }
+}
+
+function _initVRVP() {
+    var container = document.getElementById('chartContainer');
+    if (!container || !chart) return;
+    if (!_vrvpCanvas) {
+        _vrvpCanvas = document.createElement('canvas');
+        _vrvpCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:4;';
+        container.appendChild(_vrvpCanvas);
+    }
+    _vrvpCanvas.style.display = '';
+    _resizeVRVP();
+    if (!_vrvpRangeSub) {
+        _vrvpRangeSub = function() { _scheduleVRVP(); };
+        chart.timeScale().subscribeVisibleTimeRangeChange(_vrvpRangeSub);
+    }
+    _scheduleVRVP();
+}
+
+function _clearVRVP() {
+    if (_vrvpCanvas) {
+        _vrvpCanvas.style.display = 'none';
+        var ctx = _vrvpCanvas.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, _vrvpCanvas.width, _vrvpCanvas.height);
+    }
+    if (_vrvpRangeSub && chart) {
+        chart.timeScale().unsubscribeVisibleTimeRangeChange(_vrvpRangeSub);
+        _vrvpRangeSub = null;
+    }
+    if (_vrvpRaf) { cancelAnimationFrame(_vrvpRaf); _vrvpRaf = null; }
+}
+
+function _resizeVRVP() {
+    if (!_vrvpCanvas) return;
+    var c = document.getElementById('chartContainer');
+    if (c) { _vrvpCanvas.width = c.clientWidth; _vrvpCanvas.height = c.clientHeight; }
+}
+
+function _scheduleVRVP() {
+    if (_vrvpRaf) return;
+    _vrvpRaf = requestAnimationFrame(function() { _vrvpRaf = null; _drawVRVP(); });
+}
+
+function _timeToStr(t) {
+    if (!t && t !== 0) return '';
+    if (typeof t === 'string') return t;
+    if (typeof t === 'number') return new Date(t * 1000).toISOString().slice(0, 10);
+    if (t.year) return t.year + '-' + String(t.month).padStart(2,'0') + '-' + String(t.day).padStart(2,'0');
+    return '';
+}
+
+function _drawVRVP() {
+    if (!_vrvpEnabled || !_vrvpCanvas || !csSeries || !chart || !_lastCandles || !_lastCandles.length) return;
+    var canvas = _vrvpCanvas;
+    var ctx = canvas.getContext('2d');
+    var container = document.getElementById('chartContainer');
+    if (container && (canvas.width !== container.clientWidth || canvas.height !== container.clientHeight)) {
+        canvas.width = container.clientWidth; canvas.height = container.clientHeight;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    var visRange = chart.timeScale().getVisibleRange();
+    if (!visRange) return;
+    var fromStr = _timeToStr(visRange.from), toStr = _timeToStr(visRange.to);
+    if (!fromStr || !toStr) return;
+    var visCan = _lastCandles.filter(function(c) { return c.time >= fromStr && c.time <= toStr; });
+    if (!visCan.length) return;
+    var priceMin = Infinity, priceMax = -Infinity;
+    visCan.forEach(function(c) {
+        if (c.low  < priceMin) priceMin = c.low;
+        if (c.high > priceMax) priceMax = c.high;
+    });
+    if (priceMin >= priceMax) return;
+    var NUM_BUCKETS = 24;
+    var bucketSize = (priceMax - priceMin) / NUM_BUCKETS;
+    var volumes = new Float64Array(NUM_BUCKETS);
+    visCan.forEach(function(c) {
+        var vol = c.volume || 0;
+        var cRng = c.high - c.low || bucketSize;
+        for (var i = 0; i < NUM_BUCKETS; i++) {
+            var bLow = priceMin + i * bucketSize, bHigh = bLow + bucketSize;
+            var oLow = Math.max(c.low, bLow), oHigh = Math.min(c.high, bHigh);
+            if (oHigh > oLow) volumes[i] += vol * (oHigh - oLow) / cRng;
+        }
+    });
+    var maxVol = 0, pocIdx = 0;
+    for (var i = 0; i < NUM_BUCKETS; i++) {
+        if (volumes[i] > maxVol) { maxVol = volumes[i]; pocIdx = i; }
+    }
+    if (!maxVol) return;
+    var priceScaleW = 58;
+    var maxBarW = Math.min(canvas.width * 0.15, 120);
+    var barRight = canvas.width - priceScaleW;
+    for (var i = 0; i < NUM_BUCKETS; i++) {
+        var bLow = priceMin + i * bucketSize, bHigh = bLow + bucketSize;
+        var yTop    = csSeries.priceToCoordinate(bHigh);
+        var yBottom = csSeries.priceToCoordinate(bLow);
+        if (yTop === null || yBottom === null) continue;
+        var barH = Math.max(1, Math.abs(yBottom - yTop) - 1);
+        var barW = (volumes[i] / maxVol) * maxBarW;
+        ctx.fillStyle = i === pocIdx ? 'rgba(39,174,96,0.85)' : 'rgba(220,53,69,0.45)';
+        ctx.fillRect(barRight - barW, Math.min(yTop, yBottom), barW, barH);
+    }
+    var pocMid = priceMin + (pocIdx + 0.5) * bucketSize;
+    var pocY   = csSeries.priceToCoordinate(pocMid);
+    if (pocY !== null) {
+        ctx.fillStyle = 'rgba(39,174,96,0.9)';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('POC ' + pocMid.toFixed(2), barRight - 2, pocY + 3);
+    }
+}
+
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
 var _drawSelected    = null;  // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
@@ -171,6 +293,7 @@ function fitChart() {
     var h = container.clientHeight;
     if (w > 0 && h > 0) chart.applyOptions({ width: w, height: h });
     if (typeof resizeCanvas === 'function') resizeCanvas();
+    if (_vrvpEnabled) { _resizeVRVP(); _scheduleVRVP(); }
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -328,6 +451,9 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
 
     // Fit + Zeitachse 1 Jahr in die Zukunft verlängern
     fitWithFuture();
+
+    // VRVP neu zeichnen nach Datenwechsel
+    if (_vrvpEnabled) _scheduleVRVP();
 
 }
 
