@@ -25,8 +25,9 @@
 
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
-var _ibkrCostLine   = null;  // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
-var _markersPlugin  = null;  // LWC v5 SeriesMarkers-Plugin
+var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
+var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
+var _showTradeMarkers  = true;   // Toggle-Zustand
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
@@ -211,7 +212,7 @@ function refreshIbkrCostLine(colored) {
 function refreshTradeMarkers() {
     if (!csSeries) return;
     var markers = [];
-    if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
+    if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
         var agg = {};
         ibkrTrades.filter(function(t) {
@@ -1043,6 +1044,8 @@ updateClock();
             ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
         });
         ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
+        var tbtn = document.getElementById('btn-trades-toggle');
+        if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
     });
 })();
 
@@ -1222,6 +1225,12 @@ function ibkrRenderTrades() {
             + '</tr>';
     });
     tbody.innerHTML = html;
+}
+
+function toggleTradeMarkers(btn) {
+    _showTradeMarkers = !_showTradeMarkers;
+    if (btn) btn.classList.toggle('active', _showTradeMarkers);
+    refreshTradeMarkers();
 }
 
 function doLogout() {
