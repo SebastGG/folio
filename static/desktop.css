@@ -23,8 +23,8 @@
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'JetBrains Mono', 'Fira Mono', monospace;
-  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, Arial, sans-serif;
+  font-size: 12px;
   background: var(--bg);
   color: var(--text);
   display: flex;
@@ -32,7 +32,7 @@ body {
   height: 100vh;
   overflow: hidden;
 }
-select, input, button, textarea { font-family: inherit; font-size: 11px; }
+select, input, button, textarea { font-family: inherit; font-size: 12px; }
 a { color: var(--accent); text-decoration: none; }
 
 /* ── Header ────────────────────────────────────────────────────────────────── */

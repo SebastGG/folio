@@ -66,7 +66,7 @@ function initChart() {
         layout: {
             background:  { color: 'transparent' },
             textColor:   getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#1a1a18',
-            fontFamily:  "'JetBrains Mono', monospace",
+            fontFamily:  "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, Arial, sans-serif",
         },
         grid: {
             vertLines: { color: 'rgba(0,0,0,0.05)' },
