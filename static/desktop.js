@@ -123,10 +123,10 @@ function initChart() {
         var fmt = function(v) { return v != null ? '$' + parseFloat(v).toFixed(2) : '-'; };
         var fmtVol = function(v) {
             if (!v) return '-';
-            if (v >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
-            if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
-            if (v >= 1e3) return '$' + (v/1e3).toFixed(0) + 'K';
-            return '$' + v.toFixed(0);
+            if (v >= 1e9) return (v/1e9).toFixed(2) + 'B';
+            if (v >= 1e6) return (v/1e6).toFixed(2) + 'M';
+            if (v >= 1e3) return (v/1e3).toFixed(0) + 'K';
+            return v.toFixed(0);
         };
 
         var setEl = function(id, val) { var e = document.getElementById(id); if(e) e.textContent = val; };
@@ -136,23 +136,19 @@ function initChart() {
         setEl('ol',  fmt(bar.low));
         setEl('oc',  fmt(bar.close));
 
-        // Volumen aus volSeries
-        var volBar = volSeries ? param.seriesData.get(volSeries) : null;
-        var vol = volBar ? volBar.value : null;
-        setEl('ovol', fmtVol(vol));
+        // Tatsächliches Volumen aus _lastCandles (nicht normalisierter volSeries-Wert)
+        var idx = _lastCandles.findIndex(function(c) { return c.time === param.time; });
+        var actualVol = idx >= 0 ? (_lastCandles[idx].volume || 0) : 0;
+        setEl('ovol', fmtVol(actualVol));
 
-        // Volume averaged (20-Tage gleitender Schnitt)
-        if (_lastCandles.length > 0) {
-            var idx = _lastCandles.findIndex(function(c) { return c.time === param.time; });
-            if (idx >= 0) {
-                var n = Math.min(20, idx + 1);
-                var sum = 0;
-                for (var i = idx - n + 1; i <= idx; i++) {
-                    var vd = _volumeData[i] || {};
-                    sum += vd.volume || 0;
-                }
-                setEl('ovola', fmtVol(sum / n));
+        // Volume averaged (20-Tage gleitender Schnitt) — ebenfalls aus _lastCandles
+        if (idx >= 0) {
+            var n = Math.min(20, idx + 1);
+            var sum = 0;
+            for (var i = idx - n + 1; i <= idx; i++) {
+                sum += _lastCandles[i].volume || 0;
             }
+            setEl('ovola', fmtVol(sum / n));
         }
     });
 
@@ -185,18 +181,29 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     if (volSeries && volAgg.length) {
         var cmap = {};
         colored.forEach(function(c) { cmap[c.time] = c.color; });
-        // Normiert: Durchschnitt = 100, damit Volumen über Zeit vergleichbar bleibt
-        var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
-        var volAvg = volSum / volAgg.length || 1;
-        try {
-            volSeries.setData(volAgg.map(function(v) {
+        // Index-View: normiert (Durchschnitt=100), da Volumen dort eine gewichtete Hilfsgröße ist.
+        // Ticker-View: echtes Volumen in Stückzahl (wie TradingView).
+        var volData;
+        if (currentView === 'index') {
+            var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
+            var volAvg = volSum / volAgg.length || 1;
+            volData = volAgg.map(function(v) {
                 return {
                     time:  v.time,
                     value: (v.volume || 0) / volAvg * 100,
                     color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
                 };
-            }));
-        } catch(e) {}
+            });
+        } else {
+            volData = volAgg.map(function(v) {
+                return {
+                    time:  v.time,
+                    value: v.volume || 0,
+                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                };
+            });
+        }
+        try { volSeries.setData(volData); } catch(e) {}
     }
 
     // MA50

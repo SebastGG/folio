@@ -254,17 +254,25 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
     if (mVol && volAgg.length) {
         var cmap = {};
         colored.forEach(function(c) { cmap[c.time] = c.color; });
-        // Normiert: Durchschnitt = 100
-        var mVolSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
-        var mVolAvg = mVolSum / volAgg.length || 1;
-        try {
-            mVol.setData(volAgg.map(function(v) {
+        var mVolData;
+        if (currentView === 'index') {
+            var mVolSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
+            var mVolAvg = mVolSum / volAgg.length || 1;
+            mVolData = volAgg.map(function(v) {
                 return {
                     time: v.time, value: (v.volume || 0) / mVolAvg * 100,
                     color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
                 };
-            }));
-        } catch(e) {}
+            });
+        } else {
+            mVolData = volAgg.map(function(v) {
+                return {
+                    time: v.time, value: v.volume || 0,
+                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                };
+            });
+        }
+        try { mVol.setData(mVolData); } catch(e) {}
     }
 
     if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });   if (indicators.ma50)  mMa50.setData(calcMA(agg, 50)); }
