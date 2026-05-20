@@ -593,6 +593,28 @@ var _TOOL_CLASS = {
     'forecast':'Forecast','bars-pattern':'BarsPattern',
 };
 
+// Zeichnungs-Tools mit Text-Eingabe
+var _TEXT_TOOLS = new Set([
+    'text-annotation','callout','note','anchored-text',
+    'price-note','price-label','comment','signpost'
+]);
+
+/**
+ * Speichert Zeichnung inkl. Text — toJSON() der Bibliothek schreibt text NICHT
+ * in options (wird beim Destrukturieren im Konstruktor herausgezogen), daher
+ * wird getText() manuell in options.text gepatcht.
+ */
+function saveDrawingWithText(drawing) {
+    try {
+        var json = drawing.toJSON ? drawing.toJSON() : drawing;
+        if (typeof drawing.getText === 'function') {
+            json.options = json.options || {};
+            json.options.text = drawing.getText();
+        }
+        saveDrawing(json);
+    } catch(e) { console.warn('saveDrawingWithText:', e); }
+}
+
 function initDrawingManager() {
     var lcd = window.LightweightChartsDrawing;
     if (!lcd || !chart || !csSeries) return;
@@ -643,8 +665,17 @@ function initDrawingManager() {
             // Finaler Klick: Preview entfernen, echte Zeichnung erstellen
             if (_crosshairCb) { chart.unsubscribeCrosshairMove(_crosshairCb); _crosshairCb = null; }
             if (_previewDrawing) { drawingManager.removeDrawing(_previewDrawing.id); _previewDrawing = null; }
+
+            // Text-Tools: Text vor Erstellung abfragen
+            var initialOpts = {};
+            if (_TEXT_TOOLS.has(_activeToolType)) {
+                var inputText = prompt('Text eingeben:', '');
+                if (inputText === null) { _pendingAnchors = []; setDrawTool(null); return; }
+                initialOpts.text = inputText || ' ';
+            }
+
             var id = 'draw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-            var drawing = lcd.getToolRegistry().createDrawing(_activeToolType, id, _pendingAnchors.slice(), {}, {});
+            var drawing = lcd.getToolRegistry().createDrawing(_activeToolType, id, _pendingAnchors.slice(), {}, initialOpts);
             _pendingAnchors = [];
             if (drawing) drawingManager.addDrawing(drawing);
             setDrawTool(null);
@@ -669,7 +700,7 @@ function initDrawingManager() {
     drawingManager.on('drawing:added', function(evt) {
         var d = evt.drawing || evt;
         if (d.id === '__preview__') return; // Preview nicht speichern
-        try { saveDrawing(d.toJSON ? d.toJSON() : d); } catch(e) {}
+        saveDrawingWithText(d);
     });
     drawingManager.on('drawing:removed', function(evt) {
         var id = evt.drawingId || ((evt.drawing || {}).id);
@@ -678,6 +709,20 @@ function initDrawingManager() {
     });
     drawingManager.on('drawing:selected', function(evt) {
         _drawSelected = evt && (evt.drawing || null);
+    });
+
+    // Doppelklick auf Zeichnung → Text bearbeiten
+    _dmContainer.addEventListener('dblclick', function(e) {
+        var selected = drawingManager.getSelectedDrawing
+            ? drawingManager.getSelectedDrawing()
+            : _drawSelected;
+        if (!selected || typeof selected.setText !== 'function') return;
+        e.stopPropagation();
+        var current = selected.getText ? selected.getText() : '';
+        var newText = prompt('Text bearbeiten:', current);
+        if (newText === null) return;
+        selected.setText(newText || ' ');
+        saveDrawingWithText(selected);
     });
 }
 
