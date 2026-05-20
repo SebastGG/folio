@@ -304,7 +304,7 @@ function refreshMobileTradeMarkers() {
         if (!_mMarkersPlugin) {
             _mMarkersPlugin = LightweightCharts.createSeriesMarkers(mCs, markers);
         } else {
-            _mMarkersPlugin.setData(markers);
+            _mMarkersPlugin.setMarkers(markers);
         }
     } catch(e) { console.warn('refreshMobileTradeMarkers:', e); }
 }

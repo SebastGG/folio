@@ -230,12 +230,10 @@ function refreshTradeMarkers() {
     try {
         if (!_markersPlugin) {
             _markersPlugin = LightweightCharts.createSeriesMarkers(csSeries, markers);
-            var proto = Object.getPrototypeOf(_markersPlugin || {});
-            console.log('[TM] plugin methods:', Object.getOwnPropertyNames(proto));
         } else {
-            _markersPlugin.setData(markers);
+            _markersPlugin.setMarkers(markers);
         }
-    } catch(e) { console.error('[TM] error:', e); }
+    } catch(e) { console.warn('refreshTradeMarkers:', e); }
 }
 
 /**
