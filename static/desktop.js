@@ -235,6 +235,10 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Seit-Datum Marker
     applySinceMarker(agg);
 
+    // Zeitachse ~1 Jahr in die Zukunft verlängern (rightOffset = Bars rechts vom letzten Datenpunkt)
+    var rightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+    chart.timeScale().applyOptions({ rightOffset: rightBars });
+
     // Fit
     chart.timeScale().fitContent();
 

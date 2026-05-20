@@ -124,7 +124,11 @@ function mNav(screen, btn) {
         } else {
             setTimeout(function() {
                 fitMobileChart();
-                if (mChart) mChart.timeScale().fitContent();
+                if (mChart) {
+                    var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+                    mChart.timeScale().applyOptions({ rightOffset: mRightBars });
+                    mChart.timeScale().fitContent();
+                }
             }, 50);
         }
     } else {
@@ -238,7 +242,11 @@ function syncMobileChart() {
     if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 }); if (indicators.ma200) mMa200.setData(calcMA(_lastCandles, 200)); }
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
-    if (mChart) mChart.timeScale().fitContent();
+    if (mChart) {
+        var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+        mChart.timeScale().applyOptions({ rightOffset: mRightBars });
+        mChart.timeScale().fitContent();
+    }
     fitMobileChart();
 }
 
