@@ -73,7 +73,7 @@
         <button class="btn" id="blog"   onclick="togLog()">Log</button>
       </div>
       <div class="sep"></div>
-      <button class="btn" onclick="if(chart){chart.timeScale().fitContent();if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();}" title="Chart einpassen">⤢ Fit</button>
+      <button class="btn" onclick="if(csSeries)csSeries.priceScale().applyOptions({autoScale:true});fitChart();fitWithFuture();" title="Chart einpassen">⤢ Fit</button>
     </div>
 
     <div class="chart-body">

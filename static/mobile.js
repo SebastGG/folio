@@ -125,9 +125,10 @@ function mNav(screen, btn) {
             setTimeout(function() {
                 fitMobileChart();
                 if (mChart) {
-                    var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
-                    mChart.timeScale().applyOptions({ rightOffset: mRightBars });
                     mChart.timeScale().fitContent();
+                    var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+                    var mRange = mChart.timeScale().getVisibleLogicalRange();
+                    if (mRange) mChart.timeScale().setVisibleLogicalRange({ from: mRange.from, to: mRange.to + mRightBars });
                 }
             }, 50);
         }
@@ -243,9 +244,10 @@ function syncMobileChart() {
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
     if (mChart) {
-        var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
-        mChart.timeScale().applyOptions({ rightOffset: mRightBars });
         mChart.timeScale().fitContent();
+        var mRightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+        var mRange = mChart.timeScale().getVisibleLogicalRange();
+        if (mRange) mChart.timeScale().setVisibleLogicalRange({ from: mRange.from, to: mRange.to + mRightBars });
     }
     fitMobileChart();
 }

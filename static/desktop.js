@@ -235,13 +235,23 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Seit-Datum Marker
     applySinceMarker(agg);
 
-    // Zeitachse ~1 Jahr in die Zukunft verlängern (rightOffset = Bars rechts vom letzten Datenpunkt)
-    var rightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
-    chart.timeScale().applyOptions({ rightOffset: rightBars });
+    // Fit + Zeitachse 1 Jahr in die Zukunft verlängern
+    fitWithFuture();
 
-    // Fit
+}
+
+/**
+ * fitContent() + Zeitachse ~1 Jahr in die Zukunft verlängern.
+ * setVisibleLogicalRange() nach fitContent() — rightOffset wird von fitContent() ignoriert.
+ */
+function fitWithFuture() {
+    if (!chart) return;
     chart.timeScale().fitContent();
-
+    var rightBars = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+    var range = chart.timeScale().getVisibleLogicalRange();
+    if (range) {
+        chart.timeScale().setVisibleLogicalRange({ from: range.from, to: range.to + rightBars });
+    }
 }
 
 function applyLogReg(regResult, rS, rUS, rLS) {
