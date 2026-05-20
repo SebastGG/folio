@@ -28,7 +28,6 @@ var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
-var _logoCache         = {};     // ticker → logo URL (persistiert nicht, relädt bei neuem Tab)
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
@@ -420,9 +419,8 @@ function renderWatchlist() {
         var div    = document.createElement('div');
         div.className = 'wl-item' + (active ? ' active' : '');
         var chgColor = p ? (parseFloat(p.d1) >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
-        var logoUrl = _logoCache[sym];
-        var logoHtml = '<img class="wl-logo" data-sym="' + sym + '"'
-            + (logoUrl ? ' src="' + logoUrl + '"' : ' style="display:none"')
+        var logoHtml = '<img class="wl-logo"'
+            + ' src="https://financialmodelingprep.com/image-stock/' + sym + '.png"'
             + ' onerror="this.style.display=\'none\'">';
         div.innerHTML = '<div class="wl-sym">' + logoHtml + sym + '</div>'
             + '<div class="wl-right">'
@@ -434,8 +432,6 @@ function renderWatchlist() {
         if (active) div.scrollIntoView({ block: 'nearest' });
         el.appendChild(div);
     });
-    // Logos asynchron nachladen
-    fetchTickerLogos(Object.keys(WEIGHTS));
 }
 
 function renderBasketSelect() {
@@ -484,28 +480,6 @@ function updateChartTitle() {
     } else {
         el.textContent = currentView;
     }
-}
-
-async function fetchTickerLogos(syms) {
-    var missing = syms.filter(function(s) { return !(s in _logoCache); });
-    if (missing.length === 0) return;
-    try {
-        var resp = await fetch('/api/logos', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tickers: missing })
-        });
-        var logos = await resp.json();
-        Object.assign(_logoCache, logos);
-        // Img-Tags im DOM aktualisieren
-        Object.keys(logos).forEach(function(sym) {
-            if (!logos[sym]) return;
-            document.querySelectorAll('.wl-logo[data-sym="' + sym + '"]').forEach(function(img) {
-                img.src = logos[sym];
-                img.style.display = '';
-            });
-        });
-    } catch(e) {}
 }
 
 function showTab(tab) {
