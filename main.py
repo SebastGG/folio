@@ -623,6 +623,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
 
         if row_type == "HEADER":
             section_headers[section] = {name: i for i, name in enumerate(parts)}
+            print(f"[IBKR] Sektion gefunden: {section} ({len(parts)} Spalten)")
             continue
         if row_type != "DATA":
             continue
@@ -656,8 +657,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             cash_rows.append((key, ending_cash, now))
             continue
 
-        # ── TRNT: Trades ───────────────────────────────────────────────
-        if section == "TRNT":
+        # ── TRNT / Trade: Trades ───────────────────────────────────────
+        if section in ("TRNT", "Trade", "Trades"):
             i_tid  = cols.get("TransactionID", -1)
             i_sym  = cols.get("Symbol", -1)
             i_act  = cols.get("Buy/Sell", cols.get("Action", -1))
@@ -672,10 +673,10 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             i_lod  = cols.get("LevelOfDetail", -1)
             if i_sym < 0 or i_qty < 0 or i_prc < 0:
                 continue
-            # nur "Order"-Zeilen, keine Splits/Dividenden-Zeilen
+            # Dividenden/Corporate Actions herausfiltern (kein TradePrice)
             if i_lod >= 0 and i_lod < len(parts):
-                lod_val = parts[i_lod].strip()
-                if lod_val and lod_val not in ("Order", "Trade", ""):
+                lod_val = parts[i_lod].strip().upper()
+                if lod_val and lod_val in ("DIVIDENDACCRUAL", "DIVIDEND", "INTEREST"):
                     continue
             symbol = parts[i_sym].strip() if i_sym < len(parts) else ""
             if not symbol:
