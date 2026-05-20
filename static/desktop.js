@@ -1120,10 +1120,15 @@ function renderPortfolioReport() {
     var longG = {}, shortG = {};
     (ibkrPositions || []).forEach(function(p) {
         var fx  = p.fx_rate_to_base || 1.0;
-        var pv  = (p.position_value  || 0) * fx;
+        var qty = p.quantity || 0;
         var cb  = (p.cost_basis_money || 0) * fx;
         var cls = (p.asset_class || 'OTHER').toUpperCase();
-        var grp = (p.quantity || 0) >= 0 ? longG : shortG;
+        // STK: live-Kurs aus Yahoo Finance wenn vorhanden
+        var liveP = perfData[p.symbol];
+        var pv = (cls === 'STK' && liveP && liveP.price)
+            ? qty * liveP.price * fx
+            : (p.position_value || 0) * fx;
+        var grp = qty >= 0 ? longG : shortG;
         if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };
         grp[cls].value += pv;
         grp[cls].cost  += cb;
