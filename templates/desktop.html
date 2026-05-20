@@ -308,9 +308,6 @@
   <div class="panel" id="panel-perf">
     <div class="panel-header">
       <span class="panel-title">📊 Performance</span>
-      <label style="font-size:9px;color:var(--muted);">Seit</label>
-      <input type="date" id="perfSinceDate" style="border:1px solid var(--border);padding:2px 4px;background:var(--bg);color:var(--text);font-size:9px;"
-        onchange="saveCurrentBasketState();markUnsaved();renderPerfTable();applySinceMarker(_lastCandles);">
       <select id="perfSort" onchange="renderPerfTable()" style="border:1px solid var(--border);background:var(--bg);padding:2px 4px;font-size:9px;">
         <option value="alpha">A-Z</option>
         <option value="1d">1T</option>
@@ -318,14 +315,14 @@
         <option value="1m">1M</option>
         <option value="3m">3M</option>
         <option value="ytd">YTD</option>
-        <option value="since">Seit</option>
+        <option value="ibkr">IBKR</option>
       </select>
     </div>
     <div class="panel-body">
       <table class="perf-table">
         <thead><tr>
           <th>Ticker</th><th>Kurs</th><th>Anz.</th><th>Position</th>
-          <th id="sinceHeader">Seit</th><th>1T</th><th>1W</th><th>1M</th><th>3M</th><th>YTD</th>
+          <th>IBKR P&amp;L</th><th>1T</th><th>1W</th><th>1M</th><th>3M</th><th>YTD</th>
         </tr></thead>
         <tbody id="perfBody"></tbody>
         <tfoot id="perfFoot"></tfoot>

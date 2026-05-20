@@ -31,7 +31,6 @@ var mMa200    = null;   // MA200 Series
 var mReg      = null;   // LogReg Series
 var mRegU     = null;   // LogReg Upper Band
 var mRegL     = null;   // LogReg Lower Band
-var mSincePlugin  = null; // Seit-Datum Marker
 var _mIbkrCostLine = null; // Einstandskurs-Preislinie
 
 var mCurrentScreen = 'chart'; // Aktiver Screen
@@ -332,19 +331,6 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
         }
     }
 
-    // Seit-Marker
-    var sinceDate = (document.getElementById('m-perf-since') || {}).value;
-    if (sinceDate && mCs && typeof LightweightCharts.createSeriesMarkers === 'function') {
-        var bar = agg.find(function(c) { return c.time >= sinceDate; });
-        if (bar) {
-            var marker = [{ time: bar.time, position: 'belowBar', color: '#e67e22', shape: 'arrowUp', text: sinceDate.slice(5), size: 2 }];
-            try {
-                if (!mSincePlugin) mSincePlugin = LightweightCharts.createSeriesMarkers(mCs, marker);
-                else mSincePlugin.setMarkers(marker);
-            } catch(e) {}
-        }
-    }
-
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
     if (mChart) mChart.timeScale().fitContent();
     fitMobileChart();
@@ -410,26 +396,17 @@ function renderMobileWatchlist() {
 
 // ── Performance ────────────────────────────────────────────
 function renderMobilePerf() {
-    // Seit-Datum synchronisieren
-    var mSince = document.getElementById('m-perf-since');
-    var dSince = document.getElementById('perfSinceDate');
-    if (mSince && mSince.value && dSince) dSince.value = mSince.value;
-    else if (dSince && dSince.value && mSince) mSince.value = dSince.value;
-
-    // Sort synchronisieren
     var mSort = document.getElementById('m-perf-sort-mobile');
     var dSort = document.getElementById('perfSort');
     if (mSort && dSort) dSort.value = mSort.value;
 
-    // Direkt in Mobile-Tabelle rendern (nicht Umweg über hidden stub)
     var mb = document.getElementById('m-perf-body');
     var mf = document.getElementById('m-perf-foot');
     if (!mb) return;
 
     buildPerfData();
 
-    var sinceDate = baskets[currentBasket] ? baskets[currentBasket].perfSinceDate : null;
-    var sortVal   = (mSort || {}).value || 'alpha';
+    var sortVal = (mSort || {}).value || 'alpha';
 
     var fmt = function(v) {
         if (v === null || v === undefined || v === 'n/a') return '<td style="color:var(--muted)">-</td>';
@@ -438,20 +415,43 @@ function renderMobilePerf() {
         return '<td style="color:' + color + '">' + (n >= 0 ? '+' : '') + n.toFixed(2) + '%</td>';
     };
 
+    var ibkrMap = {};
+    (ibkrPositions || []).forEach(function(p) { ibkrMap[p.symbol] = p; });
+    var ibkrPnlPct = function(sym) {
+        var pos = ibkrMap[sym];
+        if (!pos || !(pos.cost_basis_price > 0)) return null;
+        return ((pos.mark_price - pos.cost_basis_price) / pos.cost_basis_price * 100).toFixed(2);
+    };
+
+    var ibkrTotalCost = 0, ibkrTotalValue = 0;
+    (ibkrPositions || []).forEach(function(p) {
+        if ((WEIGHTS[p.symbol] || 0) > 0) {
+            var fx = p.fx_rate_to_base || 1;
+            ibkrTotalCost  += (p.cost_basis_money || 0) * fx;
+            ibkrTotalValue += (p.position_value   || 0) * fx;
+        }
+    });
+    var idxIbkrPnl = ibkrTotalCost > 0
+        ? ((ibkrTotalValue - ibkrTotalCost) / ibkrTotalCost * 100).toFixed(2) : null;
+
     var syms = Object.keys(perfData);
     if (syms.length === 0) {
         mb.innerHTML = '<tr><td colspan="6" style="padding:16px;color:var(--muted);text-align:center;">Keine Daten — Refresh drücken</td></tr>';
         return;
     }
 
-    var sortKey = { alpha: null, '1d': 'd1', '1m': 'd22', ytd: 'ytd', since: 'since' }[sortVal];
-    syms.sort(function(a, b) {
-        if (!sortKey) return a.localeCompare(b);
-        return parseFloat(perfData[b][sortKey] || 0) - parseFloat(perfData[a][sortKey] || 0);
-    });
+    var sortKey = { alpha: null, '1d': 'd1', '1m': 'd22', ytd: 'ytd', ibkr: '_ibkr' }[sortVal];
+    if (sortKey === '_ibkr') {
+        syms.sort(function(a, b) { return parseFloat(ibkrPnlPct(b) || 0) - parseFloat(ibkrPnlPct(a) || 0); });
+    } else {
+        syms.sort(function(a, b) {
+            if (!sortKey) return a.localeCompare(b);
+            return parseFloat(perfData[b][sortKey] || 0) - parseFloat(perfData[a][sortKey] || 0);
+        });
+    }
 
     var html = '';
-    var totalValue = 0, totalPrevValue = 0, totalSinceValue = 0, hasSince = false;
+    var totalValue = 0, totalPrevValue = 0;
 
     syms.forEach(function(sym) {
         var p = perfData[sym];
@@ -460,28 +460,23 @@ function renderMobilePerf() {
         var posValue = p.price * anzahl;
         totalValue     += posValue;
         totalPrevValue += posValue / (1 + parseFloat(p.d1 || 0) / 100);
-        if (sinceDate && p.since !== null) {
-            totalSinceValue += (p.price / (1 + parseFloat(p.since) / 100)) * anzahl;
-            hasSince = true;
-        }
         html += '<tr>'
             + '<td style="font-weight:500">' + sym + '</td>'
             + '<td>$' + p.price.toFixed(2) + '</td>'
             + '<td>$' + posValue.toFixed(0) + '</td>'
-            + fmt(p.since) + fmt(p.d1) + fmt(p.ytd)
+            + fmt(ibkrPnlPct(sym)) + fmt(p.d1) + fmt(p.ytd)
             + '</tr>';
     });
     mb.innerHTML = html;
 
     if (mf && totalValue > 0) {
-        var totalChg = ((totalValue - totalPrevValue) / totalPrevValue * 100).toFixed(2);
-        var chgColor = parseFloat(totalChg) >= 0 ? '#2d8a4e' : '#c0392b';
-        var sincePct = hasSince && totalSinceValue > 0
-            ? ((totalValue - totalSinceValue) / totalSinceValue * 100).toFixed(2) : null;
+        var totalChg  = ((totalValue - totalPrevValue) / totalPrevValue * 100).toFixed(2);
+        var chgColor  = parseFloat(totalChg) >= 0 ? '#2d8a4e' : '#c0392b';
+        var ibkrColor = idxIbkrPnl ? (parseFloat(idxIbkrPnl) >= 0 ? '#2d8a4e' : '#c0392b') : '';
         mf.innerHTML = '<tr style="border-top:2px solid var(--border)">'
             + '<td style="font-weight:700">TOTAL</td><td></td>'
             + '<td style="font-weight:700">$' + totalValue.toFixed(0) + '</td>'
-            + (sincePct ? '<td style="font-weight:700;color:' + (parseFloat(sincePct)>=0?'#2d8a4e':'#c0392b') + '">' + (parseFloat(sincePct)>=0?'+':'') + sincePct + '%</td>' : '<td>-</td>')
+            + (idxIbkrPnl ? '<td style="font-weight:700;color:' + ibkrColor + '">' + (parseFloat(idxIbkrPnl)>=0?'+':'') + idxIbkrPnl + '%</td>' : '<td>-</td>')
             + '<td style="font-weight:700;color:' + chgColor + '">' + (parseFloat(totalChg)>=0?'+':'') + totalChg + '%</td>'
             + '<td></td>'
             + '</tr>';

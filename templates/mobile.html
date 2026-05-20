@@ -38,16 +38,6 @@
 <div id="m-screen-perf" class="m-screen">
   <div class="m-perf-wrap">
     <div class="m-perf-header">
-      <div style="display:flex;align-items:center;gap:6px;">
-        <span style="font-size:9px;color:var(--muted);text-transform:uppercase;">Seit</span>
-        <input type="date" id="m-perf-since"
-          style="font-size:10px;border:1px solid var(--border);padding:3px 6px;background:var(--bg);color:var(--text);"
-          onchange="
-            var d=document.getElementById('perfSinceDate');
-            if(d) d.value=this.value;
-            saveCurrentBasketState();saveBasketsToServer();
-            renderMobilePerf();">
-      </div>
       <select id="m-perf-sort-mobile"
         style="font-size:10px;border:1px solid var(--border);background:var(--bg);padding:3px 5px;"
         onchange="
@@ -58,14 +48,14 @@
         <option value="1d">1T</option>
         <option value="1m">1M</option>
         <option value="ytd">YTD</option>
-        <option value="since">Seit</option>
+        <option value="ibkr">IBKR</option>
       </select>
     </div>
     <div style="overflow-x:auto;">
       <table class="m-perf-table">
         <thead><tr>
           <th>Ticker</th><th>Kurs</th><th>Pos.</th>
-          <th>Seit</th><th>1T</th><th>YTD</th>
+          <th>IBKR P&amp;L</th><th>1T</th><th>YTD</th>
         </tr></thead>
         <tbody id="m-perf-body"></tbody>
         <tfoot id="m-perf-foot"></tfoot>
@@ -203,8 +193,6 @@
 <select id="basketSelect"  style="display:none;"></select>
 <select id="perfSort"      style="display:none;"></select>
 <textarea id="notesArea"   style="display:none;"></textarea>
-<input type="date" id="perfSinceDate" style="display:none;">
-<span id="sinceHeader"  style="display:none;"></span>
 <div id="manageList"    style="display:none;"></div>
 <!-- Stats stubs (computeStats schreibt hier rein, auf Mobile ignoriert) -->
 <span id="sv"  style="display:none;"></span>

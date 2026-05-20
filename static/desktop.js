@@ -26,7 +26,6 @@
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
 var _ibkrCostLine = null;  // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
-var _sincePl = null; // Seit-Datum Plugin
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
@@ -282,9 +281,6 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Log-Skala
     chart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
 
-    // Seit-Datum Marker
-    applySinceMarker(agg);
-
     // Fit + Zeitachse 1 Jahr in die Zukunft verlängern
     fitWithFuture();
 
@@ -341,20 +337,6 @@ function applyLogReg(regResult, rS, rUS, rLS) {
     }
 }
 
-function applySinceMarker(agg) {
-    if (!csSeries || !agg.length) return;
-    var sinceDate = (document.getElementById('perfSinceDate') || {}).value;
-    if (typeof LightweightCharts.createSeriesMarkers !== 'function') return;
-    if (_sincePl) { try { _sincePl.setMarkers([]); } catch(e) {} }
-    if (!sinceDate) return;
-    var bar = agg.find(function(c) { return c.time >= sinceDate; });
-    if (!bar) return;
-    var marker = [{ time: bar.time, position: 'belowBar', color: '#e67e22', shape: 'arrowUp', text: sinceDate.slice(5), size: 2 }];
-    try {
-        if (!_sincePl) _sincePl = LightweightCharts.createSeriesMarkers(csSeries, marker);
-        else _sincePl.setMarkers(marker);
-    } catch(e) {}
-}
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║  5. WATCHLIST & SIDEBAR                                   ║

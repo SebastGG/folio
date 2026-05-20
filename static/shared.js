@@ -361,35 +361,27 @@ function computeStats(candles) {
 /**
  * Berechnet Performance-Daten für einen Ticker.
  * @param {Array} data - [{time, close}]
- * @param {string} sinceDate - Kaufdatum (YYYY-MM-DD) oder null
- * @returns {Object} { price, since, d1, d5, d22, d66, ytd }
+ * @returns {Object} { price, d1, d5, d22, d66, ytd }
  */
-function calcPerf(data, sinceDate) {
+function calcPerf(data) {
     if (!data || data.length < 2) return null;
     var last = data[data.length - 1];
 
-    // get(n): Kurs von vor n Handelstagen — null wenn zu wenige Daten
     var get = function(n) {
         var idx = data.length - 1 - n;
         return idx >= 0 ? data[idx].close : null;
     };
 
-    // pct: Rendite von from bis last.close — null wenn from fehlt
     var pct = function(from) {
         if (from === null || from === undefined || from <= 0) return null;
         return ((last.close / from - 1) * 100).toFixed(2);
     };
 
-    // YTD: erster Handelstag des aktuellen Jahres
     var year    = new Date().getFullYear().toString();
     var yearBar = data.find(function(d) { return d.time.startsWith(year); });
 
-    // Seit-Datum
-    var sinceBar = sinceDate ? data.find(function(d) { return d.time >= sinceDate; }) : null;
-
     return {
         price: last.close,
-        since: sinceBar ? pct(sinceBar.close) : null,
         d1:    pct(get(1)),
         d5:    pct(get(5)),
         d22:   pct(get(22)),
@@ -403,13 +395,11 @@ function calcPerf(data, sinceDate) {
  * Speichert in globaler Variable perfData.
  */
 function buildPerfData() {
-    var sinceDate = baskets[currentBasket] ? baskets[currentBasket].perfSinceDate : null;
     perfData = {};
     Object.keys(WEIGHTS).forEach(function(sym) {
-        // _dataMap bevorzugen, Fallback: allCandles wenn sym der aktuelle View ist
         var data = _dataMap[sym] || (currentView === sym ? allCandles : null);
         if (data && data.length > 0) {
-            perfData[sym] = calcPerf(data, sinceDate);
+            perfData[sym] = calcPerf(data);
         }
     });
 }
@@ -426,10 +416,8 @@ function renderPerfTable() {
 
     buildPerfData();
 
-    var sinceDate = baskets[currentBasket] ? baskets[currentBasket].perfSinceDate : null;
-    var sortVal   = (document.getElementById('perfSort') || {}).value || 'alpha';
+    var sortVal = (document.getElementById('perfSort') || {}).value || 'alpha';
 
-    // Formatierung
     var fmt = function(v) {
         if (v === null || v === undefined || v === 'n/a') return '<td style="color:var(--muted)">-</td>';
         var n = parseFloat(v);
@@ -437,56 +425,77 @@ function renderPerfTable() {
         return '<td style="color:' + color + '">' + (n >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%</td>';
     };
 
+    // IBKR P&L-Hilfsfunktionen
+    var ibkrMap = {};
+    (ibkrPositions || []).forEach(function(p) { ibkrMap[p.symbol] = p; });
+
+    var ibkrPnlPct = function(sym) {
+        var pos = ibkrMap[sym];
+        if (!pos || !(pos.cost_basis_price > 0)) return null;
+        return ((pos.mark_price - pos.cost_basis_price) / pos.cost_basis_price * 100).toFixed(2);
+    };
+
+    // IBKR Index-P&L (nur Ticker die im Basket UND in IBKR sind)
+    var ibkrTotalCost = 0, ibkrTotalValue = 0;
+    (ibkrPositions || []).forEach(function(p) {
+        if ((WEIGHTS[p.symbol] || 0) > 0) {
+            var fx = p.fx_rate_to_base || 1;
+            ibkrTotalCost  += (p.cost_basis_money || 0) * fx;
+            ibkrTotalValue += (p.position_value   || 0) * fx;
+        }
+    });
+    var idxIbkrPnl = ibkrTotalCost > 0
+        ? ((ibkrTotalValue - ibkrTotalCost) / ibkrTotalCost * 100).toFixed(2) : null;
+
     // Sortierung
     var syms = Object.keys(perfData);
-    var sortKey = { alpha: null, '1d': 'd1', '1w': 'd5', '1m': 'd22', '3m': 'd66', ytd: 'ytd', since: 'since' }[sortVal];
-    syms.sort(function(a, b) {
-        if (!sortKey) return a.localeCompare(b);
-        return parseFloat(perfData[b][sortKey] || 0) - parseFloat(perfData[a][sortKey] || 0);
-    });
+    var sortKey = { alpha: null, '1d': 'd1', '1w': 'd5', '1m': 'd22', '3m': 'd66', ytd: 'ytd', ibkr: '_ibkr' }[sortVal];
+    if (sortKey === '_ibkr') {
+        syms.sort(function(a, b) {
+            return parseFloat(ibkrPnlPct(b) || 0) - parseFloat(ibkrPnlPct(a) || 0);
+        });
+    } else {
+        syms.sort(function(a, b) {
+            if (!sortKey) return a.localeCompare(b);
+            return parseFloat(perfData[b][sortKey] || 0) - parseFloat(perfData[a][sortKey] || 0);
+        });
+    }
 
     // INDEX-Zeile
     var html = '';
     if (allCandles.length > 0) {
         var last    = allCandles[allCandles.length - 1];
-        var prev    = allCandles.length > 1 ? allCandles[allCandles.length - 2] : last;
         var get     = function(n) { return allCandles[Math.max(0, allCandles.length-1-n)].close || last.close; };
         var pct     = function(f) { return ((last.close / f - 1) * 100).toFixed(2); };
         var yearBar = allCandles.find(function(c) { return c.time.startsWith(new Date().getFullYear().toString()); });
-        var sinceBar = sinceDate ? allCandles.find(function(c) { return c.time >= sinceDate; }) : null;
-        var idxSince = sinceBar ? pct(sinceBar.close) : null;
 
         html += '<tr style="background:var(--bg);border-bottom:2px solid var(--border);">'
             + '<td style="font-weight:700;color:var(--text);">&#9679; INDEX</td>'
             + '<td style="font-weight:700;">$' + last.close.toFixed(2) + '</td>'
             + '<td></td><td></td>'
-            + fmt(idxSince)
+            + fmt(idxIbkrPnl)
             + fmt(pct(get(1))) + fmt(pct(get(5))) + fmt(pct(get(22))) + fmt(pct(get(66)))
             + fmt(yearBar ? pct(yearBar.close) : null)
             + '</tr>';
     }
 
     // Ticker-Zeilen
-    var totalValue = 0, totalPrevValue = 0, totalSinceValue = 0, hasSince = false;
+    var totalValue = 0, totalPrevValue = 0;
 
     syms.forEach(function(sym) {
         var p = perfData[sym];
         if (!p) return;
         var anzahl   = WEIGHTS[sym] || 0;
         var posValue = p.price * anzahl;
-        totalValue += posValue;
+        totalValue     += posValue;
         totalPrevValue += posValue / (1 + parseFloat(p.d1 || 0) / 100);
-        if (sinceDate && p.since !== null) {
-            totalSinceValue += (p.price / (1 + parseFloat(p.since) / 100)) * anzahl;
-            hasSince = true;
-        }
 
         html += '<tr>'
             + '<td style="font-weight:500">' + sym + '</td>'
             + '<td>$' + p.price.toFixed(2) + '</td>'
             + '<td style="color:var(--muted)">' + anzahl + '</td>'
             + '<td style="font-weight:500">$' + posValue.toFixed(0) + '</td>'
-            + fmt(p.since)
+            + fmt(ibkrPnlPct(sym))
             + fmt(p.d1) + fmt(p.d5) + fmt(p.d22) + fmt(p.d66) + fmt(p.ytd)
             + '</tr>';
     });
@@ -495,17 +504,15 @@ function renderPerfTable() {
 
     // Summenzeile
     if (foot && totalValue > 0) {
-        var totalChg   = ((totalValue - totalPrevValue) / totalPrevValue * 100).toFixed(2);
-        var sincePct   = hasSince && totalSinceValue > 0
-            ? ((totalValue - totalSinceValue) / totalSinceValue * 100).toFixed(2) : null;
-        var chgColor   = parseFloat(totalChg) >= 0 ? '#2d8a4e' : '#c0392b';
-        var sinceColor = sincePct ? (parseFloat(sincePct) >= 0 ? '#2d8a4e' : '#c0392b') : '';
+        var totalChg  = ((totalValue - totalPrevValue) / totalPrevValue * 100).toFixed(2);
+        var chgColor  = parseFloat(totalChg) >= 0 ? '#2d8a4e' : '#c0392b';
+        var ibkrColor = idxIbkrPnl ? (parseFloat(idxIbkrPnl) >= 0 ? '#2d8a4e' : '#c0392b') : '';
 
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
             + '<td style="font-weight:700">TOTAL</td>'
             + '<td></td><td></td>'
             + '<td style="font-weight:700">$' + totalValue.toFixed(0) + '</td>'
-            + (sincePct ? '<td style="font-weight:700;color:' + sinceColor + '">' + (parseFloat(sincePct)>=0?'+':'') + sincePct + '%</td>' : '<td>-</td>')
+            + (idxIbkrPnl ? '<td style="font-weight:700;color:' + ibkrColor + '">' + (parseFloat(idxIbkrPnl)>=0?'+':'') + idxIbkrPnl + '%</td>' : '<td>-</td>')
             + '<td style="font-weight:700;color:' + chgColor + '">' + (parseFloat(totalChg)>=0?'+':'') + totalChg + '%</td>'
             + '<td colspan="3" style="color:var(--muted);font-size:10px;">' + syms.length + ' Pos.</td>'
             + '</tr>';
@@ -634,7 +641,7 @@ async function loadConfig() {
         // Neuer Basket falls keine vorhanden
         if (Object.keys(baskets).length === 0) {
             var id = 'basket_' + Date.now();
-            baskets[id] = { name: 'Mein Portfolio', weights: {}, period: 180, tf: '1D', perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false };
+            baskets[id] = { name: 'Mein Portfolio', weights: {}, period: 180, tf: '1D', indicators: { ma50: false, ma200: false, reg: false }, logScale: false };
             currentBasket = id;
             await saveBasketsToServer();
         }
@@ -880,8 +887,6 @@ function saveCurrentBasketState() {
     baskets[currentBasket].logScale      = logScale;
     var rpEl = document.getElementById('regPeriod');
     if (rpEl) baskets[currentBasket].regPeriod = parseInt(rpEl.value, 10) || 12;
-    var sdEl = document.getElementById('perfSinceDate');
-    if (sdEl) baskets[currentBasket].perfSinceDate = sdEl.value || '';
 }
 
 /**
