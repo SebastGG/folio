@@ -218,6 +218,32 @@ header {
 .sidebar-tab.active { color: var(--text); border-bottom-color: var(--text); }
 .sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
 
+/* ── Basket Pills ──────────────────────────────────────────────────────────── */
+#basket-pills-bar {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+}
+.basket-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border-radius: 20px; cursor: pointer;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+  white-space: nowrap; user-select: none;
+}
+.basket-pill:hover { color: var(--text); border-color: var(--text); }
+.basket-pill.active { background: var(--accent); color: white; border-color: var(--accent); }
+.bp-edit, .bp-del {
+  background: none; border: none; cursor: pointer; padding: 0 1px;
+  font-size: 11px; color: rgba(255,255,255,0.65); line-height: 1;
+}
+.bp-edit:hover, .bp-del:hover { color: white; }
+.bp-add {
+  background: none; border: 1px dashed var(--border); color: var(--muted);
+  border-radius: 20px; padding: 2px 10px; font-size: 14px; cursor: pointer;
+}
+.bp-add:hover { color: var(--accent); border-color: var(--accent); }
+
 /* ── Watchlist ─────────────────────────────────────────────────────────────── */
 .wl-item {
   display: flex; align-items: center; justify-content: space-between;
@@ -227,7 +253,8 @@ header {
 .wl-item:hover { background: var(--bg); }
 .wl-item.active { background: var(--accent); color: white; }
 .wl-item.active .wl-price, .wl-item.active .wl-chg { color: rgba(255,255,255,0.85); }
-.wl-sym { font-weight: 600; font-size: 12px; }
+.wl-sym { font-weight: 600; font-size: 12px; display:flex; align-items:center; gap:5px; }
+.wl-logo { width:18px; height:18px; border-radius:3px; object-fit:contain; flex-shrink:0; }
 .wl-right { text-align: right; }
 .wl-price { font-size: 11px; font-weight: 500; }
 .wl-chg { font-size: 10px; margin-top: 1px; }

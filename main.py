@@ -119,6 +119,11 @@ def init_db(db_file: str):
         PRIMARY KEY (ticker, date)
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ticker_date ON prices(ticker, date)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticker_logos (
+        ticker     TEXT PRIMARY KEY,
+        logo_url   TEXT,
+        fetched_at INTEGER
+    )''')
     conn.commit()
     conn.close()
 
@@ -418,6 +423,45 @@ async def search_ticker(query: str, request: Request):
     except Exception as e:
         print(f"Search error for {query}: {e}")
         return JSONResponse(content=[])
+
+@app.post("/api/logos")
+async def get_logos(request: Request):
+    """Gibt Logo-URLs für eine Liste von Tickern zurück (gecacht in SQLite, 7 Tage)."""
+    import urllib.request as _ur
+    user  = get_user(request)
+    files = get_user_files(user)
+    body  = await request.json()
+    tickers = [str(t).upper().strip() for t in body.get("tickers", []) if t]
+
+    conn = get_db(files["db"])
+    now  = int(time.time())
+    ttl  = 7 * 86400
+    result: dict[str, str | None] = {}
+    to_fetch: list[str] = []
+
+    for t in tickers:
+        row = conn.execute("SELECT logo_url, fetched_at FROM ticker_logos WHERE ticker=?", (t,)).fetchone()
+        if row and (now - (row["fetched_at"] or 0)) < ttl:
+            result[t] = row["logo_url"]
+        else:
+            to_fetch.append(t)
+
+    for t in to_fetch:
+        logo = None
+        try:
+            url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{t}?modules=assetProfile"
+            req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _ur.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read())
+            profile = (data.get("quoteSummary") or {}).get("result") or [{}]
+            logo = (profile[0].get("assetProfile") or {}).get("logoUrl")
+        except Exception:
+            pass
+        result[t] = logo
+        conn.execute("INSERT OR REPLACE INTO ticker_logos VALUES (?,?,?)", (t, logo, now))
+
+    conn.commit()
+    return JSONResponse(content=result)
 
 # ── IBKR Flex Query Integration ────────────────────────────────────────────────
 

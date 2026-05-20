@@ -28,6 +28,7 @@ var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
+var _logoCache         = {};     // ticker → logo URL (persistiert nicht, relädt bei neuem Tab)
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
@@ -419,7 +420,11 @@ function renderWatchlist() {
         var div    = document.createElement('div');
         div.className = 'wl-item' + (active ? ' active' : '');
         var chgColor = p ? (parseFloat(p.d1) >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
-        div.innerHTML = '<div class="wl-sym">' + sym + '</div>'
+        var logoUrl = _logoCache[sym];
+        var logoHtml = '<img class="wl-logo" data-sym="' + sym + '"'
+            + (logoUrl ? ' src="' + logoUrl + '"' : ' style="display:none"')
+            + ' onerror="this.style.display=\'none\'">';
+        div.innerHTML = '<div class="wl-sym">' + logoHtml + sym + '</div>'
             + '<div class="wl-right">'
             + '<div class="wl-price">' + (p ? '$' + p.price.toFixed(2) : '-') + '</div>'
             + '<div class="wl-chg" style="color:' + (!active ? chgColor : 'rgba(255,255,255,0.85)') + '">'
@@ -429,19 +434,45 @@ function renderWatchlist() {
         if (active) div.scrollIntoView({ block: 'nearest' });
         el.appendChild(div);
     });
+    // Logos asynchron nachladen
+    fetchTickerLogos(Object.keys(WEIGHTS));
 }
 
 function renderBasketSelect() {
+    // Hidden select (für saveAll/shared.js-Kompatibilität)
     var sel = document.getElementById('basketSelect');
-    if (!sel) return;
-    sel.innerHTML = '';
-    Object.keys(baskets).forEach(function(id) {
-        var opt = document.createElement('option');
-        opt.value = id;
-        opt.textContent = baskets[id].name || id;
-        opt.selected = id === currentBasket;
-        sel.appendChild(opt);
-    });
+    if (sel) {
+        sel.innerHTML = '';
+        Object.keys(baskets).forEach(function(id) {
+            var opt = document.createElement('option');
+            opt.value = id; opt.textContent = baskets[id].name || id;
+            opt.selected = id === currentBasket;
+            sel.appendChild(opt);
+        });
+    }
+    // Basket-Pills in der Sidebar
+    var bar = document.getElementById('basket-pills-bar');
+    if (bar) {
+        bar.innerHTML = '';
+        Object.keys(baskets).forEach(function(id) {
+            var pill = document.createElement('div');
+            pill.className = 'basket-pill' + (id === currentBasket ? ' active' : '');
+            var name = (baskets[id].name || id);
+            if (id === currentBasket) {
+                pill.innerHTML = '<span>' + name + '</span>'
+                    + '<button class="bp-edit" title="Umbenennen" onclick="renameBasket();event.stopPropagation()">✎</button>'
+                    + '<button class="bp-del"  title="Löschen"    onclick="deleteBasket();event.stopPropagation()">×</button>';
+            } else {
+                pill.textContent = name;
+                pill.onclick = (function(bid) { return function() { switchBasket(bid); }; })(id);
+            }
+            bar.appendChild(pill);
+        });
+        var addBtn = document.createElement('button');
+        addBtn.className = 'bp-add'; addBtn.title = 'Neues Portfolio'; addBtn.textContent = '+';
+        addBtn.onclick = addBasket;
+        bar.appendChild(addBtn);
+    }
     updateChartTitle();
 }
 
@@ -453,6 +484,28 @@ function updateChartTitle() {
     } else {
         el.textContent = currentView;
     }
+}
+
+async function fetchTickerLogos(syms) {
+    var missing = syms.filter(function(s) { return !(s in _logoCache); });
+    if (missing.length === 0) return;
+    try {
+        var resp = await fetch('/api/logos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tickers: missing })
+        });
+        var logos = await resp.json();
+        Object.assign(_logoCache, logos);
+        // Img-Tags im DOM aktualisieren
+        Object.keys(logos).forEach(function(sym) {
+            if (!logos[sym]) return;
+            document.querySelectorAll('.wl-logo[data-sym="' + sym + '"]').forEach(function(img) {
+                img.src = logos[sym];
+                img.style.display = '';
+            });
+        });
+    } catch(e) {}
 }
 
 function showTab(tab) {

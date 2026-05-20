@@ -18,12 +18,8 @@
 
 <header>
   <span class="logo">Portfolio Index</span>
-  <div class="header-center">
-    <select id="basketSelect" onchange="switchBasket(this.value)"></select>
-    <button class="header-btn" onclick="addBasket()">+</button>
-    <button class="header-btn" onclick="renameBasket()">✎</button>
-    <button class="header-btn" onclick="deleteBasket()">×</button>
-  </div>
+  <div class="header-center"></div>
+  <select id="basketSelect" style="display:none" onchange="switchBasket(this.value)"></select>
   <div class="header-right">
     <span id="clock"></span>
     <span class="app-version">v{{APP_VERSION}}</span>
@@ -278,8 +274,9 @@
       <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
       <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
     </div>
-    <div class="sidebar-content" id="content-kurse">
-      <div id="watchlist"></div>
+    <div class="sidebar-content" id="content-kurse" style="padding:0;">
+      <div id="basket-pills-bar"></div>
+      <div id="watchlist" style="padding:0 12px;"></div>
     </div>
     <div class="sidebar-content" id="content-verwaltung" style="display:none;">
       <div id="manageList"></div>
