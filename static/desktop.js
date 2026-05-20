@@ -1154,7 +1154,12 @@ function ibkrRenderTrades() {
         return;
     }
     var html = '';
-    ibkrTrades.filter(function(t) { return (t.asset_class || '').toUpperCase() === 'STK'; }).forEach(function(t) {
+    var stkTrades = ibkrTrades.filter(function(t) { return (t.asset_class || '').toUpperCase() === 'STK'; });
+    if (stkTrades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center;">Keine Aktien-Trades — Sync durchführen</td></tr>';
+        return;
+    }
+    stkTrades.forEach(function(t) {
         var fx      = t.fx_rate || 1;
         var valEur  = Math.abs(t.value || 0) * fx;
         var comEur  = Math.abs(t.commission || 0) * fx;
