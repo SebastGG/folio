@@ -392,7 +392,8 @@ function renderWatchlist() {
     if (!el) return;
     el.innerHTML = '';
 
-    // Index-Zeile: immer aus _dataMap berechnen (unabhängig vom aktiven View)
+    // Index-Zeile: nur wenn für diesen Basket aktiviert
+    if (basketShowIndex()) {
     var idxCandles = buildIndex(_dataMap);
     var idxLast = idxCandles.length ? idxCandles[idxCandles.length - 1] : null;
     var idxPrev = idxCandles.length > 1 ? idxCandles[idxCandles.length - 2] : idxLast;
@@ -409,6 +410,7 @@ function renderWatchlist() {
         + '</div>';
     idxDiv.onclick = function() { switchView('index'); };
     el.appendChild(idxDiv);
+    } // end basketShowIndex
 
     // Ticker
     Object.keys(WEIGHTS).forEach(function(sym) {
@@ -485,9 +487,26 @@ function renderManageList() {
     var el = document.getElementById('manageList');
     if (!el) return;
     el.innerHTML = '';
+    // Index-toggle header
+    var header = document.createElement('div');
+    header.style.cssText = 'padding:4px 0 8px;border-bottom:1px solid var(--border);margin-bottom:8px;';
+    var showIdx = basketShowIndex();
+    header.innerHTML = '<label style="display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;">'
+        + '<input type="checkbox" id="chk-show-index"' + (showIdx ? ' checked' : '') + '>'
+        + 'Index anzeigen</label>';
+    header.querySelector('input').onchange = function() {
+        baskets[currentBasket].showIndex = this.checked;
+        markUnsaved();
+        if (!this.checked && currentView === 'index') switchView(Object.keys(WEIGHTS)[0] || 'index');
+        renderWatchlist();
+    };
+    el.appendChild(header);
     var syms = Object.keys(WEIGHTS);
     if (syms.length === 0) {
-        el.innerHTML = '<p style="color:var(--muted);padding:8px;">Noch keine Ticker. Suche unten.</p>';
+        var empty = document.createElement('p');
+        empty.style.cssText = 'color:var(--muted);padding:8px;';
+        empty.textContent = 'Noch keine Ticker. Suche unten.';
+        el.appendChild(empty);
         return;
     }
     syms.forEach(function(sym) {
@@ -528,7 +547,7 @@ function removeTicker(sym) {
     delete WEIGHTS[sym];
     markUnsaved();
     renderManageList();
-    if (currentView === sym) switchView('index');
+    if (currentView === sym) switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
     else loadData();
 }
 

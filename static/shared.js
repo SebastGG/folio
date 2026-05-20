@@ -841,6 +841,9 @@ async function loadTickerData(sym) {
  * Lädt Daten je nach aktuellem View (Index oder Ticker).
  */
 async function loadData() {
+    if (currentView === 'index' && !basketShowIndex()) {
+        currentView = Object.keys(WEIGHTS)[0] || 'index';
+    }
     if (currentView === 'index') {
         await loadIndexData();
     } else {
@@ -892,6 +895,11 @@ function saveCurrentBasketState() {
 /**
  * Lädt Basket-Zustand in den globalen State.
  */
+function basketShowIndex() {
+    var b = baskets[currentBasket];
+    return !b || b.showIndex !== false;
+}
+
 function loadBasketState() {
     var b = baskets[currentBasket];
     if (!b) return;
@@ -929,7 +937,7 @@ async function switchBasket(id) {
     if (typeof renderBasketSelect === 'function') renderBasketSelect();
     if (typeof updateChartTitle   === 'function') updateChartTitle();
     allCandles  = [];
-    currentView = 'index';
+    currentView = basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index');
     drawings    = [];
     await loadData();
     loadDrawings();

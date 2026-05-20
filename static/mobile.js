@@ -407,18 +407,20 @@ function renderMobileWatchlist() {
         el.appendChild(div);
     }
 
-    // Index
-    var last = allCandles.length ? allCandles[allCandles.length - 1] : null;
-    var prev = allCandles.length > 1 ? allCandles[allCandles.length - 2] : last;
-    var idxChg = last && prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : null;
-    addItem(
-        'index',
-        '● ' + (baskets[currentBasket] ? baskets[currentBasket].name : 'Index'),
-        last ? '$' + last.close.toFixed(2) : '-',
-        idxChg,
-        currentView === 'index',
-        function() { switchView('index'); mNav('chart', document.getElementById('mnav-chart')); }
-    );
+    // Index (nur wenn für diesen Basket aktiviert)
+    if (basketShowIndex()) {
+        var last = allCandles.length ? allCandles[allCandles.length - 1] : null;
+        var prev = allCandles.length > 1 ? allCandles[allCandles.length - 2] : last;
+        var idxChg = last && prev ? ((last.close - prev.close) / prev.close * 100).toFixed(2) : null;
+        addItem(
+            'index',
+            '● ' + (baskets[currentBasket] ? baskets[currentBasket].name : 'Index'),
+            last ? '$' + last.close.toFixed(2) : '-',
+            idxChg,
+            currentView === 'index',
+            function() { switchView('index'); mNav('chart', document.getElementById('mnav-chart')); }
+        );
+    }
 
     // Ticker
     Object.keys(WEIGHTS).forEach(function(sym) {
@@ -563,9 +565,27 @@ function renderMobileManage() {
     if (!el) return;
     el.innerHTML = '';
 
+    // Index-toggle header
+    var header = document.createElement('div');
+    header.style.cssText = 'padding:4px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;';
+    var showIdx = basketShowIndex();
+    header.innerHTML = '<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">'
+        + '<input type="checkbox" id="m-chk-show-index"' + (showIdx ? ' checked' : '') + '>'
+        + 'Index anzeigen</label>';
+    header.querySelector('input').onchange = function() {
+        baskets[currentBasket].showIndex = this.checked;
+        markUnsaved();
+        if (!this.checked && currentView === 'index') switchView(Object.keys(WEIGHTS)[0] || 'index');
+        renderMobileWatchlist();
+    };
+    el.appendChild(header);
+
     var syms = Object.keys(WEIGHTS);
     if (syms.length === 0) {
-        el.innerHTML = '<p style="color:var(--muted);padding:12px;">Noch keine Ticker. Desktop → Verwaltung nutzen.</p>';
+        var empty = document.createElement('p');
+        empty.style.cssText = 'color:var(--muted);padding:12px;';
+        empty.textContent = 'Noch keine Ticker. Desktop → Verwaltung nutzen.';
+        el.appendChild(empty);
         return;
     }
 
@@ -589,7 +609,7 @@ function mRemoveTicker(sym) {
     delete WEIGHTS[sym];
     markUnsaved();
     renderMobileManage();
-    if (currentView === sym) switchView('index');
+    if (currentView === sym) switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
     else loadData();
 }
 
