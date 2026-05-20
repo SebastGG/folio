@@ -227,13 +227,14 @@ function refreshTradeMarkers() {
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
     }
+    console.log('[TM] view=' + currentView + ' trades=' + (ibkrTrades ? ibkrTrades.length : 'null') + ' markers=' + markers.length + ' api=' + typeof LightweightCharts.createSeriesMarkers);
     try {
         if (!_markersPlugin) {
             _markersPlugin = LightweightCharts.createSeriesMarkers(csSeries, markers);
         } else {
             _markersPlugin.setData(markers);
         }
-    } catch(e) { console.warn('refreshTradeMarkers:', e); }
+    } catch(e) { console.error('[TM] error:', e); }
 }
 
 /**
