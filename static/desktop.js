@@ -1155,7 +1155,7 @@ function renderPortfolioReport() {
     }
     Object.keys(longG).sort().forEach(function(cls) {
         var g = longG[cls];
-        h += '<tr class="pr-row"><td>' + cls + ' <span class="pr-cnt">×' + g.count + '</span></td>'
+        h += '<tr class="pr-row"><td>' + cls + '</td>'
             + '<td>' + fmt(g.value) + '</td>'
             + '<td style="color:' + gc(g.pnl) + '">' + pf(g.pnl) + '</td></tr>';
     });
@@ -1168,7 +1168,7 @@ function renderPortfolioReport() {
         h += '<tr class="pr-section"><td colspan="3">SHORT (Hedge)</td></tr>';
         Object.keys(shortG).sort().forEach(function(cls) {
             var g = shortG[cls];
-            h += '<tr class="pr-row"><td>' + cls + ' <span class="pr-cnt">×' + g.count + '</span></td>'
+            h += '<tr class="pr-row"><td>' + cls + '</td>'
                 + '<td style="color:var(--red)">' + fmt(g.value) + '</td>'
                 + '<td style="color:' + gc(g.pnl) + '">' + pf(g.pnl) + '</td></tr>';
         });
