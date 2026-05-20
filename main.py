@@ -482,6 +482,20 @@ def _init_ibkr_tables(db_file: str):
         key   TEXT PRIMARY KEY,
         value TEXT
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS trades (
+        transaction_id TEXT PRIMARY KEY,
+        symbol         TEXT,
+        action         TEXT,
+        quantity       REAL,
+        price          REAL,
+        value          REAL,
+        commission     REAL,
+        currency       TEXT,
+        fx_rate        REAL DEFAULT 1.0,
+        trade_date     TEXT,
+        asset_class    TEXT,
+        last_sync      TEXT
+    )''')
     conn.commit()
     conn.close()
 
@@ -591,6 +605,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
 
     positions  = []
     cash_rows  = []
+    trade_rows = []
     now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for raw_line in csv_text.splitlines():
@@ -641,6 +656,55 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             cash_rows.append((key, ending_cash, now))
             continue
 
+        # ── TRNT: Trades ───────────────────────────────────────────────
+        if section == "TRNT":
+            i_tid  = cols.get("TransactionID", -1)
+            i_sym  = cols.get("Symbol", -1)
+            i_act  = cols.get("Buy/Sell", cols.get("Action", -1))
+            i_qty  = cols.get("Quantity", -1)
+            i_prc  = cols.get("TradePrice", -1)
+            i_val  = cols.get("TradeMoney", cols.get("Proceeds", -1))
+            i_com  = cols.get("IBCommission", -1)
+            i_cur  = cols.get("CurrencyPrimary", cols.get("Currency", -1))
+            i_fx   = cols.get("FXRateToBase", -1)
+            i_dat  = cols.get("TradeDate", -1)
+            i_cls  = cols.get("AssetClass", -1)
+            i_lod  = cols.get("LevelOfDetail", -1)
+            if i_sym < 0 or i_qty < 0 or i_prc < 0:
+                continue
+            # nur "Order"-Zeilen, keine Splits/Dividenden-Zeilen
+            if i_lod >= 0 and i_lod < len(parts):
+                lod_val = parts[i_lod].strip()
+                if lod_val and lod_val not in ("Order", "Trade", ""):
+                    continue
+            symbol = parts[i_sym].strip() if i_sym < len(parts) else ""
+            if not symbol:
+                continue
+            try:
+                qty    = float(parts[i_qty].strip().replace(",", "") or "0") if i_qty < len(parts) else 0.0
+                prc    = float(parts[i_prc].strip().replace(",", "") or "0") if i_prc < len(parts) else 0.0
+                val    = float(parts[i_val].strip().replace(",", "") or "0") if 0 <= i_val < len(parts) else 0.0
+                com    = float(parts[i_com].strip().replace(",", "") or "0") if 0 <= i_com < len(parts) else 0.0
+                fx     = float(parts[i_fx ].strip().replace(",", "") or "1") if 0 <= i_fx  < len(parts) else 1.0
+            except ValueError:
+                continue
+            action     = parts[i_act].strip() if 0 <= i_act < len(parts) else ""
+            currency   = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
+            asset_cls  = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
+            # TradeDate: YYYYMMDD → YYYY-MM-DD
+            raw_date   = parts[i_dat].strip() if 0 <= i_dat < len(parts) else ""
+            if len(raw_date) == 8 and raw_date.isdigit():
+                trade_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+            else:
+                trade_date = raw_date[:10]
+            # TransactionID — Fallback: symbol+date+action+qty
+            if i_tid >= 0 and i_tid < len(parts) and parts[i_tid].strip():
+                tid = parts[i_tid].strip()
+            else:
+                tid = f"{symbol}_{trade_date}_{action}_{qty}_{prc}"
+            trade_rows.append((tid, symbol, action, abs(qty), prc, abs(val), com, currency, fx, trade_date, asset_cls, now))
+            continue
+
         # ── POST: Positionen ───────────────────────────────────────────
         i_sym = cols.get("Symbol", -1)
         i_qty = cols.get("Quantity", cols.get("Position", -1))
@@ -669,8 +733,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
         positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx))
 
-    print(f"[IBKR] Geparste Positionen: {len(positions)}, Cash-Einträge: {len(cash_rows)}")
-    if not positions and not cash_rows:
+    print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
+    if not positions and not cash_rows and not trade_rows:
         return {"ok": False, "error": "Keine DATA-Zeilen im CSV gefunden — prüfe Flex-Query-Konfiguration"}
 
     conn = get_db(db_file)
@@ -680,9 +744,11 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
+    if trade_rows:
+        conn.executemany("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
     conn.close()
-    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "last_sync": now}
+    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
 
 
 @app.get("/api/ibkr/sync")
@@ -719,6 +785,19 @@ async def ibkr_cash(request: Request):
     _init_ibkr_tables(files["db"])
     conn  = get_db(files["db"])
     rows  = conn.execute("SELECT * FROM cash_balances ORDER BY currency").fetchall()
+    conn.close()
+    return JSONResponse(content=[dict(r) for r in rows])
+
+@app.get("/api/ibkr/trades")
+async def ibkr_trades(request: Request):
+    """Alle gespeicherten IBKR-Trades als JSON, neueste zuerst."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    rows  = conn.execute(
+        "SELECT * FROM trades ORDER BY trade_date DESC, transaction_id DESC"
+    ).fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 

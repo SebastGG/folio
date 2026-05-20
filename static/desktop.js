@@ -995,7 +995,10 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
-        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() { ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable(); });
+        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
+            ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
+        });
+        ibkrLoadTrades().then(function() { ibkrRenderTrades(); });
     });
 })();
 
@@ -1131,6 +1134,8 @@ async function ibkrSync() {
             ibkrRenderTable();
             refreshIbkrCostLine(_lastCandles);
             renderPerfTable();
+            await ibkrLoadTrades();
+            ibkrRenderTrades();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }
@@ -1139,6 +1144,34 @@ async function ibkrSync() {
     } finally {
         if (btn) { btn.textContent = '↻ Sync'; btn.disabled = false; }
     }
+}
+
+function ibkrRenderTrades() {
+    var tbody = document.getElementById('ibkrTradesBody');
+    if (!tbody) return;
+    if (!ibkrTrades || ibkrTrades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center;">Keine Trades — Flex-Query muss TRNT-Sektion enthalten</td></tr>';
+        return;
+    }
+    var html = '';
+    ibkrTrades.forEach(function(t) {
+        var fx      = t.fx_rate || 1;
+        var valEur  = Math.abs(t.value || 0) * fx;
+        var comEur  = Math.abs(t.commission || 0) * fx;
+        var isBuy   = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+        var actColor = isBuy ? '#2d8a4e' : '#c0392b';
+        var actLabel = isBuy ? 'K' : 'V';
+        html += '<tr>'
+            + '<td style="color:var(--muted)">' + (t.trade_date || '').slice(0, 10) + '</td>'
+            + '<td style="font-weight:500">' + (t.symbol || '') + '</td>'
+            + '<td style="color:' + actColor + ';font-weight:700;text-align:center">' + actLabel + '</td>'
+            + '<td style="text-align:right">' + Math.abs(t.quantity || 0) + '</td>'
+            + '<td style="text-align:right">' + (t.price || 0).toFixed(2) + '</td>'
+            + '<td style="text-align:right;font-weight:500">' + valEur.toFixed(0) + ' €</td>'
+            + '<td style="text-align:right;color:var(--muted)">' + comEur.toFixed(2) + ' €</td>'
+            + '</tr>';
+    });
+    tbody.innerHTML = html;
 }
 
 function doLogout() {

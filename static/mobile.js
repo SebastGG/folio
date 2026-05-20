@@ -143,7 +143,7 @@ function mNav(screen, btn) {
         if (screen === 'notes')   syncMobileNotes();
         if (screen === 'ind')     syncMobileInd();
         if (screen === 'manage')  renderMobileManage();
-        if (screen === 'ibkr')    { mIbkrRenderTable(); }
+        if (screen === 'ibkr')    { mIbkrRenderTable(); mIbkrRenderTrades(); }
         if (screen === 'search')  { renderMobileManage(); document.getElementById('m-search-input') && (document.getElementById('m-search-input').value='') && (document.getElementById('m-search-results').innerHTML=''); }
     }
 }
@@ -600,6 +600,30 @@ function updateChartTitle() {
 // ║  9. IBKR POSITIONEN (Mobile)                              ║
 // ╚══════════════════════════════════════════════════════════╝
 
+function mIbkrRenderTrades() {
+    var tbody = document.getElementById('m-ibkr-trades-body');
+    if (!tbody) return;
+    if (!ibkrTrades || ibkrTrades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:10px;color:var(--muted);text-align:center;">Keine Trades</td></tr>';
+        return;
+    }
+    var html = '';
+    ibkrTrades.forEach(function(t) {
+        var fx      = t.fx_rate || 1;
+        var valEur  = Math.abs(t.value || 0) * fx;
+        var isBuy   = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+        var actColor = isBuy ? '#2d8a4e' : '#c0392b';
+        html += '<tr>'
+            + '<td style="color:var(--muted)">' + (t.trade_date || '').slice(0, 10) + '</td>'
+            + '<td style="font-weight:500">' + (t.symbol || '') + '</td>'
+            + '<td style="color:' + actColor + ';font-weight:700;text-align:center">' + (isBuy ? 'K' : 'V') + '</td>'
+            + '<td style="text-align:right">' + Math.abs(t.quantity || 0) + '</td>'
+            + '<td style="text-align:right;font-weight:500">' + valEur.toFixed(0) + ' €</td>'
+            + '</tr>';
+    });
+    tbody.innerHTML = html;
+}
+
 function mIbkrRenderTable() {
     var tbody = document.getElementById('m-ibkr-body');
     var tfoot = document.getElementById('m-ibkr-foot');
@@ -664,6 +688,8 @@ async function mIbkrSync(btn) {
             mIbkrRenderTable();
             refreshMobileIbkrCostLine(_lastCandles);
             renderMobilePerf();
+            await ibkrLoadTrades();
+            mIbkrRenderTrades();
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannt'));
         }
@@ -762,6 +788,7 @@ async function mAddTicker(sym) {
                 initMobileChart();
                 syncMobileInd();
                 ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); renderMobilePerf(); });
+                ibkrLoadTrades().then(function() { mIbkrRenderTrades(); });
             });
         });
     });

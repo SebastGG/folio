@@ -130,6 +130,17 @@
       </table>
     </div>
     <button onclick="mIbkrExport()" style="display:block;width:calc(100% - 24px);margin:12px;padding:14px;background:var(--bg);border:1px solid var(--border);font-family:inherit;font-size:12px;cursor:pointer;touch-action:manipulation;">⬇ IBKR Basket Export</button>
+    <div style="border-top:2px solid var(--border);padding:0 0 8px;">
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:8px 12px 4px;">Trades</div>
+      <div style="overflow-x:auto;">
+        <table class="m-perf-table" style="min-width:400px;">
+          <thead><tr>
+            <th>Datum</th><th>Ticker</th><th style="text-align:center">K/V</th><th style="text-align:right">Stück</th><th style="text-align:right">Wert €</th>
+          </tr></thead>
+          <tbody id="m-ibkr-trades-body"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
