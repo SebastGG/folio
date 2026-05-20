@@ -31,7 +31,8 @@ var mMa200    = null;   // MA200 Series
 var mReg      = null;   // LogReg Series
 var mRegU     = null;   // LogReg Upper Band
 var mRegL     = null;   // LogReg Lower Band
-var mSincePlugin = null; // Seit-Datum Marker
+var mSincePlugin  = null; // Seit-Datum Marker
+var _mIbkrCostLine = null; // Einstandskurs-Preislinie
 
 var mCurrentScreen = 'chart'; // Aktiver Screen
 
@@ -260,6 +261,22 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
     if (!mChart || !mCs) return;
 
     mCs.setData(colored);
+
+    // IBKR Einstandskurs
+    if (_mIbkrCostLine) { try { mCs.removePriceLine(_mIbkrCostLine); } catch(e) {} _mIbkrCostLine = null; }
+    if (currentView !== 'index' && typeof ibkrPositions !== 'undefined' && ibkrPositions.length) {
+        var _mIbkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        if (_mIbkrPos && _mIbkrPos.cost_basis_price > 0) {
+            _mIbkrCostLine = mCs.createPriceLine({
+                price:            _mIbkrPos.cost_basis_price,
+                color:            '#e67e22',
+                lineWidth:        1,
+                lineStyle:        2,
+                axisLabelVisible: true,
+                title:            'Einstand',
+            });
+        }
+    }
 
     if (mVol && volAgg.length) {
         var cmap = {};

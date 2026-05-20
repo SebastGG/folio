@@ -25,6 +25,7 @@
 
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
+var _ibkrCostLine = null;  // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _sincePl = null; // Seit-Datum Plugin
 
 // Drawing Manager
@@ -184,6 +185,22 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
 
     // Kerzen
     csSeries.setData(colored);
+
+    // IBKR Einstandskurs — horizontale Linie wenn Ticker in Positionen vorhanden
+    if (_ibkrCostLine) { try { csSeries.removePriceLine(_ibkrCostLine); } catch(e) {} _ibkrCostLine = null; }
+    if (currentView !== 'index' && typeof ibkrPositions !== 'undefined' && ibkrPositions.length) {
+        var _ibkrPos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        if (_ibkrPos && _ibkrPos.cost_basis_price > 0) {
+            _ibkrCostLine = csSeries.createPriceLine({
+                price:            _ibkrPos.cost_basis_price,
+                color:            '#e67e22',
+                lineWidth:        1,
+                lineStyle:        2,
+                axisLabelVisible: true,
+                title:            'Einstand',
+            });
+        }
+    }
 
     // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
     if (ghostSeries && colored.length) {
