@@ -1005,6 +1005,29 @@ function loadLayout() {
     // ── Vertikal Links: IBKR-Panel Höhe (lv-resizer oben vom IBKR-Panel) ──
     makeBottomResizer('lv-resizer', 'ibkr-col-pane', 80, 600, fitChart);
 
+    // ── Horizontal: IBKR Report | Detail (inner) ──
+    (function() {
+        var res   = document.getElementById('ibkr-h-resizer');
+        var left  = document.getElementById('ibkr-report');
+        if (!res || !left) return;
+        var drag = false, startX = 0, startW = 0;
+        res.addEventListener('mousedown', function(e) {
+            drag = true; startX = e.clientX; startW = left.offsetWidth;
+            res.classList.add('dragging');
+            document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize';
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', function(e) {
+            if (!drag) return;
+            var newW = Math.max(140, Math.min(500, startW + (e.clientX - startX)));
+            left.style.width = newW + 'px';
+            left.style.flex  = 'none';
+        });
+        window.addEventListener('mouseup', function() {
+            if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; }
+        });
+    })();
+
     // ── Vertikal Rechts: zwischen Watchlist und Perf (perf schrumpft beim Ziehen nach unten) ──
     makeBottomResizer('rv-resizer-1', 'r-perf', 60, 500, null);
 
@@ -1086,6 +1109,82 @@ updateClock();
 // ╔══════════════════════════════════════════════════════════╗
 // ║ 12. IBKR POSITIONEN (Desktop)                             ║
 // ╚══════════════════════════════════════════════════════════╝
+
+function renderPortfolioReport() {
+    var el = document.getElementById('portfolioReport');
+    if (!el) return;
+
+    var cashBase = (ibkrCash || []).find(function(c) { return c.currency === 'BASE'; });
+    var cashEur  = cashBase ? (cashBase.ending_cash || 0) : 0;
+
+    var longG = {}, shortG = {};
+    (ibkrPositions || []).forEach(function(p) {
+        var fx  = p.fx_rate_to_base || 1.0;
+        var pv  = (p.position_value  || 0) * fx;
+        var cb  = (p.cost_basis_money || 0) * fx;
+        var cls = (p.asset_class || 'OTHER').toUpperCase();
+        var grp = (p.quantity || 0) >= 0 ? longG : shortG;
+        if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };
+        grp[cls].value += pv;
+        grp[cls].cost  += cb;
+        grp[cls].pnl   += pv - cb;
+        grp[cls].count++;
+    });
+
+    var sumV = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.value; }, 0); };
+    var sumP = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.pnl;   }, 0); };
+    var longValue    = sumV(longG);
+    var longPnl      = sumP(longG);
+    var shortValue   = sumV(shortG);
+    var shortPnl     = sumP(shortG);
+    var longWithCash = longValue + cashEur;
+    var netTotal     = longWithCash + shortValue;
+    var netPnl       = longPnl + shortPnl;
+
+    var fmt = function(v) { return Math.round(v).toLocaleString('de-DE') + ' €'; };
+    var pf  = function(v) { return (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('de-DE') + ' €'; };
+    var gc  = function(v) { return v >= 0 ? 'var(--green)' : 'var(--red)'; };
+
+    var h = '<table class="pr-table"><colgroup><col style="width:55%"><col style="width:25%"><col style="width:20%"></colgroup><tbody>';
+
+    // LONG
+    h += '<tr class="pr-section"><td colspan="3">LONG</td></tr>';
+    if (cashEur !== 0 || !Object.keys(longG).length) {
+        h += '<tr class="pr-row"><td>Cash</td>'
+            + '<td style="color:' + gc(cashEur) + '">' + fmt(cashEur) + '</td><td>—</td></tr>';
+    }
+    Object.keys(longG).sort().forEach(function(cls) {
+        var g = longG[cls];
+        h += '<tr class="pr-row"><td>' + cls + ' <span class="pr-cnt">×' + g.count + '</span></td>'
+            + '<td>' + fmt(g.value) + '</td>'
+            + '<td style="color:' + gc(g.pnl) + '">' + pf(g.pnl) + '</td></tr>';
+    });
+    h += '<tr class="pr-subtotal"><td>Long + Cash</td>'
+        + '<td style="color:' + gc(longWithCash) + '">' + fmt(longWithCash) + '</td>'
+        + '<td style="color:' + gc(longPnl) + '">' + pf(longPnl) + '</td></tr>';
+
+    // SHORT
+    if (Object.keys(shortG).length > 0) {
+        h += '<tr class="pr-section"><td colspan="3">SHORT (Hedge)</td></tr>';
+        Object.keys(shortG).sort().forEach(function(cls) {
+            var g = shortG[cls];
+            h += '<tr class="pr-row"><td>' + cls + ' <span class="pr-cnt">×' + g.count + '</span></td>'
+                + '<td style="color:var(--red)">' + fmt(g.value) + '</td>'
+                + '<td style="color:' + gc(g.pnl) + '">' + pf(g.pnl) + '</td></tr>';
+        });
+        h += '<tr class="pr-subtotal"><td>Short Gesamt</td>'
+            + '<td style="color:var(--red)">' + fmt(shortValue) + '</td>'
+            + '<td style="color:' + gc(shortPnl) + '">' + pf(shortPnl) + '</td></tr>';
+    }
+
+    // NET
+    h += '<tr class="pr-total"><td>NET Gesamt</td>'
+        + '<td style="color:' + gc(netTotal) + '">' + fmt(netTotal) + '</td>'
+        + '<td style="color:' + gc(netPnl) + '">' + pf(netPnl) + '</td></tr>';
+
+    h += '</tbody></table>';
+    el.innerHTML = h;
+}
 
 function ibkrRenderTable() {
     var tbody = document.getElementById('ibkrBody');
@@ -1201,6 +1300,7 @@ function ibkrRenderTable() {
     if (syncEl && ibkrLastSync) {
         syncEl.textContent = ibkrLastSync.slice(0, 16).replace('T', ' ') + ' UTC';
     }
+    renderPortfolioReport();
 }
 
 async function ibkrSync() {
