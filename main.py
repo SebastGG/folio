@@ -124,6 +124,10 @@ def init_db(db_file: str):
         logo_url   TEXT,
         fetched_at INTEGER
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticker_currency (
+        ticker   TEXT PRIMARY KEY,
+        currency TEXT
+    )''')
     conn.commit()
     conn.close()
 
@@ -209,6 +213,11 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
                 )
             count += 1
 
+        # Währung speichern
+        currency = meta.get("currency") or "USD"
+        conn.execute(
+            "INSERT OR REPLACE INTO ticker_currency VALUES (?,?)", (ticker, currency)
+        )
         conn.commit()
         return count
     except Exception as e:
@@ -326,6 +335,25 @@ async def get_prices_status(request: Request):
         r["ticker"]: {"last": r["last_date"], "count": r["count"]}
         for r in rows
     })
+
+@app.get("/api/prices/currencies")
+async def get_currencies(request: Request, tickers: str = ""):
+    """Gibt Währungen für Ticker zurück: {ticker: currency}."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    conn  = get_db(files["db"])
+    ticker_list = [t.strip().upper() for t in tickers.split(',') if t.strip()] if tickers else []
+    if ticker_list:
+        placeholders = ','.join('?' * len(ticker_list))
+        rows = conn.execute(
+            f"SELECT ticker, currency FROM ticker_currency WHERE ticker IN ({placeholders})",
+            ticker_list
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT ticker, currency FROM ticker_currency").fetchall()
+    conn.close()
+    return JSONResponse(content={r["ticker"]: r["currency"] for r in rows})
 
 @app.get("/api/prices/{ticker}")
 async def get_prices(ticker: str, request: Request):
@@ -518,6 +546,10 @@ def _init_ibkr_tables(db_file: str):
     )''')
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN yahoo_symbol TEXT")
     except Exception:
         pass
     conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
@@ -824,6 +856,20 @@ async def ibkr_positions(request: Request):
     rows  = conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
+
+@app.patch("/api/ibkr/positions/{symbol}")
+async def update_ibkr_position(symbol: str, request: Request):
+    """Setzt yahoo_symbol-Mapping für eine IBKR-Position."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    body  = await request.json()
+    yahoo_sym = (body.get("yahoo_symbol") or "").strip().upper() or None
+    conn = get_db(files["db"])
+    conn.execute("UPDATE positions SET yahoo_symbol=? WHERE symbol=?", (yahoo_sym, symbol))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
 
 @app.get("/api/ibkr/cash")
 async def ibkr_cash(request: Request):

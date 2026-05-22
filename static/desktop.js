@@ -313,12 +313,15 @@ function refreshIbkrCostLine(colored) {
     if (!colored || !colored.length || !ibkrPositions || !ibkrPositions.length) return;
     var cbPrice = 0;
     if (currentView !== 'index') {
-        var pos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        var pos = ibkrPositions.find(function(p) {
+            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+        });
         if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
     } else {
         var totalCost = 0, totalValue = 0;
         ibkrPositions.forEach(function(p) {
-            if ((WEIGHTS[p.symbol] || 0) > 0) {
+            var sym = p.yahoo_symbol || p.symbol;
+            if ((WEIGHTS[sym] || WEIGHTS[p.symbol] || 0) > 0) {
                 var fx = p.fx_rate_to_base || 1;
                 totalCost  += (p.cost_basis_money || 0) * fx;
                 totalValue += (p.position_value   || 0) * fx;
@@ -343,10 +346,15 @@ function refreshTradeMarkers() {
     if (!csSeries) return;
     var markers = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
+        // IBKR-Symbol → Yahoo-Symbol Mapping für Vergleich aufbauen
+        var ibkrToYahoo = {};
+        (ibkrPositions || []).forEach(function(p) {
+            ibkrToYahoo[p.symbol] = p.yahoo_symbol || p.symbol;
+        });
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
         var agg = {};
         ibkrTrades.filter(function(t) {
-            return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
+            return (ibkrToYahoo[t.symbol] || t.symbol) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
@@ -386,6 +394,18 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
 
     // Kerzen
     csSeries.setData(colored);
+
+    // Leerer Basket — alle Serien leeren und sofort zurück
+    if (!colored || !colored.length) {
+        if (volSeries) try { volSeries.setData([]); } catch(e) {}
+        if (ma50S)  ma50S.applyOptions({ visible: false });
+        if (ma200S) ma200S.applyOptions({ visible: false });
+        if (regS)   regS.applyOptions({ visible: false });
+        if (regUS)  regUS.applyOptions({ visible: false });
+        if (regLS)  regLS.applyOptions({ visible: false });
+        if (ghostSeries) try { ghostSeries.setData([]); } catch(e) {}
+        return;
+    }
 
     // IBKR Einstandskurs + Trade-Marker
     refreshIbkrCostLine(colored);
@@ -569,7 +589,7 @@ function renderWatchlist() {
     idxDiv.className = 'wl-item wl-index' + (idxActive ? ' active' : '');
     idxDiv.innerHTML = '<div class="wl-sym">● ' + (baskets[currentBasket] ? baskets[currentBasket].name : 'Index') + '</div>'
         + '<div class="wl-right">'
-        + '<div class="wl-price">' + (idxLast ? '$' + idxLast.close.toFixed(2) : '-') + '</div>'
+        + '<div class="wl-price">' + (idxLast ? basketCurSymbol() + idxLast.close.toFixed(2) : '-') + '</div>'
         + '<div class="wl-chg" style="color:' + (!idxActive && idxChg ? (parseFloat(idxChg) >= 0 ? 'var(--green)' : 'var(--red)') : '') + '">'
         + (idxChg ? (parseFloat(idxChg) >= 0 ? '+' : '') + idxChg + '%' : '-') + '</div>'
         + '</div>';
@@ -577,8 +597,8 @@ function renderWatchlist() {
     el.appendChild(idxDiv);
     } // end basketShowIndex
 
-    // Ticker
-    Object.keys(WEIGHTS).forEach(function(sym) {
+    // Ticker (alphabetisch)
+    Object.keys(WEIGHTS).sort().forEach(function(sym) {
         var p      = perfData[sym];
         var active = currentView === sym;
         var div    = document.createElement('div');
@@ -589,7 +609,7 @@ function renderWatchlist() {
             + ' onerror="this.style.display=\'none\'">';
         div.innerHTML = '<div class="wl-sym">' + logoHtml + sym + '</div>'
             + '<div class="wl-right">'
-            + '<div class="wl-price">' + (p ? '$' + p.price.toFixed(2) : '-') + '</div>'
+            + '<div class="wl-price">' + (p ? tickerCurSymbol(sym) + p.price.toFixed(2) : '-') + '</div>'
             + '<div class="wl-chg" style="color:' + (!active ? chgColor : 'rgba(255,255,255,0.85)') + '">'
             + (p ? (parseFloat(p.d1) >= 0 ? '+' : '') + p.d1 + '%' : '-') + '</div>'
             + '</div>';
@@ -600,11 +620,14 @@ function renderWatchlist() {
 }
 
 function renderBasketSelect() {
+    var sortedIds = Object.keys(baskets).sort(function(a, b) {
+        return (baskets[a].name || a).localeCompare(baskets[b].name || b);
+    });
     // Hidden select (für saveAll/shared.js-Kompatibilität)
     var sel = document.getElementById('basketSelect');
     if (sel) {
         sel.innerHTML = '';
-        Object.keys(baskets).forEach(function(id) {
+        sortedIds.forEach(function(id) {
             var opt = document.createElement('option');
             opt.value = id; opt.textContent = baskets[id].name || id;
             opt.selected = id === currentBasket;
@@ -615,7 +638,7 @@ function renderBasketSelect() {
     var bar = document.getElementById('basket-pills-bar');
     if (bar) {
         bar.innerHTML = '';
-        Object.keys(baskets).forEach(function(id) {
+        sortedIds.forEach(function(id) {
             var pill = document.createElement('div');
             pill.className = 'basket-pill' + (id === currentBasket ? ' active' : '');
             var name = (baskets[id].name || id);
@@ -1398,8 +1421,12 @@ function ibkrRenderTable() {
             totalPnlEur   += pnlEur;
             var pColor = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
+            var yahooSym = p.yahoo_symbol || '';
+            var symHtml = '<span style="font-weight:500;cursor:pointer" title="Yahoo-Symbol setzen" onclick="ibkrEditSymbol(\'' + p.symbol + '\',this)">'
+                + p.symbol + (yahooSym && yahooSym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + yahooSym + '</span>' : ' <span style="color:var(--muted);font-size:10px">✎</span>')
+                + '</span>';
             html += '<tr>'
-                + '<td style="font-weight:500">' + p.symbol + '</td>'
+                + '<td>' + symHtml + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
                 + '<td>' + cbmEur.toFixed(0) + '</td>'
@@ -1495,6 +1522,48 @@ async function ibkrSync() {
         alert('Verbindungsfehler: ' + e.message);
     } finally {
         if (btn) { btn.textContent = '↻ Sync'; btn.disabled = false; }
+    }
+}
+
+async function ibkrCreateBasket() {
+    var stk = (ibkrPositions || []).filter(function(p) {
+        return (p.asset_class || '').toUpperCase() === 'STK' && (p.quantity || 0) > 0;
+    });
+    if (stk.length === 0) { alert('Keine Long-Aktien-Positionen gefunden.'); return; }
+    var name = prompt('Name des neuen Baskets:', 'IBKR Positionen');
+    if (!name) return;
+    var id = 'basket_' + Date.now();
+    var weights = {};
+    stk.forEach(function(p) {
+        var sym = (p.yahoo_symbol && p.yahoo_symbol !== p.symbol) ? p.yahoo_symbol : p.symbol;
+        weights[sym] = Math.round(Math.abs(p.quantity));
+    });
+    baskets[id] = {
+        name: name, weights: weights, period: 180, tf: '1D',
+        perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+    };
+    await saveBasketsToServer();
+    await switchBasket(id);
+}
+
+async function ibkrEditSymbol(ibkrSym, el) {
+    var current = (ibkrPositions.find(function(p) { return p.symbol === ibkrSym; }) || {}).yahoo_symbol || '';
+    var newSym = prompt('Yahoo-Symbol für "' + ibkrSym + '" (leer = kein Mapping):', current);
+    if (newSym === null) return;
+    newSym = newSym.trim().toUpperCase();
+    try {
+        await fetch('/api/ibkr/positions/' + encodeURIComponent(ibkrSym), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ yahoo_symbol: newSym || null })
+        });
+        await ibkrLoadPositions();
+        ibkrRenderTable();
+        refreshIbkrCostLine(_lastCandles);
+        refreshTradeMarkers();
+        renderPerfTable();
+    } catch(e) {
+        alert('Fehler beim Speichern: ' + e.message);
     }
 }
 

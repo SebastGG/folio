@@ -44,7 +44,22 @@ var perfData = {}; // { AAPL: { price, d1, d5, d22, d66, ytd, since } }
 var drawings = [];
 
 // Interner State
-var _dataMap = {}; // { AAPL: [{time, open, high, low, close, volume}] }
+var _dataMap         = {}; // { AAPL: [{time, open, high, low, close, volume}] }
+var tickerCurrencies = {}; // { AAPL: 'USD', HLMA.L: 'GBp', SAP.DE: 'EUR' }
+var _fxDataMap       = {}; // { 'EURUSD=X': [...], 'GBPUSD=X': [...] }
+
+// ── Währungssymbol für die aktuelle Basket-Basiswährung ──────────────
+var _CUR_SYMBOLS = { USD: '$', EUR: '€', GBP: '£', CHF: 'Fr.', JPY: '¥', CAD: 'C$', AUD: 'A$' };
+function basketCurSymbol() {
+    var b = baskets[currentBasket] || {};
+    return _CUR_SYMBOLS[b.baseCurrency || 'USD'] || (b.baseCurrency || '$');
+}
+function tickerCurSymbol(sym) {
+    var c = tickerCurrencies[sym];
+    if (!c) return basketCurSymbol();
+    if (c === 'GBp') return 'p';
+    return _CUR_SYMBOLS[c] || c;
+}
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║  2. BERECHNUNGEN                                          ║
@@ -219,12 +234,36 @@ function dayReturn(dataMap, dateStr, prevDateStr) {
  * @param {Object} dataMap - { AAPL: [{time, close, ...}] }
  * @returns {Array} [{time, open, high, low, close, volume}]
  */
-function buildIndex(dataMap) {
+function buildIndex(dataMap, currencies, baseCurrency, fxDataMap) {
     // ── Wertgewichteter Portfolio-Index ──────────────────────────
     // Index = Portfoliowert / Basis-Portfoliowert × 100
-    // Portfoliowert = Σ(Kurs_i × Anzahl_i)
-    // OHLC wird aus täglichen Portfoliowerten berechnet
+    // Portfoliowert = Σ(Kurs_i × Anzahl_i × FX_i)
+    // FX_i = Umrechnungsfaktor zur Basiswährung (Standard: USD)
     // ─────────────────────────────────────────────────────────────
+    var _currencies = currencies || {};
+    var _baseCur    = baseCurrency || 'USD';
+    var _fxMap      = fxDataMap   || {};
+
+    // FX Forward-Fill-Tabellen für alle benötigten Währungspaare
+    var _fxSorted = {}, _fxPtrs = {}, _fxLast = {};
+    Object.keys(_fxMap).forEach(function(pair) {
+        _fxSorted[pair] = (_fxMap[pair] || []).slice().sort(function(a, b) {
+            return a.time < b.time ? -1 : 1;
+        });
+        _fxPtrs[pair] = 0;
+        _fxLast[pair] = null;
+    });
+
+    // FX-Umrechnungsfaktor für einen Kurs in `cur` → `_baseCur`
+    function fxRate(cur) {
+        if (!cur || cur === _baseCur) return 1;
+        var isGBp = (cur === 'GBp');
+        var baseCur3 = isGBp ? 'GBP' : cur;
+        var pair = baseCur3 + _baseCur + '=X';
+        var bar = _fxLast[pair];
+        if (!bar) return 1;  // kein FX-Kurs verfügbar → kein Konvertierung
+        return isGBp ? bar.close / 100 : bar.close;
+    }
 
     // Alle Handelstage sammeln
     var datesSet = new Set();
@@ -251,7 +290,7 @@ function buildIndex(dataMap) {
         _last[sym] = null;
     });
 
-    // Zeiger für alle Ticker bis einschließlich `date` vorwärts schieben
+    // Zeiger für alle Ticker und FX-Paare bis einschließlich `date` vorwärts schieben
     function advanceTo(date) {
         Object.keys(WEIGHTS).forEach(function(sym) {
             if ((WEIGHTS[sym] || 0) === 0) return;
@@ -259,6 +298,13 @@ function buildIndex(dataMap) {
             while (_ptrs[sym] < bars.length && bars[_ptrs[sym]].time <= date) {
                 _last[sym] = bars[_ptrs[sym]];
                 _ptrs[sym]++;
+            }
+        });
+        Object.keys(_fxSorted).forEach(function(pair) {
+            var bars = _fxSorted[pair];
+            while (_fxPtrs[pair] < bars.length && bars[_fxPtrs[pair]].time <= date) {
+                _fxLast[pair] = bars[_fxPtrs[pair]];
+                _fxPtrs[pair]++;
             }
         });
     }
@@ -270,7 +316,10 @@ function buildIndex(dataMap) {
             var w = WEIGHTS[sym] || 0;
             if (w === 0) return;
             var bar = _last[sym];
-            if (bar && bar[field]) val += bar[field] * w;
+            if (bar && bar[field]) {
+                var fx = fxRate(_currencies[sym]);
+                val += bar[field] * w * fx;
+            }
         });
         return val;
     }
@@ -282,6 +331,7 @@ function buildIndex(dataMap) {
 
     // Zeiger zurücksetzen — forEach beginnt ebenfalls bei dates[0]
     Object.keys(WEIGHTS).forEach(function(sym) { _ptrs[sym] = 0; _last[sym] = null; });
+    Object.keys(_fxSorted).forEach(function(pair) { _fxPtrs[pair] = 0; _fxLast[pair] = null; });
 
     var totalShares = Object.keys(WEIGHTS).reduce(function(sum, sym) {
         return sum + (WEIGHTS[sym] || 0);
@@ -308,7 +358,10 @@ function buildIndex(dataMap) {
             var w = WEIGHTS[sym] || 0;
             if (w === 0) return;
             var bar = _last[sym];
-            if (bar && bar.time === date && bar.volume && bar.close) vol += bar.volume * bar.close * w;
+            if (bar && bar.time === date && bar.volume && bar.close) {
+                var fx = fxRate(_currencies[sym]);
+                vol += bar.volume * bar.close * w * fx;
+            }
         });
 
         result.push({
@@ -425,9 +478,12 @@ function renderPerfTable() {
         return '<td style="color:' + color + '">' + (n >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%</td>';
     };
 
-    // IBKR P&L-Hilfsfunktionen
+    // IBKR P&L-Hilfsfunktionen (per IBKR-Symbol und Yahoo-Symbol auffindbar)
     var ibkrMap = {};
-    (ibkrPositions || []).forEach(function(p) { ibkrMap[p.symbol] = p; });
+    (ibkrPositions || []).forEach(function(p) {
+        ibkrMap[p.symbol] = p;
+        if (p.yahoo_symbol) ibkrMap[p.yahoo_symbol] = p;
+    });
 
     var ibkrPnlPct = function(sym) {
         var pos = ibkrMap[sym];
@@ -438,7 +494,8 @@ function renderPerfTable() {
     // IBKR Index-P&L (nur Ticker die im Basket UND in IBKR sind)
     var ibkrTotalCost = 0, ibkrTotalValue = 0;
     (ibkrPositions || []).forEach(function(p) {
-        if ((WEIGHTS[p.symbol] || 0) > 0) {
+        var sym = p.yahoo_symbol || p.symbol;
+        if ((WEIGHTS[sym] || WEIGHTS[p.symbol] || 0) > 0) {
             var fx = p.fx_rate_to_base || 1;
             ibkrTotalCost  += (p.cost_basis_money || 0) * fx;
             ibkrTotalValue += (p.position_value   || 0) * fx;
@@ -469,9 +526,10 @@ function renderPerfTable() {
         var pct     = function(f) { return ((last.close / f - 1) * 100).toFixed(2); };
         var yearBar = allCandles.find(function(c) { return c.time.startsWith(new Date().getFullYear().toString()); });
 
+        var cs = basketCurSymbol();
         html += '<tr style="background:var(--bg);border-bottom:2px solid var(--border);">'
             + '<td style="font-weight:700;color:var(--text);">&#9679; INDEX</td>'
-            + '<td style="font-weight:700;">$' + last.close.toFixed(2) + '</td>'
+            + '<td style="font-weight:700;">' + cs + last.close.toFixed(2) + '</td>'
             + '<td></td><td></td>'
             + fmt(idxIbkrPnl)
             + fmt(pct(get(1))) + fmt(pct(get(5))) + fmt(pct(get(22))) + fmt(pct(get(66)))
@@ -481,6 +539,7 @@ function renderPerfTable() {
 
     // Ticker-Zeilen
     var totalValue = 0, totalPrevValue = 0;
+    var cs = basketCurSymbol();
 
     syms.forEach(function(sym) {
         var p = perfData[sym];
@@ -489,12 +548,13 @@ function renderPerfTable() {
         var posValue = p.price * anzahl;
         totalValue     += posValue;
         totalPrevValue += posValue / (1 + parseFloat(p.d1 || 0) / 100);
+        var tcs = tickerCurSymbol(sym);
 
         html += '<tr>'
             + '<td style="font-weight:500">' + sym + '</td>'
-            + '<td>$' + p.price.toFixed(2) + '</td>'
+            + '<td>' + tcs + p.price.toFixed(2) + '</td>'
             + '<td style="color:var(--muted)">' + anzahl + '</td>'
-            + '<td style="font-weight:500">$' + posValue.toFixed(0) + '</td>'
+            + '<td style="font-weight:500">' + cs + posValue.toFixed(0) + '</td>'
             + fmt(ibkrPnlPct(sym))
             + fmt(p.d1) + fmt(p.d5) + fmt(p.d22) + fmt(p.d66) + fmt(p.ytd)
             + '</tr>';
@@ -511,7 +571,7 @@ function renderPerfTable() {
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
             + '<td style="font-weight:700">TOTAL</td>'
             + '<td></td><td></td>'
-            + '<td style="font-weight:700">$' + totalValue.toFixed(0) + '</td>'
+            + '<td style="font-weight:700">' + cs + totalValue.toFixed(0) + '</td>'
             + (idxIbkrPnl ? '<td style="font-weight:700;color:' + ibkrColor + '">' + (parseFloat(idxIbkrPnl)>=0?'+':'') + idxIbkrPnl + '%</td>' : '<td>-</td>')
             + '<td style="font-weight:700;color:' + chgColor + '">' + (parseFloat(totalChg)>=0?'+':'') + totalChg + '%</td>'
             + '<td colspan="3" style="color:var(--muted);font-size:10px;">' + syms.length + ' Pos.</td>'
@@ -537,7 +597,14 @@ function renderPerfTable() {
  *   7. Stats-Zeile aktualisieren
  */
 function applyPeriod() {
-    if (!allCandles.length) return;
+    if (!allCandles.length) {
+        // Leerer Basket — Chart und Tabellen explizit leeren
+        _lastCandles = [];
+        if (typeof renderDesktopChart === 'function') renderDesktopChart([], [], [], null);
+        if (typeof renderWatchlist    === 'function') renderWatchlist();
+        renderPerfTable();
+        return;
+    }
 
     // 1. Filtern
     var filtered = allCandles;
@@ -788,6 +855,10 @@ async function loadIndexData() {
     try {
         var syms = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) > 0; });
         if (syms.length === 0) {
+            allCandles = []; _lastCandles = []; _dataMap = {}; _fxDataMap = {}; tickerCurrencies = {};
+            if (typeof renderDesktopChart === 'function') renderDesktopChart([], [], [], null);
+            if (typeof renderWatchlist    === 'function') renderWatchlist();
+            renderPerfTable();
             if (typeof hideLoading === 'function') hideLoading();
             return;
         }
@@ -801,8 +872,33 @@ async function loadIndexData() {
 
         results.forEach(function(r) { _dataMap[r.sym] = r.data; });
 
-        // Index aufbauen
-        allCandles  = buildIndex(_dataMap);
+        // Währungen laden und FX-Paare bei Bedarf nachladen
+        try {
+            var currResp = await fetch('/api/prices/currencies?tickers=' + syms.join(','));
+            tickerCurrencies = await currResp.json();
+        } catch(e) { tickerCurrencies = {}; }
+
+        var basket   = baskets[currentBasket] || {};
+        var baseCur  = basket.baseCurrency || 'USD';
+        var fxNeeded = {};
+        syms.forEach(function(s) {
+            var c = tickerCurrencies[s];
+            if (c && c !== baseCur) {
+                var pair = (c === 'GBp' ? 'GBP' : c) + baseCur + '=X';
+                fxNeeded[pair] = true;
+            }
+        });
+        _fxDataMap = {};
+        var fxPairs = Object.keys(fxNeeded);
+        if (fxPairs.length > 0) {
+            var fxResults = await Promise.all(fxPairs.map(function(fx) {
+                return fetchTicker(fx).then(function(data) { return { sym: fx, data: data }; });
+            }));
+            fxResults.forEach(function(r) { if (r.data && r.data.length) _fxDataMap[r.sym] = r.data; });
+        }
+
+        // Index aufbauen (mit optionaler Währungskonvertierung)
+        allCandles  = buildIndex(_dataMap, tickerCurrencies, baseCur, _fxDataMap);
         _volumeData = allCandles.map(function(c) { return { time: c.time, volume: c.volume }; });
 
         if (allCandles.length === 0) {
