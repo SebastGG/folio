@@ -641,7 +641,10 @@ function renderBasketSelect() {
     var dSel = document.getElementById('basketSelect');  // hidden stub
     if (!mSel) return;
     mSel.innerHTML = '';
-    Object.keys(baskets).forEach(function(id) {
+    var sortedIds = Object.keys(baskets).sort(function(a, b) {
+        return (baskets[a].name || a).localeCompare(baskets[b].name || b);
+    });
+    sortedIds.forEach(function(id) {
         var opt = document.createElement('option');
         opt.value = id;
         opt.textContent = baskets[id].name || id;

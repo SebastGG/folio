@@ -351,11 +351,41 @@ function refreshTradeMarkers() {
         (ibkrPositions || []).forEach(function(p) {
             ibkrToYahoo[p.symbol] = p.yahoo_symbol || p.symbol;
         });
+        // Aktuelle IBKR-Position für laufende Bestandsberechnung
+        var ibkrPos = (ibkrPositions || []).find(function(p) {
+            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+        });
+        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : null;
+
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
-        var agg = {};
-        ibkrTrades.filter(function(t) {
+        var relevantTrades = ibkrTrades.filter(function(t) {
             return (ibkrToYahoo[t.symbol] || t.symbol) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
-        }).forEach(function(t) {
+        }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
+
+        // Laufenden Bestand ab erster Transaktion berechnen
+        // Startbestand = aktuelle IBKR-Menge minus aller bekannten Trades
+        var totalTraded = relevantTrades.reduce(function(s, t) {
+            var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+            return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
+        }, 0);
+        var runningQty = currentQty !== null ? currentQty - totalTraded : 0;
+
+        // Pro Tag laufenden Bestand ermitteln
+        var dateRunning = {};
+        var tradeDates  = [];
+        relevantTrades.forEach(function(t) {
+            if (tradeDates.indexOf(t.trade_date) < 0) tradeDates.push(t.trade_date);
+        });
+        tradeDates.forEach(function(date) {
+            relevantTrades.filter(function(t) { return t.trade_date === date; }).forEach(function(t) {
+                var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+                runningQty += buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0);
+            });
+            dateRunning[date] = runningQty;
+        });
+
+        var agg = {};
+        relevantTrades.forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             var key = t.trade_date + (isBuy ? '_B' : '_S');
@@ -365,12 +395,14 @@ function refreshTradeMarkers() {
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
             var qty = g.qty === Math.floor(g.qty) ? g.qty : g.qty.toFixed(1);
+            var pos = dateRunning[g.date];
+            var posStr = pos !== undefined ? ' →' + (pos === Math.floor(pos) ? pos : pos.toFixed(1)) : '';
             markers.push({
                 time: g.date,
                 position: g.isBuy ? 'belowBar' : 'aboveBar',
                 color: g.isBuy ? '#2d8a4e' : '#c0392b',
                 shape: g.isBuy ? 'arrowUp' : 'arrowDown',
-                text: (g.isBuy ? 'K ' : 'V ') + qty,
+                text: (g.isBuy ? 'K ' : 'V ') + qty + posStr,
                 size: 2,
             });
         });
