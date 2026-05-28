@@ -648,7 +648,7 @@ function renderBasketSelect() {
     if (!mSel) return;
     mSel.innerHTML = '';
     var sortedIds = Object.keys(baskets).sort(function(a, b) {
-        return (baskets[a].name || a).localeCompare(baskets[b].name || b);
+        return (baskets[a].name || a).localeCompare(baskets[b].name || b, undefined, { sensitivity: 'base' });
     });
     sortedIds.forEach(function(id) {
         var opt = document.createElement('option');
