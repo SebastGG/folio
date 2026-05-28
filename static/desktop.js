@@ -989,20 +989,62 @@ function initDrawingManager() {
     var _dmContainer = document.getElementById('chartContainer');
     drawingManager.attach(chart, csSeries, _dmContainer);
 
-    // Disable chart panning while dragging a drawing anchor
+    // Disable chart panning while dragging anchor or translating drawing
+    var _xlate = null; // translate-drag state
+    var _xlateActive = false;
+
     _dmContainer.addEventListener('mousedown', function(e) {
         if (!drawingManager) return;
         var rect = _dmContainer.getBoundingClientRect();
         var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
         if (drawingManager.hitTestAnchor(pt) !== null) {
+            // Anchor drag — existing behaviour
             chart.applyOptions({ handleScroll: false, handleScale: false });
+            return;
+        }
+        if (_activeToolType) return; // creating a new drawing — don't intercept
+
+        var hit = drawingManager.hitTest(pt);
+        if (hit) {
+            chart.applyOptions({ handleScroll: false, handleScale: false });
+            var ts = chart.timeScale();
+            _xlate = {
+                drawing: hit,
+                startX: pt.x, startY: pt.y,
+                pixAnchors: hit.anchors.map(function(a) {
+                    return { x: ts.timeToCoordinate(a.time), y: csSeries.priceToCoordinate(a.price) };
+                }),
+                origAnchors: hit.anchors.map(function(a) { return { time: a.time, price: a.price }; })
+            };
+            _xlateActive = false;
+            e.stopPropagation();
         }
     }, true);
-    var _reenableScroll = function() {
+
+    _dmContainer.addEventListener('mousemove', function(e) {
+        if (!_xlate) return;
+        var rect = _dmContainer.getBoundingClientRect();
+        var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        var dx = pt.x - _xlate.startX, dy = pt.y - _xlate.startY;
+        if (!_xlateActive && dx * dx + dy * dy < 16) return; // 4 px threshold
+        _xlateActive = true;
+        var ts = chart.timeScale();
+        var newAnchors = _xlate.pixAnchors.map(function(ap, i) {
+            var nx = ap.x + dx, ny = ap.y + dy;
+            var nt = ts.coordinateToTime(nx), np = csSeries.coordinateToPrice(ny);
+            return (nt !== null && np !== null) ? { time: nt, price: np } : _xlate.origAnchors[i];
+        });
+        _xlate.drawing.setAnchors(newAnchors);
+    }, true);
+
+    var _endXlate = function() {
+        if (_xlate && _xlateActive) saveDrawingWithText(_xlate.drawing);
+        _xlate = null; _xlateActive = false;
         chart.applyOptions({ handleScroll: true, handleScale: true });
     };
-    _dmContainer.addEventListener('mouseup', _reenableScroll, true);
-    _dmContainer.addEventListener('mouseleave', _reenableScroll, true);
+    _dmContainer.addEventListener('mouseup', _endXlate, true);
+    _dmContainer.addEventListener('mouseleave', _endXlate, true);
 
     // Hilfsfunktion: Preview-Zeichnung erstellen/aktualisieren
     function _refreshPreview(anchors) {
