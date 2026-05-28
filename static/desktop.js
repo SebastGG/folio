@@ -400,10 +400,10 @@ function refreshTradeMarkers() {
             markers.push({
                 time: g.date,
                 position: g.isBuy ? 'belowBar' : 'aboveBar',
-                color: g.isBuy ? '#2d8a4e' : '#c0392b',
+                color: g.isBuy ? '#00E5FF' : '#FF6D00',
                 shape: g.isBuy ? 'arrowUp' : 'arrowDown',
                 text: (g.isBuy ? 'K ' : 'V ') + qty + posStr,
-                size: 2,
+                size: 3,
             });
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
