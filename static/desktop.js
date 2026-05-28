@@ -659,7 +659,7 @@ function renderWatchlist() {
 
 function renderBasketSelect() {
     var sortedIds = Object.keys(baskets).sort(function(a, b) {
-        return (baskets[a].name || a).localeCompare(baskets[b].name || b, undefined, { sensitivity: 'base' });
+        return (baskets[a].name || a).localeCompare(baskets[b].name || b, undefined, { sensitivity: 'base', numeric: true });
     });
     // Hidden select (für saveAll/shared.js-Kompatibilität)
     var sel = document.getElementById('basketSelect');
