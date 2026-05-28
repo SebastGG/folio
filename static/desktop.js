@@ -397,13 +397,19 @@ function refreshTradeMarkers() {
             var qty = g.qty === Math.floor(g.qty) ? g.qty : g.qty.toFixed(1);
             var pos = dateRunning[g.date];
             var posStr = pos !== undefined ? ' →' + (pos === Math.floor(pos) ? pos : pos.toFixed(1)) : '';
+            var _pos = g.isBuy ? 'belowBar' : 'aboveBar';
             markers.push({
-                time: g.date,
-                position: g.isBuy ? 'belowBar' : 'aboveBar',
+                time: g.date, position: _pos,
                 color: g.isBuy ? '#00E5FF' : '#FF6D00',
                 shape: g.isBuy ? 'arrowUp' : 'arrowDown',
+                text: '', size: 3,
+            });
+            markers.push({
+                time: g.date, position: _pos,
+                color: '#000000',
+                shape: g.isBuy ? 'arrowUp' : 'arrowDown',
                 text: (g.isBuy ? 'K ' : 'V ') + qty + posStr,
-                size: 3,
+                size: 0,
             });
         });
         markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
