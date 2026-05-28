@@ -160,7 +160,9 @@ function _drawVRVP() {
 
 // Drawing Manager
 var drawingManager   = null;  // LightweightChartsDrawing.DrawingManager Instanz
-var _drawSelected    = null;  // aktuell ausgewählte Zeichnung (für Tastatur-Löschung)
+var _drawSelected    = null;  // zuletzt ausgewählte Zeichnung
+var _multiSelected   = new Set(); // alle per Ctrl+Klick ausgewählten Zeichnungen
+var _lastClickCtrl   = false;
 var _activeToolType  = null;  // aktiver Tool-Typ (kebab-case)
 var _pendingAnchors  = [];    // Ankerpunkte während der Zeichnung
 var _previewDrawing  = null;  // temporäre Vorschau-Zeichnung
@@ -931,19 +933,29 @@ if (drawingManager && typeof drawingManager.getAllDrawings === 'function') {
 
 var _DASH_PATTERNS = [[], [8, 4], [2, 4]];
 
-function applyDrawingColor(hex) {
+function _getTargets() {
+    if (_multiSelected.size > 0) return Array.from(_multiSelected);
     var d = _drawSelected || (drawingManager && drawingManager.getSelectedDrawing && drawingManager.getSelectedDrawing());
-    if (!d) return;
+    return d ? [d] : [];
+}
+
+function applyDrawingColor(hex) {
+    var targets = _getTargets();
+    if (!targets.length) return;
     var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-    d.updateStyle({ lineColor: hex, labelColor: hex, fillColor: 'rgba(' + r + ',' + g + ',' + b + ',0.1)' });
-    saveDrawingWithText(d);
+    targets.forEach(function(d) {
+        d.updateStyle({ lineColor: hex, labelColor: hex, fillColor: 'rgba(' + r + ',' + g + ',' + b + ',0.1)' });
+        saveDrawingWithText(d);
+    });
 }
 
 function applyDrawingDash(idx) {
-    var d = _drawSelected || (drawingManager && drawingManager.getSelectedDrawing && drawingManager.getSelectedDrawing());
-    if (!d) return;
-    d.updateStyle({ lineDash: _DASH_PATTERNS[idx] });
-    saveDrawingWithText(d);
+    var targets = _getTargets();
+    if (!targets.length) return;
+    targets.forEach(function(d) {
+        d.updateStyle({ lineDash: _DASH_PATTERNS[idx] });
+        saveDrawingWithText(d);
+    });
     [0, 1, 2].forEach(function(i) {
         var b = document.getElementById('dsDash' + i);
         if (b) b.classList.toggle('util-active', i === idx);
@@ -1022,6 +1034,7 @@ function initDrawingManager() {
 
     _dmContainer.addEventListener('mousedown', function(e) {
         if (!drawingManager) return;
+        _lastClickCtrl = e.ctrlKey || e.metaKey;
         var rect = _dmContainer.getBoundingClientRect();
         var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
@@ -1033,6 +1046,7 @@ function initDrawingManager() {
         if (_activeToolType) return; // creating a new drawing — don't intercept
 
         var hit = drawingManager.hitTest(pt);
+        if (!hit && !_lastClickCtrl) _multiSelected.clear();
         if (hit) {
             chart.applyOptions({ handleScroll: false, handleScale: false });
             var ts = chart.timeScale();
@@ -1144,6 +1158,8 @@ function initDrawingManager() {
     });
     drawingManager.on('drawing:selected', function(evt) {
         _drawSelected = evt && (evt.drawing || null);
+        if (!_lastClickCtrl) _multiSelected.clear();
+        if (_drawSelected) _multiSelected.add(_drawSelected);
         if (_drawSelected && _drawSelected.style) {
             var inp = document.getElementById('dsColor');
             var c = _drawSelected.style.lineColor || '#2962ff';
@@ -1151,8 +1167,15 @@ function initDrawingManager() {
             _syncDashButtons(_drawSelected.style.lineDash);
         }
     });
-    drawingManager.on('drawing:deselected', function() {
-        _drawSelected = null;
+    drawingManager.on('drawing:deselected', function(evt) {
+        var d = evt && (evt.drawing || null);
+        if (!_lastClickCtrl) {
+            _drawSelected = null;
+            _multiSelected.clear();
+        } else if (d) {
+            // Ctrl gehalten: aus Menge entfernen statt alles leeren
+            _multiSelected.delete(d);
+        }
     });
     drawingManager.on('drawing:updated', function(evt) {
         var d = evt && (evt.drawing || null);
@@ -1389,10 +1412,12 @@ document.addEventListener('keydown', function(e) {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement && document.activeElement.tagName)) return;
     if (e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
-    // Delete/Backspace → ausgewählte Zeichnung löschen
-    if ((e.key === 'Delete' || e.key === 'Backspace') && _drawSelected) {
-        if (drawingManager) drawingManager.removeDrawing(_drawSelected.id);
+    // Delete/Backspace → ausgewählte Zeichnung(en) löschen
+    if ((e.key === 'Delete' || e.key === 'Backspace') && (_multiSelected.size > 0 || _drawSelected)) {
+        var toDelete = _multiSelected.size > 0 ? Array.from(_multiSelected) : (_drawSelected ? [_drawSelected] : []);
+        toDelete.forEach(function(d) { if (drawingManager) drawingManager.removeDrawing(d.id); });
         _drawSelected = null;
+        _multiSelected.clear();
     }
     // Escape → Zeichnungsmodus beenden
     if (e.key === 'Escape') {
