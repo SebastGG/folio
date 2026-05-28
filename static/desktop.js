@@ -1018,7 +1018,6 @@ function initDrawingManager() {
                 origAnchors: hit.anchors.map(function(a) { return { time: a.time, price: a.price }; })
             };
             _xlateActive = false;
-            e.stopPropagation();
         }
     }, true);
 
