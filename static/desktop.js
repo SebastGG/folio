@@ -929,12 +929,33 @@ if (drawingManager && typeof drawingManager.getAllDrawings === 'function') {
     }
 }
 
+var _DASH_PATTERNS = [[], [8, 4], [2, 4]];
+
 function applyDrawingColor(hex) {
     var d = _drawSelected || (drawingManager && drawingManager.getSelectedDrawing && drawingManager.getSelectedDrawing());
     if (!d) return;
     var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
     d.updateStyle({ lineColor: hex, labelColor: hex, fillColor: 'rgba(' + r + ',' + g + ',' + b + ',0.1)' });
     saveDrawingWithText(d);
+}
+
+function applyDrawingDash(idx) {
+    var d = _drawSelected || (drawingManager && drawingManager.getSelectedDrawing && drawingManager.getSelectedDrawing());
+    if (!d) return;
+    d.updateStyle({ lineDash: _DASH_PATTERNS[idx] });
+    saveDrawingWithText(d);
+    [0, 1, 2].forEach(function(i) {
+        var b = document.getElementById('dsDash' + i);
+        if (b) b.classList.toggle('util-active', i === idx);
+    });
+}
+
+function _syncDashButtons(lineDash) {
+    var pattern = JSON.stringify(lineDash || []);
+    [0, 1, 2].forEach(function(i) {
+        var b = document.getElementById('dsDash' + i);
+        if (b) b.classList.toggle('util-active', JSON.stringify(_DASH_PATTERNS[i]) === pattern);
+    });
 }
 
 // Kebab-Type → Klassen-Name für importDrawings-Factory
@@ -1123,10 +1144,11 @@ function initDrawingManager() {
     });
     drawingManager.on('drawing:selected', function(evt) {
         _drawSelected = evt && (evt.drawing || null);
-        var inp = document.getElementById('dsColor');
-        if (inp && _drawSelected && _drawSelected.style) {
+        if (_drawSelected && _drawSelected.style) {
+            var inp = document.getElementById('dsColor');
             var c = _drawSelected.style.lineColor || '#2962ff';
-            if (/^#[0-9a-fA-F]{6}$/.test(c)) inp.value = c;
+            if (inp && /^#[0-9a-fA-F]{6}$/.test(c)) inp.value = c;
+            _syncDashButtons(_drawSelected.style.lineDash);
         }
     });
     drawingManager.on('drawing:deselected', function() {

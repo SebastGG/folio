@@ -166,6 +166,8 @@ header {
   font-size: 6px; opacity: 0.45; line-height: 1; pointer-events: none;
 }
 .ds-delete:hover { color: var(--red); }
+.ds-dash { font-size: 11px; letter-spacing: -1px; }
+.ds-dash.util-active { color: #2962ff; background: rgba(41,98,255,0.08); }
 .ds-color {
   width: 28px; height: 28px; border: 1px solid var(--border);
   border-radius: 4px; cursor: pointer; padding: 2px;

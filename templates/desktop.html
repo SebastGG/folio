@@ -242,6 +242,9 @@
         <div class="ds-spacer"></div>
         <div class="ds-divider"></div>
         <input type="color" id="dsColor" class="ds-color" value="#2962ff" title="Farbe der ausgewählten Zeichnung" oninput="applyDrawingColor(this.value)">
+        <button class="ds-btn ds-dash" id="dsDash0" onclick="applyDrawingDash(0)" title="Durchgezogen">—</button>
+        <button class="ds-btn ds-dash" id="dsDash1" onclick="applyDrawingDash(1)" title="Gestrichelt">╌</button>
+        <button class="ds-btn ds-dash" id="dsDash2" onclick="applyDrawingDash(2)" title="Gepunktet">·····</button>
         <div class="ds-divider"></div>
         <button class="ds-btn ds-util" id="dsSnap" onclick="toggleSnap()" title="Magnet (Snap zu Kurs)">🧲</button>
         <button class="ds-btn ds-util" id="dsLock" onclick="toggleDrawLock()" title="Zeichnungen sperren">🔒</button>
