@@ -922,18 +922,11 @@ function toggleDrawVisibility() {
     _drawVisible = !_drawVisible;
     var btn = document.getElementById('dsVis');
     if (btn) btn.classList.toggle('util-active', !_drawVisible);
+    var tbBtn = document.getElementById('btn-draw-toggle');
+    if (tbBtn) tbBtn.classList.toggle('active', _drawVisible);
     if (drawingManager && typeof drawingManager.setVisible === 'function') {
         drawingManager.setVisible(_drawVisible);
     }
-}
-
-function toggleDrawMode() {
-    var sidebar = document.getElementById('drawSidebar');
-    var btn = document.getElementById('btn-draw-toggle');
-    if (!sidebar) return;
-    var nowHidden = sidebar.classList.toggle('hidden');
-    if (btn) btn.classList.toggle('active', !nowHidden);
-    if (nowHidden) setDrawTool(null);
 }
 
 // Kebab-Type → Klassen-Name für importDrawings-Factory
