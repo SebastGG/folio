@@ -242,6 +242,8 @@
         <!-- Untere Hilfswerkzeuge -->
         <div class="ds-spacer"></div>
         <div class="ds-divider"></div>
+        <input type="color" id="dsColor" class="ds-color" value="#2962ff" title="Farbe der ausgewählten Zeichnung" oninput="applyDrawingColor(this.value)">
+        <div class="ds-divider"></div>
         <button class="ds-btn ds-util" id="dsSnap" onclick="toggleSnap()" title="Magnet (Snap zu Kurs)">🧲</button>
         <button class="ds-btn ds-util" id="dsLock" onclick="toggleDrawLock()" title="Zeichnungen sperren">🔒</button>
         <button class="ds-btn ds-util" id="dsVis" onclick="toggleDrawVisibility()" title="Zeichnungen ein/ausblenden">👁</button>

@@ -931,6 +931,14 @@ function toggleDrawVisibility() {
     }
 }
 
+function applyDrawingColor(hex) {
+    var d = _drawSelected || (drawingManager && drawingManager.getSelectedDrawing && drawingManager.getSelectedDrawing());
+    if (!d) return;
+    var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+    d.updateStyle({ lineColor: hex, labelColor: hex, fillColor: 'rgba(' + r + ',' + g + ',' + b + ',0.1)' });
+    saveDrawingWithText(d);
+}
+
 // Kebab-Type → Klassen-Name für importDrawings-Factory
 var _TOOL_CLASS = {
     'line':'TrendLine','trend-line':'TrendLine','extended-line':'ExtendedLine',
@@ -1117,6 +1125,18 @@ function initDrawingManager() {
     });
     drawingManager.on('drawing:selected', function(evt) {
         _drawSelected = evt && (evt.drawing || null);
+        var inp = document.getElementById('dsColor');
+        if (inp && _drawSelected && _drawSelected.style) {
+            var c = _drawSelected.style.lineColor || '#2962ff';
+            if (/^#[0-9a-fA-F]{6}$/.test(c)) inp.value = c;
+        }
+    });
+    drawingManager.on('drawing:deselected', function() {
+        _drawSelected = null;
+    });
+    drawingManager.on('drawing:updated', function(evt) {
+        var d = evt && (evt.drawing || null);
+        if (d && d.id !== '__preview__') saveDrawingWithText(d);
     });
 
     // Doppelklick auf Zeichnung → Text bearbeiten
