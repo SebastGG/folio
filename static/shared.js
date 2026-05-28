@@ -89,7 +89,7 @@ function calcMA(candles, period) {
  * @param {number} stdDev - Anzahl Standardabweichungen für Band
  * @returns {Object} { reg, upper, lower, arr, r2 }
  */
-function calcLogReg(candles, stdDev) {
+function calcLogReg(candles, stdDev, barsPerYear) {
     if (candles.length < 10) return null;
     var n = candles.length;
     var xs = candles.map(function(_, i) { return i; });
@@ -116,8 +116,8 @@ function calcLogReg(candles, stdDev) {
     // Standardabweichung der Residuen
     var se = Math.sqrt(ssRes / (n - 2));
 
-    // ARR = Annual Rate of Return (Tageskurs-Steigung × 252 Handelstage)
-    var arr = ((Math.exp(slope * 252) - 1) * 100).toFixed(1);
+    // ARR = Annual Rate of Return (Steigung × Bars pro Jahr)
+    var arr = ((Math.exp(slope * (barsPerYear || 252)) - 1) * 100).toFixed(1);
 
     var reg = [], upper = [], lower = [];
     candles.forEach(function(c, i) {
@@ -630,7 +630,8 @@ function applyPeriod() {
         var regN = regPeriodEl ? Math.max(5, parseInt(regPeriodEl.value, 10) || 12) : 12;
         var regCandles = agg.slice(-regN);
         if (regCandles.length < 10) regCandles = agg;
-        regResult = calcLogReg(regCandles, 2);
+        var bpy = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+        regResult = calcLogReg(regCandles, 2, bpy);
     }
 
     // 5. Desktop Chart rendern (desktop.js stellt renderDesktopChart bereit)

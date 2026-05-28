@@ -436,6 +436,10 @@ function refreshTradeMarkers() {
 function renderDesktopChart(colored, volAgg, agg, regResult) {
     if (!chart || !csSeries) return;
 
+    // Reg-Serien zuerst updaten — verhindert dass LWC den Zeitstrich auf tägliche
+    // Granularität setzt bevor die Kerzen auf Wochen/Monats-TF umgeschaltet werden.
+    applyLogReg(regResult, regS, regUS, regLS);
+
     // Kerzen
     csSeries.setData(colored);
 
@@ -513,9 +517,6 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
             ma200S.applyOptions({ visible: false });
         }
     }
-
-    // LogReg
-    applyLogReg(regResult, regS, regUS, regLS);
 
     // Log-Skala
     chart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });

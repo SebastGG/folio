@@ -362,6 +362,18 @@ function refreshMobileTradeMarkers() {
 function renderMobileChart(colored, volAgg, agg, regResult) {
     if (!mChart || !mCs) return;
 
+    // Reg-Serien zuerst updaten (siehe renderDesktopChart)
+    if (mReg) {
+        if (regResult) {
+            mReg.applyOptions({ visible: true, title: 'ARR: ' + regResult.arr + '%' });
+            mReg.setData(regResult.reg);
+            if (mRegU) { mRegU.applyOptions({ visible: true }); mRegU.setData(regResult.upper); }
+            if (mRegL) { mRegL.applyOptions({ visible: true }); mRegL.setData(regResult.lower); }
+        } else {
+            [mReg, mRegU, mRegL].forEach(function(s) { if (s) s.applyOptions({ visible: false }); });
+        }
+    }
+
     mCs.setData(colored);
 
     // IBKR Einstandskurs + Trade-Marker
@@ -394,18 +406,6 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
 
     if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });   if (indicators.ma50)  mMa50.setData(calcMA(agg, 50)); }
     if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 });  if (indicators.ma200) mMa200.setData(calcMA(agg, 200)); }
-
-    // LogReg
-    if (mReg) {
-        if (regResult) {
-            mReg.applyOptions({ visible: true, title: 'ARR: ' + regResult.arr + '%' });
-            mReg.setData(regResult.reg);
-            if (mRegU) { mRegU.applyOptions({ visible: true }); mRegU.setData(regResult.upper); }
-            if (mRegL) { mRegL.applyOptions({ visible: true }); mRegL.setData(regResult.lower); }
-        } else {
-            [mReg, mRegU, mRegL].forEach(function(s) { if (s) s.applyOptions({ visible: false }); });
-        }
-    }
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
     if (_mSavedLogicalRange !== null) {
