@@ -204,7 +204,7 @@ function initChart() {
             horzLines: { color: 'rgba(0,0,0,0.05)' },
         },
         timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12 },
-        rightPriceScale: { borderVisible: false },
+        rightPriceScale: { borderVisible: false, autoScale: false },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
 
@@ -570,14 +570,21 @@ function generateFutureDates(lastDate, tf, count) {
 }
 
 function fitWithFuture() {
-    if (!chart) return;
+    if (!chart || !csSeries) return;
+    csSeries.priceScale().applyOptions({ autoScale: true });
     chart.timeScale().fitContent();
+    requestAnimationFrame(function() {
+        if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
+    });
 }
 
 function fitView() {
     fitChart();
     if (!chart || !csSeries) return;
     csSeries.priceScale().applyOptions({ autoScale: true });
+    requestAnimationFrame(function() {
+        if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
+    });
     var candles = allCandles;
     if (!candles || !candles.length) { chart.timeScale().fitContent(); return; }
     var toDate   = candles[candles.length - 1].time;
