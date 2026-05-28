@@ -924,8 +924,10 @@ function toggleDrawVisibility() {
     if (btn) btn.classList.toggle('util-active', !_drawVisible);
     var tbBtn = document.getElementById('btn-draw-toggle');
     if (tbBtn) tbBtn.classList.toggle('active', _drawVisible);
-    if (drawingManager && typeof drawingManager.setVisible === 'function') {
-        drawingManager.setVisible(_drawVisible);
+    if (drawingManager && typeof drawingManager.getAllDrawings === 'function') {
+        drawingManager.getAllDrawings().forEach(function(d) {
+            d.options = Object.assign({}, d.options, { visible: _drawVisible });
+        });
     }
 }
 
