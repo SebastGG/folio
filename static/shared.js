@@ -1039,6 +1039,8 @@ async function switchBasket(id) {
     updateDerivedConfig();
     if (typeof renderBasketSelect === 'function') renderBasketSelect();
     if (typeof updateChartTitle   === 'function') updateChartTitle();
+    if (typeof syncUIState        === 'function') syncUIState();
+    if (typeof renderWatchlist    === 'function') renderWatchlist();
     allCandles  = [];
     currentView = basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index');
     drawings    = [];

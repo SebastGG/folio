@@ -613,6 +613,24 @@ function applyLogReg(regResult, rS, rUS, rLS) {
 }
 
 
+function syncUIState() {
+    var periodLabels = { 30: '1M', 90: '3M', 180: '6M', 365: '1J', 0: 'All' };
+    var grp = document.getElementById('period-btns');
+    if (grp) grp.querySelectorAll('.btn').forEach(function(b) {
+        b.classList.toggle('active', b.textContent === (periodLabels[currentPeriod] || ''));
+    });
+    ['1D', '1W', '1M'].forEach(function(t) {
+        var b = document.getElementById('tf' + t);
+        if (b) b.classList.toggle('active', t === currentTF);
+    });
+    ['ma50', 'ma200', 'reg'].forEach(function(n) {
+        var b = document.getElementById('b' + n);
+        if (b) b.classList.toggle('ind-active', !!indicators[n]);
+    });
+    var blog = document.getElementById('blog');
+    if (blog) blog.classList.toggle('ind-active', !!logScale);
+}
+
 // ╔══════════════════════════════════════════════════════════╗
 // ║  5. WATCHLIST & SIDEBAR                                   ║
 // ╚══════════════════════════════════════════════════════════╝

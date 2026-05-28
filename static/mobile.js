@@ -576,6 +576,8 @@ function syncMobileNotes() {
     if (src && dst) dst.value = src.value || '';
 }
 
+function syncUIState() { syncMobileInd(); }
+
 // ── Indikatoren ────────────────────────────────────────────
 function syncMobileInd() {
     var activeStyle   = 'font-family:inherit;font-size:12px;padding:12px 18px;border:1px solid #555;background:#555;color:white;cursor:pointer;border-radius:4px;touch-action:manipulation;min-height:44px;';
