@@ -1197,6 +1197,19 @@ function initDrawingManager() {
     });
 }
 
+// Mappt ein Datum auf den nächsten vorhandenen Bar (für TF-übergreifende Drawings)
+function _snapAnchorTime(time) {
+    if (!_lastCandles || !_lastCandles.length || currentTF === '1D') return time;
+    var tMs = new Date(time).getTime();
+    var best = _lastCandles[0].time, bestDiff = Infinity;
+    for (var i = 0; i < _lastCandles.length; i++) {
+        var diff = Math.abs(new Date(_lastCandles[i].time).getTime() - tMs);
+        if (diff < bestDiff) { bestDiff = diff; best = _lastCandles[i].time; }
+        else break; // Array ist aufsteigend sortiert
+    }
+    return best;
+}
+
 // Wird von shared.js loadDrawings() aufgerufen
 function onDrawingsLoaded(data) {
     if (!drawingManager) return;
@@ -1208,7 +1221,10 @@ function onDrawingsLoaded(data) {
             if (!lcd) return null;
             var Cls = lcd[_TOOL_CLASS[type]];
             if (typeof Cls !== 'function') return null;
-            try { return new Cls(d.id, d.anchors || [], d.style || {}, d.options || {}); }
+            var anchors = (d.anchors || []).map(function(a) {
+                return { time: _snapAnchorTime(a.time), price: a.price };
+            });
+            try { return new Cls(d.id, anchors, d.style || {}, d.options || {}); }
             catch(e) { console.warn('importDrawings factory:', type, e); return null; }
         });
     } catch(e) { console.warn('importDrawings failed:', e); }

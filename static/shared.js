@@ -666,6 +666,7 @@ function setTF(tf) {
         currentPeriod = 0; // All
     }
     applyPeriod();
+    loadDrawings(); // Anker auf neue TF-Bars snappen
     markUnsaved();
 }
 
