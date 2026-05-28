@@ -203,7 +203,7 @@ function initChart() {
             vertLines: { color: 'rgba(0,0,0,0.05)' },
             horzLines: { color: 'rgba(0,0,0,0.05)' },
         },
-        timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12 },
+        timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12, fixLeftEdge: false, fixRightEdge: false },
         rightPriceScale: { borderVisible: false, autoScale: false },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
@@ -925,6 +925,15 @@ function toggleDrawVisibility() {
     if (drawingManager && typeof drawingManager.setVisible === 'function') {
         drawingManager.setVisible(_drawVisible);
     }
+}
+
+function toggleDrawMode() {
+    var sidebar = document.getElementById('drawSidebar');
+    var btn = document.getElementById('btn-draw-toggle');
+    if (!sidebar) return;
+    var nowHidden = sidebar.classList.toggle('hidden');
+    if (btn) btn.classList.toggle('active', !nowHidden);
+    if (nowHidden) setDrawTool(null);
 }
 
 // Kebab-Type → Klassen-Name für importDrawings-Factory

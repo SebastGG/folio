@@ -182,7 +182,7 @@ function initMobileChart() {
             vertLines: { color: 'rgba(0,0,0,0.05)' },
             horzLines: { color: 'rgba(0,0,0,0.05)' },
         },
-        timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12 },
+        timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12, fixLeftEdge: false, fixRightEdge: false },
         rightPriceScale: { borderVisible: false },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
