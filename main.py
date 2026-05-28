@@ -820,7 +820,10 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
     if positions:
-        conn.executemany("INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?)", positions)
+        conn.executemany(
+            "INSERT OR REPLACE INTO positions "
+            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base) "
+            "VALUES (?,?,?,?,?,?,?,?,?)", positions)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
