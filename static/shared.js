@@ -776,7 +776,11 @@ async function loadDbTickers() {
  * Aktualisiert alle Ticker-Preise via Yahoo Finance.
  */
 async function updateAllPrices() {
-    var tickers = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) > 0; });
+    var _allT = new Set();
+    Object.values(baskets).forEach(function(b) {
+        Object.keys(b.weights || {}).forEach(function(s) { if ((b.weights[s] || 0) > 0) _allT.add(s); });
+    });
+    var tickers = Array.from(_allT);
     if (tickers.length === 0) return;
     try {
         var r = await fetch('/api/prices/update', {
