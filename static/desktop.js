@@ -394,9 +394,15 @@ function refreshTradeMarkers() {
         });
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
-            var qty = g.qty === Math.floor(g.qty) ? g.qty : g.qty.toFixed(1);
+            var fmt = function(n) { return n === Math.floor(n) ? n : n.toFixed(1); };
             var pos = dateRunning[g.date];
-            var posStr = pos !== undefined ? ' →' + (pos === Math.floor(pos) ? pos : pos.toFixed(1)) : '';
+            var label;
+            if (pos !== undefined) {
+                var from = g.isBuy ? pos - g.qty : pos + g.qty;
+                label = fmt(from) + (g.isBuy ? ' +' : ' -') + fmt(g.qty) + '→' + fmt(pos);
+            } else {
+                label = (g.isBuy ? '+' : '-') + fmt(g.qty);
+            }
             var _pos = g.isBuy ? 'belowBar' : 'aboveBar';
             markers.push({
                 time: g.date, position: _pos,
@@ -408,7 +414,7 @@ function refreshTradeMarkers() {
                 time: g.date, position: _pos,
                 color: '#000000',
                 shape: g.isBuy ? 'arrowUp' : 'arrowDown',
-                text: (g.isBuy ? 'K ' : 'V ') + qty + posStr,
+                text: label,
                 size: 0,
             });
         });

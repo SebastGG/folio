@@ -292,19 +292,43 @@ function refreshMobileTradeMarkers() {
     if (!mCs) return;
     var markers = [];
     if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        var agg = {};
-        ibkrTrades.filter(function(t) {
+        var relevantTrades = ibkrTrades.filter(function(t) {
             return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
-        }).forEach(function(t) {
+        }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
+        var posRow = ibkrPositions && ibkrPositions.find(function(p) {
+            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+        });
+        var currentQty = posRow ? posRow.quantity : null;
+        var totalTraded = relevantTrades.reduce(function(s, t) {
+            return s + ((t.action || '').toUpperCase().indexOf('BUY') >= 0 ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
+        }, 0);
+        var runningQty = currentQty !== null ? currentQty - totalTraded : null;
+        var dateRunning = {};
+        relevantTrades.forEach(function(t) {
+            if (!t.trade_date || runningQty === null) return;
+            var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+            runningQty += buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0);
+            dateRunning[t.trade_date] = runningQty;
+        });
+        var agg = {};
+        relevantTrades.forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             var key = t.trade_date + (isBuy ? '_B' : '_S');
             if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0 };
             agg[key].qty += Math.abs(t.quantity || 0);
         });
+        var fmt = function(n) { return n === Math.floor(n) ? n : n.toFixed(1); };
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
-            var qty = g.qty === Math.floor(g.qty) ? g.qty : g.qty.toFixed(1);
+            var pos = dateRunning[g.date];
+            var label;
+            if (pos !== undefined) {
+                var from = g.isBuy ? pos - g.qty : pos + g.qty;
+                label = fmt(from) + (g.isBuy ? ' +' : ' -') + fmt(g.qty) + '→' + fmt(pos);
+            } else {
+                label = (g.isBuy ? '+' : '-') + fmt(g.qty);
+            }
             var _pos = g.isBuy ? 'belowBar' : 'aboveBar';
             markers.push({
                 time: g.date, position: _pos,
@@ -316,7 +340,7 @@ function refreshMobileTradeMarkers() {
                 time: g.date, position: _pos,
                 color: '#000000',
                 shape: g.isBuy ? 'arrowUp' : 'arrowDown',
-                text: (g.isBuy ? 'K ' : 'V ') + qty,
+                text: label,
                 size: 0,
             });
         });
