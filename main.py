@@ -27,6 +27,9 @@ import time
 import sqlite3
 import shutil
 import tempfile
+import base64
+import asyncio
+import urllib.request as _urlreq
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -44,6 +47,21 @@ else:
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
 
 load_dotenv("/app/data/.env", override=True)
+
+_IBKR_GATEWAY_URL = (os.environ.get("IBKR_GATEWAY_URL") or "").rstrip("/")
+
+def _ibkr_gateway_request(path: str, method: str = "GET", data: bytes | None = None, timeout: int = 10):
+    """HTTP request to IBKR Client Portal Gateway with Basic Auth."""
+    api_user = os.environ.get("IBKR_API_USER", "api")
+    api_pass = os.environ.get("IBKR_API_PASSWORD", "")
+    creds    = base64.b64encode(f"{api_user}:{api_pass}".encode()).decode()
+    req = _urlreq.Request(
+        f"{_IBKR_GATEWAY_URL}{path}",
+        headers={"Authorization": f"Basic {creds}", "Accept": "application/json"},
+        method=method,
+        data=data,
+    )
+    return _urlreq.urlopen(req, timeout=timeout)
 
 
 _manifest_path = os.path.join(os.path.dirname(__file__), "CloudronManifest.json")
@@ -127,6 +145,11 @@ def init_db(db_file: str):
     conn.execute('''CREATE TABLE IF NOT EXISTS ticker_currency (
         ticker   TEXT PRIMARY KEY,
         currency TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticker_conid (
+        ticker     TEXT PRIMARY KEY,
+        conid      INTEGER,
+        fetched_at INTEGER
     )''')
     conn.commit()
     conn.close()
@@ -494,41 +517,7 @@ async def get_logos(request: Request):
     conn.commit()
     return JSONResponse(content=result)
 
-# ── IBKR Flex Query Integration ────────────────────────────────────────────────
-
-try:
-    from cryptography.fernet import Fernet as _Fernet
-    _CRYPTO_OK = True
-except ImportError:
-    _CRYPTO_OK = False
-
-def _get_ibkr_key(data_dir: str) -> bytes:
-    """Gibt Fernet-Key für IBKR-Verschlüsselung zurück, erstellt ihn bei Bedarf."""
-    key_file = os.path.join(data_dir, "ibkr.key")
-    if os.path.exists(key_file):
-        with open(key_file, "rb") as f:
-            return f.read().strip()
-    if not _CRYPTO_OK:
-        return b""
-    from cryptography.fernet import Fernet
-    key = Fernet.generate_key()
-    with open(key_file, "wb") as f:
-        f.write(key)
-    return key
-
-def _ibkr_encrypt(text: str, data_dir: str) -> str:
-    if not _CRYPTO_OK:
-        import base64
-        return base64.b64encode(text.encode()).decode()
-    from cryptography.fernet import Fernet
-    return Fernet(_get_ibkr_key(data_dir)).encrypt(text.encode()).decode()
-
-def _ibkr_decrypt(token: str, data_dir: str) -> str:
-    if not _CRYPTO_OK:
-        import base64
-        return base64.b64decode(token.encode()).decode()
-    from cryptography.fernet import Fernet
-    return Fernet(_get_ibkr_key(data_dir)).decrypt(token.encode()).decode()
+# ── IBKR Client Portal Gateway ─────────────────────────────────────────────────
 
 def _init_ibkr_tables(db_file: str):
     """Erstellt IBKR-Tabellen falls nicht vorhanden."""
@@ -542,24 +531,19 @@ def _init_ibkr_tables(db_file: str):
         position_value   REAL,
         asset_class      TEXT,
         last_sync        TEXT,
-        fx_rate_to_base  REAL DEFAULT 1.0
+        fx_rate_to_base  REAL DEFAULT 1.0,
+        conid            INTEGER,
+        yahoo_symbol     TEXT
     )''')
-    try:
-        conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE positions ADD COLUMN yahoo_symbol TEXT")
-    except Exception:
-        pass
+    for col, typ in [("fx_rate_to_base", "REAL DEFAULT 1.0"), ("conid", "INTEGER"), ("yahoo_symbol", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE positions ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
     conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
         currency    TEXT PRIMARY KEY,
         ending_cash REAL,
         last_sync   TEXT
-    )''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS ibkr_config (
-        key   TEXT PRIMARY KEY,
-        value TEXT
     )''')
     conn.execute('''CREATE TABLE IF NOT EXISTS trades (
         transaction_id TEXT PRIMARY KEY,
@@ -578,276 +562,148 @@ def _init_ibkr_tables(db_file: str):
     conn.commit()
     conn.close()
 
-@app.get("/api/ibkr/config/status")
-async def ibkr_config_status(request: Request):
-    """Gibt zurück ob IBKR konfiguriert ist (ohne Credentials zu senden)."""
-    user  = get_user(request)
-    files = get_user_files(user)
-    _init_ibkr_tables(files["db"])
-    conn  = get_db(files["db"])
-    keys  = {r["key"] for r in conn.execute("SELECT key FROM ibkr_config").fetchall()}
-    conn.close()
-    return JSONResponse(content={"configured": "flex_token" in keys and "query_id" in keys})
 
-@app.post("/api/ibkr/config")
-async def set_ibkr_config(request: Request):
-    """Speichert Flex Token + Query ID AES-verschlüsselt."""
-    user  = get_user(request)
-    files = get_user_files(user)
-    _init_ibkr_tables(files["db"])
-    body  = await request.json()
-    token = (body.get("flex_token") or "").strip()
-    qid   = (body.get("query_id")   or "").strip()
-    if not token or not qid:
-        return JSONResponse({"ok": False, "error": "flex_token und query_id erforderlich"}, status_code=400)
-    enc_token = _ibkr_encrypt(token, files["data_dir"])
-    enc_qid   = _ibkr_encrypt(qid,   files["data_dir"])
-    conn = get_db(files["db"])
-    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('flex_token', ?)", (enc_token,))
-    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id',   ?)", (enc_qid,))
-    conn.commit()
-    conn.close()
-    return JSONResponse({"ok": True})
-
-def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
-    """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
-    import csv as csv_mod
+def _do_ibkr_gateway_sync(db_file: str) -> dict:
+    """Sync Positionen + Cash via IBKR Client Portal Gateway API."""
     import datetime as dt_
-    import time as time_
-    import urllib.request as urlreq
     import urllib.error
 
-    conn = get_db(db_file)
-    cfg  = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
-    conn.close()
+    if not _IBKR_GATEWAY_URL:
+        return {"ok": False, "error": "IBKR_GATEWAY_URL nicht konfiguriert"}
 
-    if "flex_token" not in cfg or "query_id" not in cfg:
-        return {"ok": False, "error": "IBKR nicht konfiguriert"}
-
-    flex_token = _ibkr_decrypt(cfg["flex_token"], data_dir)
-    query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
-
-    # Step 1: SendRequest → ReferenceCode (bis zu 3 Versuche, 10s Pause)
-    url1 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest?v=3&t={flex_token}&q={query_id}"
-    ref_code = None
-    last_err  = ""
-    for attempt1 in range(3):
-        try:
-            req1 = urlreq.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
-            with urlreq.urlopen(req1, timeout=30) as resp:
-                xml1 = resp.read().decode("utf-8")
-        except urllib.error.URLError as e:
-            last_err = f"SendRequest fehlgeschlagen: {e}"
-            if attempt1 < 2:
-                time_.sleep(10)
-                continue
-            return {"ok": False, "error": last_err}
-
-        print(f"[IBKR] SendRequest Antwort (Versuch {attempt1+1}): {xml1[:500]}")
-        m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
-        if m:
-            ref_code = m.group(1)
-            break
-
-        err_m   = re.search(r"<ErrorMessage>([^<]+)</ErrorMessage>", xml1)
-        last_err = err_m.group(1) if err_m else xml1[:300]
-        if attempt1 < 2:
-            time_.sleep(10)
-
-    if not ref_code:
-        return {"ok": False, "error": f"Kein ReferenceCode: {last_err}"}
-
-    # Step 2: GetStatement — retry bis zu 5× bei "Processing"
-    csv_text = None
-    for attempt in range(5):
-        url2 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement?v=3&t={flex_token}&q={ref_code}"
-        try:
-            req2 = urlreq.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
-            with urlreq.urlopen(req2, timeout=30) as resp:
-                content = resp.read().decode("utf-8")
-        except urllib.error.URLError as e:
-            return {"ok": False, "error": f"GetStatement fehlgeschlagen: {e}"}
-
-        if "<ErrorCode>1019</ErrorCode>" in content or "<Status>Processing</Status>" in content:
-            if attempt < 4:
-                time_.sleep(5)
-                continue
-            return {"ok": False, "error": "IBKR verarbeitet noch — bitte in 30s erneut versuchen"}
-        csv_text = content
-        break
-
-    if not csv_text:
-        return {"ok": False, "error": "Leere Antwort von IBKR"}
-
-    # Spalten-Indizes dynamisch aus HEADER-Zeilen ermitteln
-    section_headers: dict = {}
-
-    positions  = []
-    cash_rows  = []
-    trade_rows = []
     now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    for raw_line in csv_text.splitlines():
-        if not raw_line.strip():
-            continue
+    # 1 — Konto-ID ermitteln
+    try:
+        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=15) as resp:
+            accounts = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": f"Gateway accounts {e.code}: {e.read().decode()[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Gateway nicht erreichbar: {e}"}
+
+    if not accounts:
+        return {"ok": False, "error": "Keine IBKR Konten — ist das Gateway eingeloggt?"}
+
+    acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
+    if not acct_id:
+        return {"ok": False, "error": f"Kein accountId im Gateway-Response: {accounts[0]}"}
+    print(f"[IBKR GW] Konto: {acct_id}")
+
+    # 2 — Positionen seitenweise abrufen
+    raw_positions = []
+    for page in range(50):
+        params = "?invalidatecache=1" if page == 0 else ""
         try:
-            reader = csv_mod.reader([raw_line])
-            parts  = next(reader)
-        except Exception:
-            continue
-        if len(parts) < 2:
-            continue
-        row_type = parts[0]
-        section  = parts[1]
+            with _ibkr_gateway_request(
+                f"/v1/api/portfolio/{acct_id}/positions/{page}{params}", timeout=20
+            ) as resp:
+                page_data = json.loads(resp.read().decode())
+        except Exception as e:
+            print(f"[IBKR GW] Positionen Seite {page} Fehler: {e}")
+            break
+        if not page_data:
+            break
+        raw_positions.extend(page_data)
+        if len(page_data) < 30:
+            break
 
-        if row_type == "HEADER":
-            section_headers[section] = {name: i for i, name in enumerate(parts)}
-            print(f"[IBKR] Sektion gefunden: {section} ({len(parts)} Spalten)")
-            continue
-        if row_type != "DATA":
-            continue
+    print(f"[IBKR GW] {len(raw_positions)} Positionen empfangen")
 
-        cols = section_headers.get(section)
-        if not cols:
-            continue
+    # 3 — Ledger: Cash-Salden + FX-Kurse
+    fx_rates: dict[str, float] = {}
+    cash_rows = []
+    try:
+        with _ibkr_gateway_request(f"/v1/api/portfolio/{acct_id}/ledger", timeout=15) as resp:
+            ledger = json.loads(resp.read().decode())
+        for ccy, data in ledger.items():
+            rate = float(data.get("exchangerate") or 1.0)
+            if ccy != "BASE":
+                fx_rates[ccy] = rate
+            cash_bal = float(data.get("cashbalance") or 0.0)
+            cash_rows.append((ccy, cash_bal, now))
+    except Exception as e:
+        print(f"[IBKR GW] Ledger Fehler (nicht fatal): {e}")
 
-        # ── CRTT: Cash Report ──────────────────────────────────────────
-        if section == "CRTT":
-            i_cur = cols.get("CurrencyPrimary", -1)
-            i_lod = cols.get("LevelOfDetail",   -1)
-            i_ec  = cols.get("EndingCash",       -1)
-            if i_cur < 0 or i_ec < 0:
-                continue
-            lod      = parts[i_lod].strip() if 0 <= i_lod < len(parts) else ""
-            currency = parts[i_cur].strip() if i_cur < len(parts) else ""
-            if not currency:
-                continue
-            # "Currency" → native rows; "BaseCurrency" → total in base stored as "BASE"
-            if lod == "Currency":
-                key = currency
-            elif lod == "BaseCurrency":
-                key = "BASE"
-            else:
-                continue
-            try:
-                ending_cash = float(parts[i_ec].strip() or "0") if i_ec < len(parts) else 0.0
-            except ValueError:
-                continue
-            cash_rows.append((key, ending_cash, now))
-            continue
-
-        # ── TRNT / Trade: Trades ───────────────────────────────────────
-        if section in ("TRNT", "Trade", "Trades"):
-            i_tid  = cols.get("TransactionID", -1)
-            i_sym  = cols.get("Symbol", -1)
-            i_act  = cols.get("Buy/Sell", cols.get("Action", -1))
-            i_qty  = cols.get("Quantity", -1)
-            i_prc  = cols.get("TradePrice", -1)
-            i_val  = cols.get("TradeMoney", cols.get("Proceeds", -1))
-            i_com  = cols.get("IBCommission", -1)
-            i_cur  = cols.get("CurrencyPrimary", cols.get("Currency", -1))
-            i_fx   = cols.get("FXRateToBase", -1)
-            i_dat  = cols.get("TradeDate", -1)
-            i_cls  = cols.get("AssetClass", -1)
-            i_lod  = cols.get("LevelOfDetail", -1)
-            if i_sym < 0 or i_qty < 0 or i_prc < 0:
-                continue
-            # Dividenden/Corporate Actions herausfiltern (kein TradePrice)
-            if i_lod >= 0 and i_lod < len(parts):
-                lod_val = parts[i_lod].strip().upper()
-                if lod_val and lod_val in ("DIVIDENDACCRUAL", "DIVIDEND", "INTEREST"):
-                    continue
-            symbol = parts[i_sym].strip() if i_sym < len(parts) else ""
-            if not symbol:
-                continue
-            try:
-                qty    = float(parts[i_qty].strip().replace(",", "") or "0") if i_qty < len(parts) else 0.0
-                prc    = float(parts[i_prc].strip().replace(",", "") or "0") if i_prc < len(parts) else 0.0
-                val    = float(parts[i_val].strip().replace(",", "") or "0") if 0 <= i_val < len(parts) else 0.0
-                com    = float(parts[i_com].strip().replace(",", "") or "0") if 0 <= i_com < len(parts) else 0.0
-                fx     = float(parts[i_fx ].strip().replace(",", "") or "1") if 0 <= i_fx  < len(parts) else 1.0
-            except ValueError:
-                continue
-            action     = parts[i_act].strip() if 0 <= i_act < len(parts) else ""
-            currency   = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
-            asset_cls  = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
-            # TradeDate: YYYYMMDD → YYYY-MM-DD
-            raw_date   = parts[i_dat].strip() if 0 <= i_dat < len(parts) else ""
-            if len(raw_date) == 8 and raw_date.isdigit():
-                trade_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
-            else:
-                trade_date = raw_date[:10]
-            # TransactionID — Fallback: symbol+date+action+qty
-            if i_tid >= 0 and i_tid < len(parts) and parts[i_tid].strip():
-                tid = parts[i_tid].strip()
-            else:
-                tid = f"{symbol}_{trade_date}_{action}_{qty}_{prc}"
-            trade_rows.append((tid, symbol, action, abs(qty), prc, abs(val), com, currency, fx, trade_date, asset_cls, now))
-            continue
-
-        # ── POST: Positionen ───────────────────────────────────────────
-        i_sym = cols.get("Symbol", -1)
-        i_qty = cols.get("Quantity", cols.get("Position", -1))
-        i_mkp = cols.get("MarkPrice", -1)
-        i_pv  = cols.get("PositionValue", -1)
-        i_cbp = cols.get("CostBasisPrice", cols.get("OpenPrice", -1))
-        i_cbm = cols.get("CostBasisMoney", -1)
-        i_cls = cols.get("AssetClass", -1)
-        i_fx  = cols.get("FXRateToBase", -1)
-
-        if i_sym < 0 or i_qty < 0 or i_mkp < 0:
-            continue
-
-        symbol = parts[i_sym].strip() if i_sym < len(parts) else ""
+    # 4 — Positionen mappen (inkl. conid)
+    position_rows = []
+    for p in raw_positions:
+        symbol = (p.get("symbol") or p.get("contractDesc") or "").strip()
         if not symbol:
             continue
-        try:
-            qty    = float(parts[i_qty].strip() or "0") if i_qty < len(parts) else 0.0
-            mrkp   = float(parts[i_mkp].strip() or "0") if i_mkp < len(parts) else 0.0
-            posval = float(parts[i_pv ].strip() or "0") if 0 <= i_pv  < len(parts) else 0.0
-            cbp    = float(parts[i_cbp].strip() or "0") if 0 <= i_cbp < len(parts) else 0.0
-            cbm    = float(parts[i_cbm].strip() or "0") if 0 <= i_cbm < len(parts) else 0.0
-            fx     = float(parts[i_fx ].strip() or "1") if 0 <= i_fx  < len(parts) else 1.0
-        except ValueError:
-            continue
-        asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
-        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx))
+        qty       = float(p.get("position")      or 0)
+        avg_price = float(p.get("avgPrice")       or 0) or float(p.get("avgCost") or 0)
+        mkt_price = float(p.get("mktPrice")       or 0)
+        mkt_value = float(p.get("mktValue")       or 0)
+        unrealized= float(p.get("unrealizedPnl")  or 0)
+        currency  = (p.get("currency") or "USD").strip()
+        fx        = fx_rates.get(currency, 1.0)
+        cbm       = mkt_value - unrealized
+        asset_cls = (p.get("assetClass") or "STK").strip()
+        conid     = p.get("conid") or None
+        position_rows.append((symbol, qty, avg_price, cbm, mkt_price, mkt_value, asset_cls, now, fx, conid))
 
-    print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
-    if not positions and not cash_rows and not trade_rows:
-        return {"ok": False, "error": "Keine DATA-Zeilen im CSV gefunden — prüfe Flex-Query-Konfiguration"}
+    if not position_rows and not cash_rows:
+        return {"ok": False, "error": "Keine Positionen oder Cash-Daten vom Gateway"}
 
+    # 5 — In DB schreiben
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
-    if positions:
+    if position_rows:
         conn.executemany(
             "INSERT OR REPLACE INTO positions "
-            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base) "
-            "VALUES (?,?,?,?,?,?,?,?,?)", positions)
+            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,conid) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)", position_rows)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
-    if trade_rows:
-        conn.executemany("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
     conn.close()
-    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
+
+    return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "last_sync": now}
 
 
 @app.get("/api/ibkr/sync")
 async def ibkr_sync(request: Request):
-    """IBKR Flex Query: Positionen und Cash-Salden synchronisieren."""
-    import asyncio
+    """IBKR Gateway: Positionen und Cash-Salden synchronisieren."""
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
     try:
         loop   = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_ibkr_sync, files["db"], files["data_dir"])
+        result = await loop.run_in_executor(None, _do_ibkr_gateway_sync, files["db"])
         return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
     except Exception as e:
         print(f"ibkr_sync error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/ibkr/gateway/status")
+async def ibkr_gateway_status():
+    """IBKR Gateway Auth-Status."""
+    if not _IBKR_GATEWAY_URL:
+        return JSONResponse({"authenticated": False})
+    try:
+        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
+            data = json.loads(resp.read().decode())
+            return JSONResponse({"authenticated": data.get("authenticated", False)})
+    except Exception:
+        return JSONResponse({"authenticated": False})
+
+
+@app.post("/api/ibkr/gateway/logout")
+async def ibkr_gateway_logout():
+    """IBKR Gateway Logout."""
+    try:
+        with _ibkr_gateway_request("/v1/api/logout", method="POST", data=b"") as resp:
+            status = resp.status
+            body   = resp.read().decode("utf-8", errors="replace")
+            print(f"[IBKR GW] logout response {status}: {body[:200]}")
+            return JSONResponse({"ok": True, "status": status})
+    except Exception as e:
+        print(f"[IBKR GW] logout FEHLER: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
 
 @app.get("/api/ibkr/positions")
 async def ibkr_positions(request: Request):
@@ -859,6 +715,7 @@ async def ibkr_positions(request: Request):
     rows  = conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
+
 
 @app.patch("/api/ibkr/positions/{symbol}")
 async def update_ibkr_position(symbol: str, request: Request):
@@ -874,6 +731,7 @@ async def update_ibkr_position(symbol: str, request: Request):
     conn.close()
     return JSONResponse({"ok": True})
 
+
 @app.get("/api/ibkr/cash")
 async def ibkr_cash(request: Request):
     """Alle gespeicherten IBKR-Cash-Balances als JSON."""
@@ -884,6 +742,7 @@ async def ibkr_cash(request: Request):
     rows  = conn.execute("SELECT * FROM cash_balances ORDER BY currency").fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
+
 
 @app.get("/api/ibkr/trades")
 async def ibkr_trades(request: Request):
@@ -898,3 +757,145 @@ async def ibkr_trades(request: Request):
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+
+# ── IBKR Snapshot Background Task ──────────────────────────────────────────────
+
+_snapshot_source: str = "yahoo"
+_snapshot_conids: dict[str, int | None] = {}
+
+
+def _resolve_conid(ticker: str) -> int | None:
+    """Löst ein Ticker-Symbol zu einer IBKR conid via /iserver/secdef/search."""
+    try:
+        with _ibkr_gateway_request(
+            f"/v1/api/iserver/secdef/search?symbol={ticker}&name=false&secType=STK",
+            timeout=8
+        ) as resp:
+            results = json.loads(resp.read().decode())
+        if results:
+            return results[0].get("conid") or None
+    except Exception as e:
+        print(f"[Snapshot] conid lookup für {ticker} fehlgeschlagen: {e}")
+    return None
+
+
+async def _snapshot_loop():
+    """Background Task: aktualisiert heutige Kerzen für alle Ticker via IBKR Snapshot API."""
+    global _snapshot_source
+    import datetime as dt_
+
+    while True:
+        try:
+            if not _IBKR_GATEWAY_URL:
+                await asyncio.sleep(60)
+                continue
+
+            # Alle User-Config-Dateien durchsuchen → ticker → [user, ...]
+            ticker_users: dict[str, list[str]] = {}
+            for entry in os.scandir(BASE_DATA_DIR):
+                if not entry.is_dir():
+                    continue
+                cfg_path = os.path.join(entry.path, "config.json")
+                if not os.path.exists(cfg_path):
+                    continue
+                try:
+                    with open(cfg_path) as f:
+                        cfg = json.load(f)
+                    for basket in cfg.get("baskets", {}).values():
+                        for item in basket.get("items", []):
+                            t = (item.get("ticker") or "").strip().upper()
+                            if t:
+                                ticker_users.setdefault(t, [])
+                                if entry.name not in ticker_users[t]:
+                                    ticker_users[t].append(entry.name)
+                except Exception:
+                    pass
+
+            if not ticker_users:
+                await asyncio.sleep(5)
+                continue
+
+            # conids auflösen — fehlende Einträge via API
+            loop = asyncio.get_running_loop()
+            tickers_with_conid: list[tuple[str, int]] = []
+            for ticker in ticker_users:
+                if ticker not in _snapshot_conids:
+                    cid = await loop.run_in_executor(None, _resolve_conid, ticker)
+                    _snapshot_conids[ticker] = cid
+                if _snapshot_conids[ticker]:
+                    tickers_with_conid.append((ticker, _snapshot_conids[ticker]))
+
+            if not tickers_with_conid:
+                await asyncio.sleep(10)
+                continue
+
+            today = dt_.datetime.utcnow().strftime("%Y-%m-%d")
+            any_ok = False
+
+            # Batches à 20 Ticker (Rate Limit: max 60 req/min)
+            for i in range(0, len(tickers_with_conid), 20):
+                batch = tickers_with_conid[i:i + 20]
+                conids_str = ",".join(str(c) for _, c in batch)
+                try:
+                    with _ibkr_gateway_request(
+                        f"/v1/api/iserver/marketdata/snapshot?conids={conids_str}&fields=31,70,71,88,7295",
+                        timeout=10
+                    ) as resp:
+                        snap_data = json.loads(resp.read().decode())
+                except Exception as e:
+                    print(f"[Snapshot] Batch {i//20+1} fehlgeschlagen: {e}")
+                    snap_data = []
+
+                snap_by_conid: dict[int, dict] = {s["conid"]: s for s in snap_data if s.get("conid")}
+
+                for ticker, conid in batch:
+                    snap = snap_by_conid.get(conid)
+                    if not snap:
+                        continue
+                    try:
+                        close  = float(snap.get("31")   or 0)
+                        high   = float(snap.get("70")   or 0)
+                        low    = float(snap.get("71")   or 0)
+                        volume = float(snap.get("88")   or 0)
+                        open_  = float(snap.get("7295") or 0)
+                    except (ValueError, TypeError):
+                        continue
+                    if not close or not open_:
+                        continue
+
+                    any_ok = True
+                    for user in ticker_users.get(ticker, []):
+                        db_file = os.path.join(BASE_DATA_DIR, user, "prices.db")
+                        if not os.path.exists(db_file):
+                            continue
+                        try:
+                            conn = get_db(db_file)
+                            conn.execute(
+                                "INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)",
+                                (ticker, today, open_, max(high, close), min(low, close), close, volume)
+                            )
+                            conn.commit()
+                            conn.close()
+                        except Exception as e:
+                            print(f"[Snapshot] DB-Schreib-Fehler {user}/{ticker}: {e}")
+
+                await asyncio.sleep(1)
+
+            _snapshot_source = "ibkr" if any_ok else "yahoo"
+
+        except Exception as e:
+            print(f"[Snapshot] Loop-Fehler: {e}")
+            _snapshot_source = "yahoo"
+
+        await asyncio.sleep(2)
+
+
+@app.on_event("startup")
+async def start_snapshot_task():
+    asyncio.create_task(_snapshot_loop())
+
+
+@app.get("/api/ibkr/snapshot/status")
+async def snapshot_status():
+    """Gibt an ob Live-Preise von IBKR oder Yahoo Finance kommen."""
+    return JSONResponse({"source": _snapshot_source, "gateway_configured": bool(_IBKR_GATEWAY_URL)})

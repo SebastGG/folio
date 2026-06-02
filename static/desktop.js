@@ -1485,6 +1485,7 @@ updateClock();
             ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
         });
         ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
+        ibkrUpdateGatewayStatus();
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
     });
@@ -1802,7 +1803,24 @@ function toggleTradeMarkers(btn) {
     refreshTradeMarkers();
 }
 
-function doLogout() {
+async function ibkrUpdateGatewayStatus() {
+    var statusEl = document.getElementById('ibkrGwStatus');
+    var snapEl   = document.getElementById('ibkrSnapSource');
+    var data = await ibkrGatewayStatus();
+    if (statusEl) {
+        statusEl.textContent = data.authenticated ? '🟢' : '🔴';
+        statusEl.title = data.authenticated ? 'IBKR Gateway verbunden' : 'IBKR Gateway nicht verbunden';
+    }
+    var snap = await ibkrSnapshotStatus();
+    if (snapEl) {
+        snapEl.textContent = snap.source === 'ibkr' ? 'IBKR' : 'YF';
+        snapEl.title = snap.source === 'ibkr' ? 'Live-Preise: IBKR Snapshot' : 'Live-Preise: Yahoo Finance';
+        snapEl.style.color = snap.source === 'ibkr' ? 'var(--green)' : 'var(--muted)';
+    }
+}
+
+async function doLogout() {
+    await ibkrGatewayLogout();
     window.location.href = '/logout';
 }
 
