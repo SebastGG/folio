@@ -646,7 +646,43 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
     if not position_rows and not cash_rows:
         return {"ok": False, "error": "Keine Positionen oder Cash-Daten vom Gateway"}
 
-    # 5 — In DB schreiben
+    # 5 — Trades abrufen (INSERT OR REPLACE — historische Trades bleiben erhalten)
+    trade_rows = []
+    try:
+        with _ibkr_gateway_request("/v1/api/iserver/account/trades", timeout=15) as resp:
+            raw_trades = json.loads(resp.read().decode())
+        for t in (raw_trades if isinstance(raw_trades, list) else []):
+            symbol = (t.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            side = (t.get("side") or "").upper()
+            action = "BUY" if side in ("B", "BUY") else "SELL"
+            try:
+                qty   = abs(float(t.get("quantity")   or 0))
+                price = abs(float(t.get("price")      or 0))
+                value = abs(float(t.get("net_amount") or 0))
+                comm  = float(t.get("commission")     or 0)
+            except (ValueError, TypeError):
+                continue
+            currency  = (t.get("currency") or "USD").strip()
+            fx        = fx_rates.get(currency, 1.0)
+            asset_cls = (t.get("assetClass") or "STK").strip()
+            # Datum: "YYYYMMDD-HH:MM:SS" → "YYYY-MM-DD", oder Unix-ms
+            raw_time = t.get("trade_time_r") or t.get("trade_time") or ""
+            if isinstance(raw_time, str) and len(raw_time) >= 8 and "-" in raw_time[:9]:
+                trade_date = f"{raw_time[:4]}-{raw_time[4:6]}-{raw_time[6:8]}"
+            elif isinstance(raw_time, (int, float)) or (isinstance(raw_time, str) and raw_time.isdigit()):
+                import datetime as _dt2
+                trade_date = _dt2.datetime.utcfromtimestamp(int(raw_time) / 1000).strftime("%Y-%m-%d")
+            else:
+                trade_date = now[:10]
+            tid = t.get("execution_id") or t.get("orderId") or f"{symbol}_{trade_date}_{action}_{qty}"
+            trade_rows.append((str(tid), symbol, action, qty, price, value, comm, currency, fx, trade_date, asset_cls, now))
+        _log(f"[GW] {len(trade_rows)} Trades empfangen")
+    except Exception as e:
+        _log(f"[GW] Trades Fehler (nicht fatal): {e}")
+
+    # 6 — In DB schreiben
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
     if position_rows:
@@ -657,11 +693,13 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
+    if trade_rows:
+        conn.executemany("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
     conn.close()
 
-    _log(f"[GW] Sync OK: {len(position_rows)} Positionen, {len(cash_rows)} Cash")
-    return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "last_sync": now}
+    _log(f"[GW] Sync OK: {len(position_rows)} Positionen, {len(cash_rows)} Cash, {len(trade_rows)} Trades")
+    return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
 
 
 @app.get("/api/ibkr/sync")
