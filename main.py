@@ -681,14 +681,15 @@ async def ibkr_sync(request: Request):
 @app.get("/api/ibkr/gateway/status")
 async def ibkr_gateway_status():
     """IBKR Gateway Auth-Status."""
+    sso_url = f"{_IBKR_GATEWAY_URL}/sso/Login?forwardTo=22&RL=1&ip2loc=on" if _IBKR_GATEWAY_URL else ""
     if not _IBKR_GATEWAY_URL:
-        return JSONResponse({"authenticated": False})
+        return JSONResponse({"authenticated": False, "sso_url": ""})
     try:
         with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
             data = json.loads(resp.read().decode())
-            return JSONResponse({"authenticated": data.get("authenticated", False)})
+            return JSONResponse({"authenticated": data.get("authenticated", False), "sso_url": sso_url})
     except Exception:
-        return JSONResponse({"authenticated": False})
+        return JSONResponse({"authenticated": False, "sso_url": sso_url})
 
 
 @app.post("/api/ibkr/gateway/logout")
