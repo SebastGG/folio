@@ -770,7 +770,11 @@ import datetime as _dt
 _ibkr_log: deque = deque(maxlen=100)
 
 def _log(msg: str):
-    ts = _dt.datetime.now().strftime("%H:%M:%S")
+    try:
+        from zoneinfo import ZoneInfo
+        ts = _dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%H:%M:%S")
+    except Exception:
+        ts = _dt.datetime.now().strftime("%H:%M:%S")
     _ibkr_log.append(f"{ts} {msg}")
 
 
