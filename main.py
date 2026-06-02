@@ -588,7 +588,7 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
     acct_id = accounts[0].get("id") or accounts[0].get("accountId") or ""
     if not acct_id:
         return {"ok": False, "error": f"Kein accountId im Gateway-Response: {accounts[0]}"}
-    print(f"[IBKR GW] Konto: {acct_id}")
+    _log(f"[GW] Konto: {acct_id}")
 
     # 2 — Positionen seitenweise abrufen
     raw_positions = []
@@ -600,7 +600,7 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
             ) as resp:
                 page_data = json.loads(resp.read().decode())
         except Exception as e:
-            print(f"[IBKR GW] Positionen Seite {page} Fehler: {e}")
+            _log(f"[GW] Positionen Seite {page} Fehler: {e}")
             break
         if not page_data:
             break
@@ -608,7 +608,7 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
         if len(page_data) < 30:
             break
 
-    print(f"[IBKR GW] {len(raw_positions)} Positionen empfangen")
+    _log(f"[GW] {len(raw_positions)} Positionen empfangen")
 
     # 3 — Ledger: Cash-Salden + FX-Kurse
     fx_rates: dict[str, float] = {}
@@ -623,7 +623,7 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
             cash_bal = float(data.get("cashbalance") or 0.0)
             cash_rows.append((ccy, cash_bal, now))
     except Exception as e:
-        print(f"[IBKR GW] Ledger Fehler (nicht fatal): {e}")
+        _log(f"[GW] Ledger Fehler: {e}")
 
     # 4 — Positionen mappen (inkl. conid)
     position_rows = []
@@ -660,6 +660,7 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
     conn.commit()
     conn.close()
 
+    _log(f"[GW] Sync OK: {len(position_rows)} Positionen, {len(cash_rows)} Cash")
     return {"ok": True, "count": len(position_rows), "cash_count": len(cash_rows), "last_sync": now}
 
 
@@ -764,6 +765,14 @@ async def ibkr_trades(request: Request):
 _snapshot_source: str = "yahoo"
 _snapshot_conids: dict[str, int | None] = {}
 
+from collections import deque
+import datetime as _dt
+_ibkr_log: deque = deque(maxlen=100)
+
+def _log(msg: str):
+    ts = _dt.datetime.now().strftime("%H:%M:%S")
+    _ibkr_log.append(f"{ts} {msg}")
+
 
 def _resolve_conid(ticker: str) -> int | None:
     """Löst ein Ticker-Symbol zu einer IBKR conid via /iserver/secdef/search."""
@@ -774,9 +783,12 @@ def _resolve_conid(ticker: str) -> int | None:
         ) as resp:
             results = json.loads(resp.read().decode())
         if results:
-            return results[0].get("conid") or None
+            cid = results[0].get("conid")
+            if cid:
+                _log(f"[Snap] {ticker} → conid {cid}")
+                return cid
     except Exception as e:
-        print(f"[Snapshot] conid lookup für {ticker} fehlgeschlagen: {e}")
+        _log(f"[Snap] conid lookup {ticker} fehlgeschlagen: {e}")
     return None
 
 
@@ -844,7 +856,7 @@ async def _snapshot_loop():
                     ) as resp:
                         snap_data = json.loads(resp.read().decode())
                 except Exception as e:
-                    print(f"[Snapshot] Batch {i//20+1} fehlgeschlagen: {e}")
+                    _log(f"[Snap] Batch {i//20+1} fehlgeschlagen: {e}")
                     snap_data = []
 
                 snap_by_conid: dict[int, dict] = {s["conid"]: s for s in snap_data if s.get("conid")}
@@ -883,9 +895,11 @@ async def _snapshot_loop():
                 await asyncio.sleep(1)
 
             _snapshot_source = "ibkr" if any_ok else "yahoo"
+            if any_ok:
+                _log(f"[Snap] {len(tickers_with_conid)} Ticker aktualisiert (Quelle: IBKR)")
 
         except Exception as e:
-            print(f"[Snapshot] Loop-Fehler: {e}")
+            _log(f"[Snap] Loop-Fehler: {e}")
             _snapshot_source = "yahoo"
 
         await asyncio.sleep(2)
@@ -900,3 +914,9 @@ async def start_snapshot_task():
 async def snapshot_status():
     """Gibt an ob Live-Preise von IBKR oder Yahoo Finance kommen."""
     return JSONResponse({"source": _snapshot_source, "gateway_configured": bool(_IBKR_GATEWAY_URL)})
+
+
+@app.get("/api/ibkr/log")
+async def ibkr_log():
+    """Letzte IBKR-Log-Einträge (Ringpuffer, max 100)."""
+    return JSONResponse(content=list(_ibkr_log))

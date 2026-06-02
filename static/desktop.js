@@ -1824,6 +1824,31 @@ async function ibkrUpdateGatewayStatus() {
     }
 }
 
+var _ibkrLogInterval = null;
+function ibkrToggleLog() {
+    var box = document.getElementById('ibkrLogBox');
+    if (!box) return;
+    var visible = box.style.display !== 'none';
+    box.style.display = visible ? 'none' : 'block';
+    if (!visible) {
+        ibkrRefreshLog();
+        _ibkrLogInterval = setInterval(ibkrRefreshLog, 3000);
+    } else {
+        clearInterval(_ibkrLogInterval);
+    }
+}
+async function ibkrRefreshLog() {
+    var box = document.getElementById('ibkrLogBox');
+    if (!box || box.style.display === 'none') return;
+    try {
+        var r = await fetch('/api/ibkr/log');
+        var lines = await r.json();
+        box.innerHTML = lines.slice(-30).reverse().map(function(l) {
+            return '<div>' + l.replace(/</g, '&lt;') + '</div>';
+        }).join('');
+    } catch(e) {}
+}
+
 function ibkrGatewayConnect() {
     var btn = document.getElementById('ibkrConnectBtn');
     var url = (btn && btn.dataset.url) || '';
