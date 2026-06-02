@@ -776,7 +776,9 @@ def _log(msg: str):
         ts = _dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%H:%M:%S")
     except Exception:
         ts = _dt.datetime.now().strftime("%H:%M:%S")
-    _ibkr_log.append(f"{ts} {msg}")
+    entry = f"{ts} {msg}"
+    _ibkr_log.append(entry)
+    print(entry)
 
 
 def _resolve_conid(ticker: str) -> int | None:
