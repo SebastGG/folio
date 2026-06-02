@@ -914,6 +914,20 @@ async def start_snapshot_task():
     asyncio.create_task(_snapshot_loop())
 
 
+@app.get("/api/ibkr/config/check")
+async def ibkr_config_check():
+    """Zeigt effektive IBKR-Konfiguration (Passwort maskiert)."""
+    api_user = os.environ.get("IBKR_API_USER", "api")
+    api_pass = os.environ.get("IBKR_API_PASSWORD", "")
+    return JSONResponse({
+        "gateway_url": _IBKR_GATEWAY_URL,
+        "api_user": api_user,
+        "api_pass_set": bool(api_pass),
+        "api_pass_len": len(api_pass),
+        "api_pass_preview": api_pass[:3] + "***" if api_pass else "",
+    })
+
+
 @app.get("/api/ibkr/snapshot/status")
 async def snapshot_status():
     """Gibt an ob Live-Preise von IBKR oder Yahoo Finance kommen."""
