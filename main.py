@@ -686,15 +686,10 @@ async def ibkr_gateway_status():
     if not _IBKR_GATEWAY_URL:
         return JSONResponse({"authenticated": False, "sso_url": ""})
     try:
-        with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
-            data = json.loads(resp.read().decode())
-        # Session gilt als aktiv wenn authenticated ODER (session=true UND connected=true)
-        active = (
-            data.get("authenticated") or
-            (data.get("session") and data.get("connected")) or
-            data.get("SESSION_TOKEN")
-        )
-        return JSONResponse({"authenticated": bool(active), "sso_url": sso_url, "raw": data})
+        with _ibkr_gateway_request("/v1/api/portfolio/accounts", timeout=8) as resp:
+            accounts = json.loads(resp.read().decode())
+        active = bool(accounts)
+        return JSONResponse({"authenticated": active, "sso_url": sso_url})
     except Exception:
         return JSONResponse({"authenticated": False, "sso_url": sso_url})
 
