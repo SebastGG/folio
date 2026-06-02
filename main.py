@@ -685,8 +685,11 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
             tid = t.get("execution_id") or t.get("orderId") or f"{symbol}_{trade_date}_{action}_{qty}"
             trade_rows.append((str(tid), symbol, action, qty, price, value, comm, currency, fx, trade_date, asset_cls, now))
         _log(f"[GW] {len(trade_rows)} Trades empfangen")
+    except _urlreq.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        _log(f"[GW] Trades HTTP {e.code}: {body}")
     except Exception as e:
-        _log(f"[GW] Trades Fehler (nicht fatal): {e}")
+        _log(f"[GW] Trades Fehler: {e}")
 
     # 6 — In DB schreiben
     conn = get_db(db_file)
