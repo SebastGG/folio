@@ -649,6 +649,12 @@ def _do_ibkr_gateway_sync(db_file: str) -> dict:
     # 5 — Trades abrufen (INSERT OR REPLACE — historische Trades bleiben erhalten)
     trade_rows = []
     try:
+        # iserver-Session aktivieren bevor Trades abgerufen werden
+        try:
+            with _ibkr_gateway_request("/v1/api/iserver/accounts", timeout=10) as _r:
+                _r.read()
+        except Exception:
+            pass
         with _ibkr_gateway_request("/v1/api/iserver/account/trades", timeout=15) as resp:
             raw_trades = json.loads(resp.read().decode())
         for t in (raw_trades if isinstance(raw_trades, list) else []):
