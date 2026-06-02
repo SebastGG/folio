@@ -688,7 +688,13 @@ async def ibkr_gateway_status():
     try:
         with _ibkr_gateway_request("/v1/api/iserver/auth/status") as resp:
             data = json.loads(resp.read().decode())
-            return JSONResponse({"authenticated": data.get("authenticated", False), "sso_url": sso_url})
+        # Session gilt als aktiv wenn authenticated ODER (session=true UND connected=true)
+        active = (
+            data.get("authenticated") or
+            (data.get("session") and data.get("connected")) or
+            data.get("SESSION_TOKEN")
+        )
+        return JSONResponse({"authenticated": bool(active), "sso_url": sso_url, "raw": data})
     except Exception:
         return JSONResponse({"authenticated": False, "sso_url": sso_url})
 
