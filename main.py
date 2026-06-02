@@ -865,6 +865,7 @@ async def _snapshot_loop():
                     snap_data = []
 
                 snap_by_conid: dict[int, dict] = {s["conid"]: s for s in snap_data if s.get("conid")}
+                _log(f"[Snap] Batch {i//20+1}: {len(snap_data)} Antworten, {len(snap_by_conid)} mit conid")
 
                 for ticker, conid in batch:
                     snap = snap_by_conid.get(conid)
@@ -900,8 +901,7 @@ async def _snapshot_loop():
                 await asyncio.sleep(1)
 
             _snapshot_source = "ibkr" if any_ok else "yahoo"
-            if any_ok:
-                _log(f"[Snap] {len(tickers_with_conid)} Ticker aktualisiert (Quelle: IBKR)")
+            _log(f"[Snap] Sweep: {len(tickers_with_conid)} Ticker, Quelle: {'IBKR' if any_ok else 'Yahoo'}")
 
         except Exception as e:
             _log(f"[Snap] Loop-Fehler: {e}")
