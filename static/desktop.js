@@ -1485,7 +1485,6 @@ updateClock();
             ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
         });
         ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
-        ibkrUpdateGatewayStatus();
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
     });
@@ -1803,66 +1802,7 @@ function toggleTradeMarkers(btn) {
     refreshTradeMarkers();
 }
 
-async function ibkrUpdateGatewayStatus() {
-    var statusEl   = document.getElementById('ibkrGwStatus');
-    var connectBtn = document.getElementById('ibkrConnectBtn');
-    var snapEl     = document.getElementById('ibkrSnapSource');
-    var data = await ibkrGatewayStatus();
-    if (statusEl) {
-        statusEl.textContent = data.authenticated ? '🟢' : '🔴';
-        statusEl.title = data.authenticated ? 'IBKR Gateway verbunden' : 'IBKR Gateway nicht verbunden';
-    }
-    if (connectBtn) {
-        connectBtn.style.display = data.authenticated ? 'none' : '';
-        if (data.sso_url) connectBtn.dataset.url = data.sso_url;
-    }
-    var snap = await ibkrSnapshotStatus();
-    if (snapEl) {
-        snapEl.textContent = snap.source === 'ibkr' ? 'IBKR' : 'YF';
-        snapEl.title = snap.source === 'ibkr' ? 'Live-Preise: IBKR Snapshot' : 'Live-Preise: Yahoo Finance';
-        snapEl.style.color = snap.source === 'ibkr' ? 'var(--green)' : 'var(--muted)';
-    }
-}
-
-var _ibkrLogInterval = null;
-function ibkrToggleLog() {
-    var box = document.getElementById('ibkrLogBox');
-    if (!box) return;
-    var visible = box.style.display !== 'none';
-    box.style.display = visible ? 'none' : 'block';
-    if (!visible) {
-        ibkrRefreshLog();
-        _ibkrLogInterval = setInterval(ibkrRefreshLog, 3000);
-    } else {
-        clearInterval(_ibkrLogInterval);
-    }
-}
-async function ibkrRefreshLog() {
-    var box = document.getElementById('ibkrLogBox');
-    if (!box || box.style.display === 'none') return;
-    try {
-        var r = await fetch('/api/ibkr/log');
-        var lines = await r.json();
-        box.innerHTML = lines.slice(-30).reverse().map(function(l) {
-            return '<div>' + l.replace(/</g, '&lt;') + '</div>';
-        }).join('');
-    } catch(e) {}
-}
-
-function ibkrGatewayConnect() {
-    var btn = document.getElementById('ibkrConnectBtn');
-    var url = (btn && btn.dataset.url) || '';
-    if (!url) return;
-    window.open(url, '_blank');
-    var check = setInterval(function() {
-        ibkrGatewayStatus().then(function(d) {
-            if (d.authenticated) { clearInterval(check); ibkrUpdateGatewayStatus(); }
-        });
-    }, 5000);
-}
-
-async function doLogout() {
-    await ibkrGatewayLogout();
+function doLogout() {
     window.location.href = '/logout';
 }
 

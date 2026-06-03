@@ -151,7 +151,7 @@ function mNav(screen, btn) {
         if (screen === 'notes')   syncMobileNotes();
         if (screen === 'ind')     syncMobileInd();
         if (screen === 'manage')  renderMobileManage();
-        if (screen === 'ibkr')    { mIbkrRenderTable(); mIbkrRenderTrades(); mIbkrUpdateGatewayStatus(); }
+        if (screen === 'ibkr')    { mIbkrRenderTable(); mIbkrRenderTrades(); }
         if (screen === 'search')  { renderMobileManage(); document.getElementById('m-search-input') && (document.getElementById('m-search-input').value='') && (document.getElementById('m-search-results').innerHTML=''); }
     }
 }
@@ -813,38 +813,6 @@ async function mIbkrSync(btn) {
     } finally {
         if (btn) { btn.textContent = '↻ Sync IBKR'; btn.disabled = false; }
     }
-}
-
-async function mIbkrUpdateGatewayStatus() {
-    var statusEl   = document.getElementById('m-ibkr-gw-status');
-    var connectBtn = document.getElementById('m-ibkr-connect-btn');
-    var snapEl     = document.getElementById('m-ibkr-snap-source');
-    var data = await ibkrGatewayStatus();
-    if (statusEl) {
-        statusEl.textContent = data.authenticated ? '🟢' : '🔴';
-        statusEl.title = data.authenticated ? 'IBKR Gateway verbunden' : 'IBKR Gateway nicht verbunden';
-    }
-    if (connectBtn) {
-        connectBtn.style.display = data.authenticated ? 'none' : '';
-        if (data.sso_url) connectBtn.dataset.url = data.sso_url;
-    }
-    var snap = await ibkrSnapshotStatus();
-    if (snapEl) {
-        snapEl.textContent = snap.source === 'ibkr' ? 'IBKR' : 'YF';
-        snapEl.style.color = snap.source === 'ibkr' ? 'var(--green)' : 'var(--muted)';
-    }
-}
-
-function mIbkrGatewayConnect() {
-    var btn = document.getElementById('m-ibkr-connect-btn');
-    var url = (btn && btn.dataset.url) || '';
-    if (!url) return;
-    window.open(url, '_blank');
-    var check = setInterval(function() {
-        ibkrGatewayStatus().then(function(d) {
-            if (d.authenticated) { clearInterval(check); mIbkrUpdateGatewayStatus(); }
-        });
-    }, 5000);
 }
 
 function mIbkrExport() {
