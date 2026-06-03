@@ -860,6 +860,38 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             "(transaction_id,symbol,action,quantity,price,value,commission,currency,fx_rate,trade_date,asset_class,last_sync,isin) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
+
+    # ISIN → Yahoo-Symbol automatisch auflösen (Mapping aus der CSV ableiten).
+    # Nur neue STK-ISINs ohne bestehendes Mapping — manuelle Mappings bleiben unberührt.
+    try:
+        have = {r["isin"] for r in conn.execute("SELECT isin FROM isin_map").fetchall()}
+        todo = []
+        for prow in positions:
+            p_cls, p_isin = (prow[6] or "").upper(), prow[9]
+            if p_cls == "STK" and p_isin and p_isin not in have and p_isin not in todo:
+                todo.append(p_isin)
+        for p_isin in todo:
+            ysym = None
+            try:
+                u  = f"https://query1.finance.yahoo.com/v1/finance/search?q={p_isin}&quotesCount=5"
+                rq = urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                with urlreq.urlopen(rq, timeout=6) as rp:
+                    jd = json.loads(rp.read())
+                for q in jd.get("quotes", []):
+                    if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
+                        ysym = q["symbol"]
+                        break
+            except Exception:
+                ysym = None
+            if ysym:
+                conn.execute(
+                    "INSERT OR IGNORE INTO isin_map (isin, yahoo_symbol, display_name) VALUES (?,?,NULL)",
+                    (p_isin, ysym))
+                print(f"[IBKR] ISIN {p_isin} → {ysym} (auto)")
+        conn.commit()
+    except Exception as e:
+        print(f"[IBKR] ISIN auto-resolve übersprungen: {e}")
+
     conn.close()
     return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
 

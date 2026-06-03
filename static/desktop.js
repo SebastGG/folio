@@ -1718,12 +1718,22 @@ async function ibkrSync() {
             await ibkrLoadIsinMap();
             await ibkrLoadPositions();
             await ibkrLoadCash();
-            ibkrRenderTable();
-            refreshIbkrCostLine(_lastCandles);
-            renderPerfTable();
             await ibkrLoadTrades();
-            ibkrRenderTrades();
-            refreshTradeMarkers();
+            // IBKR-verwaltete Baskets an aktuellen Bestand angleichen
+            var rebuilt = ibkrRebuildManagedBaskets();
+            if (rebuilt) {
+                await saveBasketsToServer();
+                renderBasketSelect();
+            }
+            if (rebuilt && baskets[currentBasket] && baskets[currentBasket].ibkrManaged) {
+                await switchBasket(currentBasket);   // lädt Kurse/Index/Tabelle/Marker neu
+            } else {
+                ibkrRenderTable();
+                refreshIbkrCostLine(_lastCandles);
+                renderPerfTable();
+                ibkrRenderTrades();
+                refreshTradeMarkers();
+            }
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }
@@ -1744,15 +1754,33 @@ async function ibkrCreateBasket() {
     var id = 'basket_' + Date.now();
     var weights = {};
     stk.forEach(function(p) {
-        var sym = (p.yahoo_symbol && p.yahoo_symbol !== p.symbol) ? p.yahoo_symbol : p.symbol;
-        weights[sym] = Math.round(Math.abs(p.quantity));
+        var sym = ibkrPosYahoo(p);   // ISIN-Mapping → korrekte Notierung (z.B. ASML.AS)
+        if (sym) weights[sym] = Math.abs(p.quantity);
     });
     baskets[id] = {
-        name: name, weights: weights, period: 180, tf: '1D',
+        name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: true,
         perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
     };
     await saveBasketsToServer();
     await switchBasket(id);
+}
+
+// Gleicht alle als IBKR-verwaltet markierten Baskets an den aktuellen
+// Positions-Bestand an (Ticker via ISIN-Mapping, Menge = aktuelle Stückzahl).
+function ibkrRebuildManagedBaskets() {
+    var changed = false;
+    Object.keys(baskets).forEach(function(id) {
+        if (!baskets[id] || !baskets[id].ibkrManaged) return;
+        var w = {};
+        (ibkrPositions || []).forEach(function(p) {
+            if ((p.asset_class || '').toUpperCase() !== 'STK' || (p.quantity || 0) <= 0) return;
+            var sym = ibkrPosYahoo(p);
+            if (sym) w[sym] = Math.abs(p.quantity);
+        });
+        baskets[id].weights = w;
+        changed = true;
+    });
+    return changed;
 }
 
 async function ibkrEditSymbol(ibkrSym, el) {
