@@ -1499,16 +1499,30 @@ function renderPortfolioReport() {
     var cashBase = (ibkrCash || []).find(function(c) { return c.currency === 'BASE'; });
     var cashEur  = cashBase ? (cashBase.ending_cash || 0) : 0;
 
+    // Währung→Base aus IBKRs eigenen FX-Raten (konsistent mit Positions-Bewertung)
+    var ccyFx = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if (p.currency && p.fx_rate_to_base) ccyFx[p.currency] = p.fx_rate_to_base;
+    });
+    function fxToBase(cur) {
+        if (!cur) return null;
+        if (cur === 'GBp' || cur === 'GBX') return ccyFx['GBP'] ? ccyFx['GBP'] / 100 : null;
+        return (cur in ccyFx) ? ccyFx[cur] : null;
+    }
+
     var longG = {}, shortG = {};
     (ibkrPositions || []).forEach(function(p) {
         var fx  = p.fx_rate_to_base || 1.0;
         var qty = p.quantity || 0;
         var cb  = (p.cost_basis_money || 0) * fx;
         var cls = (p.asset_class || 'OTHER').toUpperCase();
-        // Live-Kurs aus Yahoo Finance wenn vorhanden, sonst IBKR-Wert
-        var liveP = perfData[p.symbol];
-        var pv = (liveP && liveP.price)
-            ? qty * liveP.price * fx
+        // Live-Kurs aus Yahoo (über gemapptes Symbol), korrekt aus dessen Währung
+        // nach Base umgerechnet — sonst IBKR-Wert (immer korrekt in Base).
+        var ysym  = ibkrPosYahoo(p);
+        var liveP = perfData[ysym];
+        var yrate = (liveP && liveP.price) ? fxToBase(tickerCurrencies[ysym]) : null;
+        var pv = (yrate !== null)
+            ? qty * liveP.price * yrate
             : (p.position_value || 0) * fx;
         var grp = qty >= 0 ? longG : shortG;
         if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };

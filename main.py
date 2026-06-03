@@ -543,7 +543,8 @@ def _init_ibkr_tables(db_file: str):
         asset_class      TEXT,
         last_sync        TEXT,
         fx_rate_to_base  REAL DEFAULT 1.0,
-        isin             TEXT
+        isin             TEXT,
+        currency         TEXT
     )''')
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
@@ -555,6 +556,10 @@ def _init_ibkr_tables(db_file: str):
         pass
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN isin TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN currency TEXT")
     except Exception:
         pass
     conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
@@ -813,6 +818,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         i_cls = cols.get("AssetClass", -1)
         i_fx  = cols.get("FXRateToBase", -1)
         i_isin = cols.get("ISIN", -1)
+        i_cur  = cols.get("CurrencyPrimary", cols.get("Currency", -1))
 
         if i_sym < 0 or i_qty < 0 or i_mkp < 0:
             continue
@@ -831,7 +837,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             continue
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
         isin        = parts[i_isin].strip() if 0 <= i_isin < len(parts) else ""
-        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin))
+        currency    = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
+        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin, currency))
 
     print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
     if not positions and not cash_rows and not trade_rows:
@@ -842,8 +849,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if positions:
         conn.executemany(
             "INSERT OR REPLACE INTO positions "
-            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,isin) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)", positions)
+            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,isin,currency) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)", positions)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
