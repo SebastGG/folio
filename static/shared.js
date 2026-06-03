@@ -483,6 +483,7 @@ function renderPerfTable() {
     (ibkrPositions || []).forEach(function(p) {
         ibkrMap[p.symbol] = p;
         if (p.yahoo_symbol) ibkrMap[p.yahoo_symbol] = p;
+        ibkrMap[ibkrPosYahoo(p)] = p;   // gemapptes Yahoo-Symbol (ISIN-Mapping)
     });
 
     var ibkrPnlPct = function(sym) {

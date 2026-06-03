@@ -591,11 +591,17 @@ def _init_ibkr_tables(db_file: str):
     except Exception:
         pass
     # ISIN → Yahoo-Symbol Mapping (persistent, überlebt geschlossene Positionen)
+    # auto: 1 = automatisch aufgelöst (heilt sich beim Sync), 0 = manuell (fix), NULL = alt/unbekannt
     conn.execute('''CREATE TABLE IF NOT EXISTS isin_map (
         isin         TEXT PRIMARY KEY,
         yahoo_symbol TEXT,
-        display_name TEXT
+        display_name TEXT,
+        auto         INTEGER
     )''')
+    try:
+        conn.execute("ALTER TABLE isin_map ADD COLUMN auto INTEGER")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -862,32 +868,40 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn.commit()
 
     # ISIN → Yahoo-Symbol automatisch auflösen (Mapping aus der CSV ableiten).
-    # Nur neue STK-ISINs ohne bestehendes Mapping — manuelle Mappings bleiben unberührt.
+    # Nur fehlende oder auto-aufgelöste Einträge — manuelle (auto=0) bleiben fix.
+    # USD-Positionen nutzen das blanke Symbol (US-Listing nutzt kein Yahoo-Suffix);
+    # sonst Yahoo-Suche per ISIN (liefert i.d.R. die Heimatbörse, passt zu EUR/GBP).
     try:
-        have = {r["isin"] for r in conn.execute("SELECT isin FROM isin_map").fetchall()}
-        todo = []
+        existing = {r["isin"]: r["auto"] for r in conn.execute("SELECT isin, auto FROM isin_map").fetchall()}
+        seen = set()
         for prow in positions:
-            p_cls, p_isin = (prow[6] or "").upper(), prow[9]
-            if p_cls == "STK" and p_isin and p_isin not in have and p_isin not in todo:
-                todo.append(p_isin)
-        for p_isin in todo:
+            p_sym, p_cls, p_isin, p_cur = prow[0], (prow[6] or "").upper(), prow[9], (prow[10] or "").upper()
+            if p_cls != "STK" or not p_isin or p_isin in seen:
+                continue
+            if p_isin in existing and existing[p_isin] == 0:   # manuell → nicht anfassen
+                continue
+            seen.add(p_isin)
             ysym = None
-            try:
-                u  = f"https://query1.finance.yahoo.com/v1/finance/search?q={p_isin}&quotesCount=5"
-                rq = urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
-                with urlreq.urlopen(rq, timeout=6) as rp:
-                    jd = json.loads(rp.read())
-                for q in jd.get("quotes", []):
-                    if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
-                        ysym = q["symbol"]
-                        break
-            except Exception:
-                ysym = None
+            if p_cur == "USD":
+                ysym = p_sym
+            else:
+                try:
+                    u  = f"https://query1.finance.yahoo.com/v1/finance/search?q={p_isin}&quotesCount=5"
+                    rq = urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                    with urlreq.urlopen(rq, timeout=6) as rp:
+                        jd = json.loads(rp.read())
+                    for q in jd.get("quotes", []):
+                        if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
+                            ysym = q["symbol"]
+                            break
+                except Exception:
+                    ysym = None
             if ysym:
                 conn.execute(
-                    "INSERT OR IGNORE INTO isin_map (isin, yahoo_symbol, display_name) VALUES (?,?,NULL)",
+                    "INSERT INTO isin_map (isin, yahoo_symbol, display_name, auto) VALUES (?,?,NULL,1) "
+                    "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, auto=1",
                     (p_isin, ysym))
-                print(f"[IBKR] ISIN {p_isin} → {ysym} (auto)")
+                print(f"[IBKR] ISIN {p_isin} → {ysym} (auto, {p_cur})")
         conn.commit()
     except Exception as e:
         print(f"[IBKR] ISIN auto-resolve übersprungen: {e}")
@@ -985,8 +999,8 @@ async def set_ibkr_isin_map(request: Request):
     display   = (body.get("display_name") or "").strip() or None
     conn = get_db(files["db"])
     conn.execute(
-        "INSERT INTO isin_map (isin, yahoo_symbol, display_name) VALUES (?,?,?) "
-        "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, display_name=excluded.display_name",
+        "INSERT INTO isin_map (isin, yahoo_symbol, display_name, auto) VALUES (?,?,?,0) "
+        "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, display_name=excluded.display_name, auto=0",
         (isin, yahoo_sym, display))
     conn.commit()
     conn.close()
