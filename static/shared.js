@@ -491,6 +491,17 @@ function renderPerfTable() {
         return ((pos.mark_price - pos.cost_basis_price) / pos.cost_basis_price * 100).toFixed(2);
     };
 
+    // Währung→EUR aus IBKRs eigenen FX-Raten (fx_rate_to_base, Base=EUR).
+    var ccyFx = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if (p.currency && p.fx_rate_to_base) ccyFx[p.currency] = p.fx_rate_to_base;
+    });
+    function eurValue(cur, amount) {
+        if (cur === 'EUR') return amount;
+        if (cur === 'GBp' || cur === 'GBX') return ccyFx['GBP'] ? amount * ccyFx['GBP'] / 100 : null;
+        return (cur in ccyFx) ? amount * ccyFx[cur] : null;
+    }
+
     // IBKR Index-P&L (nur Ticker die im Basket UND in IBKR sind)
     var ibkrTotalCost = 0, ibkrTotalValue = 0;
     (ibkrPositions || []).forEach(function(p) {
@@ -530,31 +541,34 @@ function renderPerfTable() {
         html += '<tr style="background:var(--bg);border-bottom:2px solid var(--border);">'
             + '<td style="font-weight:700;color:var(--text);">&#9679; INDEX</td>'
             + '<td style="font-weight:700;">' + cs + last.close.toFixed(2) + '</td>'
-            + '<td></td><td></td>'
+            + '<td></td><td></td><td></td>'
             + fmt(idxIbkrPnl)
             + fmt(pct(get(1))) + fmt(pct(get(5))) + fmt(pct(get(22))) + fmt(pct(get(66)))
             + fmt(yearBar ? pct(yearBar.close) : null)
             + '</tr>';
     }
 
-    // Ticker-Zeilen
+    // Ticker-Zeilen — Kurs/Position in Ticker-Währung, zusätzliche Spalte in EUR
     var totalValue = 0, totalPrevValue = 0;
-    var cs = basketCurSymbol();
 
     syms.forEach(function(sym) {
         var p = perfData[sym];
         if (!p) return;
         var anzahl   = WEIGHTS[sym] || 0;
-        var posValue = p.price * anzahl;
-        totalValue     += posValue;
-        totalPrevValue += posValue / (1 + parseFloat(p.d1 || 0) / 100);
-        var tcs = tickerCurSymbol(sym);
+        var tcs      = tickerCurSymbol(sym);
+        var posValue = p.price * anzahl;                          // nativ (Ticker-Währung)
+        var eurVal   = eurValue(tickerCurrencies[sym], posValue); // → EUR via IBKR-FX
+        if (eurVal !== null) {
+            totalValue     += eurVal;
+            totalPrevValue += eurVal / (1 + parseFloat(p.d1 || 0) / 100);
+        }
 
         html += '<tr>'
             + '<td style="font-weight:500">' + sym + '</td>'
             + '<td>' + tcs + p.price.toFixed(2) + '</td>'
             + '<td style="color:var(--muted)">' + anzahl + '</td>'
-            + '<td style="font-weight:500">' + cs + posValue.toFixed(0) + '</td>'
+            + '<td>' + tcs + posValue.toFixed(0) + '</td>'
+            + '<td style="font-weight:500">' + (eurVal !== null ? '€' + eurVal.toFixed(0) : '-') + '</td>'
             + fmt(ibkrPnlPct(sym))
             + fmt(p.d1) + fmt(p.d5) + fmt(p.d22) + fmt(p.d66) + fmt(p.ytd)
             + '</tr>';
@@ -570,11 +584,11 @@ function renderPerfTable() {
 
         foot.innerHTML = '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
             + '<td style="font-weight:700">TOTAL</td>'
-            + '<td></td><td></td>'
-            + '<td style="font-weight:700">' + cs + totalValue.toFixed(0) + '</td>'
+            + '<td></td><td></td><td></td>'
+            + '<td style="font-weight:700">&euro;' + totalValue.toFixed(0) + '</td>'
             + (idxIbkrPnl ? '<td style="font-weight:700;color:' + ibkrColor + '">' + (parseFloat(idxIbkrPnl)>=0?'+':'') + idxIbkrPnl + '%</td>' : '<td>-</td>')
             + '<td style="font-weight:700;color:' + chgColor + '">' + (parseFloat(totalChg)>=0?'+':'') + totalChg + '%</td>'
-            + '<td colspan="3" style="color:var(--muted);font-size:10px;">' + syms.length + ' Pos.</td>'
+            + '<td colspan="4" style="color:var(--muted);font-size:10px;">' + syms.length + ' Pos.</td>'
             + '</tr>';
     }
 }
