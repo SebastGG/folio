@@ -316,13 +316,13 @@ function refreshIbkrCostLine(colored) {
     var cbPrice = 0;
     if (currentView !== 'index') {
         var pos = ibkrPositions.find(function(p) {
-            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+            return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
         if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
     } else {
         var totalCost = 0, totalValue = 0;
         ibkrPositions.forEach(function(p) {
-            var sym = p.yahoo_symbol || p.symbol;
+            var sym = ibkrPosYahoo(p);
             if ((WEIGHTS[sym] || WEIGHTS[p.symbol] || 0) > 0) {
                 var fx = p.fx_rate_to_base || 1;
                 totalCost  += (p.cost_basis_money || 0) * fx;
@@ -348,20 +348,16 @@ function refreshTradeMarkers() {
     if (!csSeries) return;
     var markers = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        // IBKR-Symbol → Yahoo-Symbol Mapping für Vergleich aufbauen
-        var ibkrToYahoo = {};
-        (ibkrPositions || []).forEach(function(p) {
-            ibkrToYahoo[p.symbol] = p.yahoo_symbol || p.symbol;
-        });
         // Aktuelle IBKR-Position für laufende Bestandsberechnung
         var ibkrPos = (ibkrPositions || []).find(function(p) {
-            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+            return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
         var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : null;
 
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
+        // Matching via ISIN (Vorrang) bzw. Symbol-Fallback — siehe ibkrTradeYahoo()
         var relevantTrades = ibkrTrades.filter(function(t) {
-            return (ibkrToYahoo[t.symbol] || t.symbol) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
+            return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
 
         // Laufenden Bestand ab erster Transaktion berechnen
@@ -1481,10 +1477,12 @@ updateClock();
     }).then(function() {
         loadDrawings();
         loadNotes();
-        ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
-            ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
+        ibkrLoadIsinMap().then(function() {
+            ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
+                ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
+            });
+            ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
         });
-        ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
     });
@@ -1617,7 +1615,7 @@ function ibkrRenderTable() {
             totalPnlEur   += pnlEur;
             var pColor = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
-            var yahooSym = p.yahoo_symbol || '';
+            var yahooSym = (p.isin && ibkrIsinMap[p.isin]) || p.yahoo_symbol || '';
             var symHtml = '<span style="font-weight:500;cursor:pointer" title="Yahoo-Symbol setzen" onclick="ibkrEditSymbol(\'' + p.symbol + '\',this)">'
                 + p.symbol + (yahooSym && yahooSym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + yahooSym + '</span>' : ' <span style="color:var(--muted);font-size:10px">✎</span>')
                 + '</span>';
@@ -1703,6 +1701,7 @@ async function ibkrSync() {
         var result = await ibkrDoSync();
         if (result.ok) {
             ibkrLastSync = result.last_sync;
+            await ibkrLoadIsinMap();
             await ibkrLoadPositions();
             await ibkrLoadCash();
             ibkrRenderTable();
@@ -1743,16 +1742,24 @@ async function ibkrCreateBasket() {
 }
 
 async function ibkrEditSymbol(ibkrSym, el) {
-    var current = (ibkrPositions.find(function(p) { return p.symbol === ibkrSym; }) || {}).yahoo_symbol || '';
-    var newSym = prompt('Yahoo-Symbol für "' + ibkrSym + '" (leer = kein Mapping):', current);
+    var p = ibkrPositions.find(function(x) { return x.symbol === ibkrSym; }) || {};
+    var isin = p.isin || '';
+    if (!isin) { alert('Keine ISIN für "' + ibkrSym + '" hinterlegt — Mapping nur per ISIN möglich.'); return; }
+    var current = ibkrIsinMap[isin] || p.yahoo_symbol || '';
+    // Auto-Vorschlag via Yahoo-Suche nach ISIN, falls noch kein Mapping existiert
+    if (!current) {
+        try {
+            var rr   = await fetch('/api/ibkr/isin-resolve/' + encodeURIComponent(isin));
+            var hits = await rr.json();
+            if (hits && hits.length) current = hits[0].symbol;
+        } catch(e) {}
+    }
+    var newSym = prompt('Yahoo-Symbol für "' + ibkrSym + '"\n(ISIN ' + isin + ', leer = kein Mapping):', current);
     if (newSym === null) return;
     newSym = newSym.trim().toUpperCase();
     try {
-        await fetch('/api/ibkr/positions/' + encodeURIComponent(ibkrSym), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ yahoo_symbol: newSym || null })
-        });
+        await ibkrSaveIsinMap(isin, newSym || null, null);
+        await ibkrLoadIsinMap();
         await ibkrLoadPositions();
         ibkrRenderTable();
         refreshIbkrCostLine(_lastCandles);

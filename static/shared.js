@@ -1254,6 +1254,21 @@ var ibkrPositions = [];   // Geladene IBKR-Positionen
 var ibkrCash      = [];   // Geladene IBKR-Cash-Balances
 var ibkrTrades    = [];   // Geladene IBKR-Trades
 var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
+var ibkrIsinMap   = {};   // ISIN → Yahoo-Symbol (persistentes Mapping)
+
+// Auflösung Trade/Position → Yahoo-Symbol des Charts.
+// ISIN-Mapping hat Vorrang (venue-unabhängig); sonst Symbol-Fallback,
+// damit US-Ticker ohne manuelles Mapping weiter matchen.
+function ibkrTradeYahoo(t) {
+    if (t.isin && ibkrIsinMap[t.isin]) return ibkrIsinMap[t.isin];
+    var p = (ibkrPositions || []).find(function(x) { return x.symbol === t.symbol; });
+    if (p) return p.yahoo_symbol || p.symbol;
+    return t.symbol;
+}
+function ibkrPosYahoo(p) {
+    if (p.isin && ibkrIsinMap[p.isin]) return ibkrIsinMap[p.isin];
+    return p.yahoo_symbol || p.symbol;
+}
 
 async function ibkrLoadPositions() {
     try {
@@ -1291,6 +1306,31 @@ async function ibkrLoadTrades() {
         ibkrTrades = [];
         return [];
     }
+}
+
+async function ibkrLoadIsinMap() {
+    try {
+        var r = await fetch('/api/ibkr/isin-map');
+        var rows = await r.json();
+        ibkrIsinMap = {};
+        (rows || []).forEach(function(m) {
+            if (m.isin && m.yahoo_symbol) ibkrIsinMap[m.isin] = m.yahoo_symbol;
+        });
+        return ibkrIsinMap;
+    } catch(e) {
+        console.warn('ibkrLoadIsinMap failed:', e);
+        ibkrIsinMap = {};
+        return {};
+    }
+}
+
+async function ibkrSaveIsinMap(isin, yahooSymbol, displayName) {
+    var r = await fetch('/api/ibkr/isin-map', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({isin: isin, yahoo_symbol: yahooSymbol, display_name: displayName || null})
+    });
+    return await r.json();
 }
 
 async function ibkrSaveConfig(token, queryId) {

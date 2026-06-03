@@ -542,7 +542,8 @@ def _init_ibkr_tables(db_file: str):
         position_value   REAL,
         asset_class      TEXT,
         last_sync        TEXT,
-        fx_rate_to_base  REAL DEFAULT 1.0
+        fx_rate_to_base  REAL DEFAULT 1.0,
+        isin             TEXT
     )''')
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
@@ -550,6 +551,10 @@ def _init_ibkr_tables(db_file: str):
         pass
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN yahoo_symbol TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN isin TEXT")
     except Exception:
         pass
     conn.execute('''CREATE TABLE IF NOT EXISTS cash_balances (
@@ -573,7 +578,18 @@ def _init_ibkr_tables(db_file: str):
         fx_rate        REAL DEFAULT 1.0,
         trade_date     TEXT,
         asset_class    TEXT,
-        last_sync      TEXT
+        last_sync      TEXT,
+        isin           TEXT
+    )''')
+    try:
+        conn.execute("ALTER TABLE trades ADD COLUMN isin TEXT")
+    except Exception:
+        pass
+    # ISIN → Yahoo-Symbol Mapping (persistent, überlebt geschlossene Positionen)
+    conn.execute('''CREATE TABLE IF NOT EXISTS isin_map (
+        isin         TEXT PRIMARY KEY,
+        yahoo_symbol TEXT,
+        display_name TEXT
     )''')
     conn.commit()
     conn.close()
@@ -750,6 +766,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             i_dat  = cols.get("TradeDate", -1)
             i_cls  = cols.get("AssetClass", -1)
             i_lod  = cols.get("LevelOfDetail", -1)
+            i_isin = cols.get("ISIN", -1)
             if i_sym < 0 or i_qty < 0 or i_prc < 0:
                 continue
             # Dividenden/Corporate Actions herausfiltern (kein TradePrice)
@@ -771,6 +788,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             action     = parts[i_act].strip() if 0 <= i_act < len(parts) else ""
             currency   = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
             asset_cls  = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
+            isin       = parts[i_isin].strip() if 0 <= i_isin < len(parts) else ""
             # TradeDate: YYYYMMDD → YYYY-MM-DD
             raw_date   = parts[i_dat].strip() if 0 <= i_dat < len(parts) else ""
             if len(raw_date) == 8 and raw_date.isdigit():
@@ -782,7 +800,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                 tid = parts[i_tid].strip()
             else:
                 tid = f"{symbol}_{trade_date}_{action}_{qty}_{prc}"
-            trade_rows.append((tid, symbol, action, abs(qty), prc, abs(val), com, currency, fx, trade_date, asset_cls, now))
+            trade_rows.append((tid, symbol, action, abs(qty), prc, abs(val), com, currency, fx, trade_date, asset_cls, now, isin))
             continue
 
         # ── POST: Positionen ───────────────────────────────────────────
@@ -794,6 +812,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         i_cbm = cols.get("CostBasisMoney", -1)
         i_cls = cols.get("AssetClass", -1)
         i_fx  = cols.get("FXRateToBase", -1)
+        i_isin = cols.get("ISIN", -1)
 
         if i_sym < 0 or i_qty < 0 or i_mkp < 0:
             continue
@@ -811,7 +830,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         except ValueError:
             continue
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
-        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx))
+        isin        = parts[i_isin].strip() if 0 <= i_isin < len(parts) else ""
+        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin))
 
     print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
     if not positions and not cash_rows and not trade_rows:
@@ -822,13 +842,16 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if positions:
         conn.executemany(
             "INSERT OR REPLACE INTO positions "
-            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base) "
-            "VALUES (?,?,?,?,?,?,?,?,?)", positions)
+            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,isin) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)", positions)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
     if trade_rows:
-        conn.executemany("INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
+        conn.executemany(
+            "INSERT OR REPLACE INTO trades "
+            "(transaction_id,symbol,action,quantity,price,value,commission,currency,fx_rate,trade_date,asset_class,last_sync,isin) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
     conn.close()
     return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
@@ -897,4 +920,56 @@ async def ibkr_trades(request: Request):
     ).fetchall()
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
+
+@app.get("/api/ibkr/isin-map")
+async def ibkr_isin_map(request: Request):
+    """ISIN → Yahoo-Symbol Mapping als JSON-Liste."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    rows  = conn.execute("SELECT * FROM isin_map ORDER BY isin").fetchall()
+    conn.close()
+    return JSONResponse(content=[dict(r) for r in rows])
+
+@app.post("/api/ibkr/isin-map")
+async def set_ibkr_isin_map(request: Request):
+    """Upsert eines ISIN → Yahoo-Symbol Mappings."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+    body  = await request.json()
+    isin  = (body.get("isin") or "").strip().upper()
+    if not isin:
+        return JSONResponse({"ok": False, "error": "isin erforderlich"}, status_code=400)
+    yahoo_sym = (body.get("yahoo_symbol") or "").strip().upper() or None
+    display   = (body.get("display_name") or "").strip() or None
+    conn = get_db(files["db"])
+    conn.execute(
+        "INSERT INTO isin_map (isin, yahoo_symbol, display_name) VALUES (?,?,?) "
+        "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, display_name=excluded.display_name",
+        (isin, yahoo_sym, display))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+@app.get("/api/ibkr/isin-resolve/{isin}")
+async def ibkr_isin_resolve(isin: str, request: Request):
+    """Schlägt via Yahoo-Suche ein Symbol für eine ISIN vor (Auto-Mapping)."""
+    try:
+        import urllib.request
+        url = f"https://query1.finance.yahoo.com/v1/finance/search?q={isin.strip()}&quotesCount=5"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        results = [
+            {"symbol": q["symbol"], "name": q.get("shortname", q.get("longname", "")),
+             "exchange": q.get("exchDisp", "")}
+            for q in data.get("quotes", [])
+            if q.get("quoteType") in ("EQUITY", "ETF")
+        ]
+        return JSONResponse(content=results)
+    except Exception as e:
+        print(f"ISIN resolve error for {isin}: {e}")
+        return JSONResponse(content=[])
 

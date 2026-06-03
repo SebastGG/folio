@@ -266,7 +266,7 @@ function refreshMobileIbkrCostLine(colored) {
     if (!colored || !colored.length || !ibkrPositions || !ibkrPositions.length) return;
     var cbPrice = 0;
     if (currentView !== 'index') {
-        var pos = ibkrPositions.find(function(p) { return p.symbol === currentView; });
+        var pos = ibkrPositions.find(function(p) { return ibkrPosYahoo(p) === currentView || p.symbol === currentView; });
         if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
     } else {
         var totalCost = 0, totalValue = 0;
@@ -293,10 +293,10 @@ function refreshMobileTradeMarkers() {
     var markers = [];
     if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
         var relevantTrades = ibkrTrades.filter(function(t) {
-            return t.symbol === currentView && (t.asset_class || '').toUpperCase() === 'STK';
+            return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
         var posRow = ibkrPositions && ibkrPositions.find(function(p) {
-            return (p.yahoo_symbol || p.symbol) === currentView || p.symbol === currentView;
+            return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
         var currentQty = posRow ? posRow.quantity : null;
         var totalTraded = relevantTrades.reduce(function(s, t) {
@@ -798,6 +798,7 @@ async function mIbkrSync(btn) {
         var result = await ibkrDoSync();
         if (result.ok) {
             ibkrLastSync = result.last_sync;
+            await ibkrLoadIsinMap();
             await ibkrLoadPositions();
             mIbkrRenderTable();
             refreshMobileIbkrCostLine(_lastCandles);
@@ -902,8 +903,10 @@ async function mAddTicker(sym) {
                 syncMobileNotes();
                 initMobileChart();
                 syncMobileInd();
-                ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); renderMobilePerf(); });
-                ibkrLoadTrades().then(function() { mIbkrRenderTrades(); refreshMobileTradeMarkers(); });
+                ibkrLoadIsinMap().then(function() {
+                    ibkrLoadPositions().then(function() { refreshMobileIbkrCostLine(_lastCandles); renderMobilePerf(); });
+                    ibkrLoadTrades().then(function() { mIbkrRenderTrades(); refreshMobileTradeMarkers(); });
+                });
             });
         });
     });
