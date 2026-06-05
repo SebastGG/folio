@@ -262,6 +262,11 @@ async def health():
     """Cloudron Healthcheck — kein Auth nötig."""
     return {"status": "ok"}
 
+@app.get("/api/whoami")
+async def whoami(request: Request):
+    """Gibt den via Cloudron proxyAuth eingeloggten Benutzer zurück."""
+    return JSONResponse(content={"user": get_user(request)})
+
 def _render(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         html = f.read()

@@ -72,6 +72,79 @@ header {
 }
 .header-btn:hover { color: var(--text); border-color: var(--text); }
 
+/* ── Haupt-Navigation (Seiten) ─────────────────────────────────────────────── */
+.main-nav {
+  display: flex; align-items: stretch; gap: 2px;
+  padding: 0 16px; height: 38px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  flex-shrink: 0; z-index: 90;
+}
+.nav-tab {
+  display: flex; align-items: center; padding: 0 16px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent;
+  user-select: none;
+}
+.nav-tab:hover { color: var(--text); }
+.nav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ── Seiten-Container (SPA) ────────────────────────────────────────────────── */
+#page-container { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.page {
+  flex: 1; min-width: 0; min-height: 0;
+  display: none; flex-direction: column; overflow: hidden;
+}
+.page.active { display: flex; }
+.page-placeholder {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; color: var(--muted); text-align: center;
+}
+.page-placeholder .pp-icon { font-size: 40px; opacity: .5; }
+.page-placeholder .pp-title { font-size: 14px; font-weight: 700; color: var(--text); }
+
+/* ── IBKR Vollseite ────────────────────────────────────────────────────────── */
+#view-ibkr #ibkr-col-pane { flex: 1; height: auto !important; }
+
+/* ── Einstellungen-Seite ───────────────────────────────────────────────────── */
+.settings-wrap {
+  flex: 1; overflow-y: auto; padding: 28px;
+  display: flex; flex-direction: column; align-items: center; gap: 20px;
+}
+.settings-card {
+  width: 100%; max-width: 560px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px 22px;
+}
+.settings-h {
+  font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
+}
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.settings-val { font-weight: 600; }
+.settings-hint { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.settings-field { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+.settings-field > span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.settings-field input {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 8px 10px; outline: none; border-radius: 4px;
+}
+.settings-field input:focus { border-color: var(--accent); }
+.settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.settings-msg { font-size: 11px; }
+.settings-msg.ok  { color: var(--green); }
+.settings-msg.err { color: var(--red); }
+.settings-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  text-transform: none; letter-spacing: 0;
+}
+.settings-badge.ok { background: rgba(45,138,78,.12); color: var(--green); }
+.settings-badge.no { background: rgba(192,57,43,.10); color: var(--red); }
+
 /* ── Stats-Zeile ───────────────────────────────────────────────────────────── */
 .stats-bar {
   display: flex; align-items: center; gap: 20px;

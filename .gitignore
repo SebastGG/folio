@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / lokale Test-Tools (Puppeteer-Browsertests)
+node_modules/
+package.json
+package-lock.json
+test_*.js
+
+# Lokale Laufzeitdaten (Produktion liegt auf Cloudron unter /app/data)
+data/
+.env

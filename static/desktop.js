@@ -1281,13 +1281,11 @@ var _layout = {};
 
 function saveLayout() {
     var rc = document.getElementById('right-col');
-    var ib = document.getElementById('ibkr-col-pane');
     var rp = document.getElementById('r-perf');
     var rn = document.getElementById('r-notes');
     var ri = document.getElementById('r-import');
     _layout = {
         rightColW: rc ? rc.offsetWidth  : null,
-        ibkrH:    ib ? ib.offsetHeight : null,
         rPerfH:   rp ? rp.offsetHeight : null,
         rNotesH:  rn ? rn.offsetHeight : null,
         rImportH: ri ? ri.offsetHeight : null,
@@ -1298,12 +1296,10 @@ function saveLayout() {
 function loadLayout() {
     var lay = _layout || {};
     var rc = document.getElementById('right-col');
-    var ib = document.getElementById('ibkr-col-pane');
     var rp = document.getElementById('r-perf');
     var rn = document.getElementById('r-notes');
     var ri = document.getElementById('r-import');
     if (lay.rightColW != null && rc) rc.style.width  = lay.rightColW + 'px';
-    if (lay.ibkrH    != null && ib) ib.style.height = lay.ibkrH     + 'px';
     if (lay.rPerfH   != null && rp) rp.style.height = lay.rPerfH    + 'px';
     if (lay.rNotesH  != null && rn) rn.style.height = lay.rNotesH   + 'px';
     if (lay.rImportH != null && ri) ri.style.height = lay.rImportH  + 'px';
@@ -1379,9 +1375,6 @@ function loadLayout() {
             if (cDrag) { cDrag = false; colRes.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
         });
     }
-
-    // ── Vertikal Links: IBKR-Panel Höhe (lv-resizer oben vom IBKR-Panel) ──
-    makeBottomResizer('lv-resizer', 'ibkr-col-pane', 80, 600, fitChart);
 
     // ── Horizontal: IBKR Report | Detail (inner) ──
     (function() {
@@ -1872,13 +1865,57 @@ function ibkrExport() {
     a.click();
 }
 
-// Flyouts und Modal bei Klick außerhalb schließen
+// Flyouts bei Klick außerhalb der Draw-Sidebar schließen
 document.addEventListener('click', function(e) {
     if (!e.target.closest || !e.target.closest('.draw-sidebar')) {
         document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
     }
-    var modal = document.getElementById('ibkrModal');
-    if (modal && modal.style.display === 'flex' && e.target === modal) {
-        ibkrCloseSettings();
-    }
 });
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 13. EINSTELLUNGEN (Konto + IBKR Flex Query)              ║
+// ╚══════════════════════════════════════════════════════════╝
+
+/** Lädt eingeloggten User + IBKR-Konfigurationsstatus in die Settings-Seite. */
+async function settingsLoad() {
+    try {
+        var w = await fetch('/api/whoami').then(function(r) { return r.json(); });
+        var u = document.getElementById('set-user');
+        if (u) u.textContent = w.user || '—';
+    } catch (e) { /* ignore */ }
+
+    try {
+        var s = await fetch('/api/ibkr/config/status').then(function(r) { return r.json(); });
+        var badge = document.getElementById('set-ibkr-status');
+        if (badge) {
+            badge.textContent = s.configured ? '✓ konfiguriert' : '✗ nicht konfiguriert';
+            badge.className   = 'settings-badge ' + (s.configured ? 'ok' : 'no');
+        }
+    } catch (e) { /* ignore */ }
+}
+
+/** Speichert Flex Token + Query ID (verschlüsselt, pro User) und aktualisiert den Status. */
+async function settingsSaveIbkr(btn) {
+    var token = (document.getElementById('set-flex-token').value || '').trim();
+    var qid   = (document.getElementById('set-query-id').value   || '').trim();
+    var msg   = document.getElementById('set-ibkr-msg');
+    function setMsg(text, cls) { if (msg) { msg.textContent = text; msg.className = 'settings-msg ' + (cls || ''); } }
+
+    if (!token || !qid) { setMsg('Token und Query-ID erforderlich', 'err'); return; }
+    if (btn) btn.disabled = true;
+    setMsg('Speichere…', '');
+    try {
+        var res = await ibkrSaveConfig(token, qid);
+        if (res && res.ok) {
+            setMsg('✓ Gespeichert', 'ok');
+            document.getElementById('set-flex-token').value = '';  // Token nicht im Klartext stehen lassen
+            settingsLoad();
+        } else {
+            setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}

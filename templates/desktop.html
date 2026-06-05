@@ -29,6 +29,13 @@
   </div>
 </header>
 
+<nav id="main-nav" class="main-nav"></nav>
+
+<div id="page-container">
+
+<!-- ══ SEITE: CHARTS ══════════════════════════════════════════════════════════ -->
+<section id="view-charts" class="page active">
+
 <div class="stats-bar">
   <span>INDEX <span id="sv" class="stat-val">-</span></span>
   <span>1T <span id="s1d" class="stat-val">-</span></span>
@@ -274,48 +281,6 @@
     </div>
   </div>
 
-  <div class="lv-resizer" id="lv-resizer"></div>
-
-  <div class="r-pane" id="ibkr-col-pane" style="height:280px;">
-    <div class="panel-header">
-      <span class="panel-title">📋 IBKR</span>
-      <button id="ibkrSyncBtn" onclick="ibkrSync()" class="refresh-btn" style="font-size:9px;padding:3px 10px;">↻ Sync</button>
-      <span id="ibkrLastSync" style="font-size:9px;color:var(--muted);white-space:nowrap;">—</span>
-      <button id="ibkrExportBtn" onclick="ibkrExport()" class="export-btn" style="display:inline;margin:0;padding:2px 8px;width:auto;font-size:9px;">⬇ IBKR Export</button>
-      <button onclick="ibkrCreateBasket()" class="refresh-btn" style="font-size:9px;padding:3px 10px;" title="Basket aus aktuellen IBKR-Positionen erstellen">+ Als Basket</button>
-    </div>
-    <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
-      <!-- Portfolio Report -->
-      <div class="ibkr-sub" id="ibkr-report" style="width:260px;">
-        <div class="ibkr-sub-title">Portfolio Report</div>
-        <div class="ibkr-sub-body" id="portfolioReport"></div>
-      </div>
-      <div class="ibkr-h-resizer" id="ibkr-h-resizer"></div>
-      <!-- Positionen + Trades -->
-      <div class="ibkr-sub" style="flex:1;">
-        <div class="ibkr-sub-title">Positionen &amp; Trades</div>
-        <div class="ibkr-sub-body">
-          <table class="perf-table">
-            <thead><tr>
-              <th>Ticker</th><th>Klasse</th><th>Stück</th><th>Einstand €</th><th>Aktuell €</th><th>P&amp;L €</th><th>P&amp;L %</th>
-            </tr></thead>
-            <tbody id="ibkrBody"></tbody>
-            <tfoot id="ibkrFoot"></tfoot>
-          </table>
-          <div style="margin-top:12px;border-top:2px solid var(--border);padding-top:6px;">
-            <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:4px 6px;">Trades</div>
-            <table class="perf-table">
-              <thead><tr>
-                <th>Datum</th><th>Ticker</th><th style="text-align:center">K/V</th><th style="text-align:right">Stück</th><th style="text-align:right">Preis</th><th style="text-align:right">Wert €</th><th style="text-align:right">Prov. €</th>
-              </tr></thead>
-              <tbody id="ibkrTradesBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   </div><!-- end .left-col -->
 
   <div class="col-resizer" id="col-resizer"></div>
@@ -402,6 +367,105 @@
 
 </div><!-- end .app-layout -->
 
+</section><!-- end #view-charts -->
+
+<!-- ══ SEITE: IBKR ════════════════════════════════════════════════════════════ -->
+<section id="view-ibkr" class="page">
+  <div class="r-pane" id="ibkr-col-pane">
+    <div class="panel-header">
+      <span class="panel-title">📋 IBKR</span>
+      <button id="ibkrSyncBtn" onclick="ibkrSync()" class="refresh-btn" style="font-size:9px;padding:3px 10px;">↻ Sync</button>
+      <span id="ibkrLastSync" style="font-size:9px;color:var(--muted);white-space:nowrap;">—</span>
+      <button id="ibkrExportBtn" onclick="ibkrExport()" class="export-btn" style="display:inline;margin:0;padding:2px 8px;width:auto;font-size:9px;">⬇ IBKR Export</button>
+      <button onclick="ibkrCreateBasket()" class="refresh-btn" style="font-size:9px;padding:3px 10px;" title="Basket aus aktuellen IBKR-Positionen erstellen">+ Als Basket</button>
+    </div>
+    <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
+      <!-- Portfolio Report -->
+      <div class="ibkr-sub" id="ibkr-report" style="width:320px;">
+        <div class="ibkr-sub-title">Portfolio Report</div>
+        <div class="ibkr-sub-body" id="portfolioReport"></div>
+      </div>
+      <div class="ibkr-h-resizer" id="ibkr-h-resizer"></div>
+      <!-- Positionen + Trades -->
+      <div class="ibkr-sub" style="flex:1;">
+        <div class="ibkr-sub-title">Positionen &amp; Trades</div>
+        <div class="ibkr-sub-body">
+          <table class="perf-table">
+            <thead><tr>
+              <th>Ticker</th><th>Klasse</th><th>Stück</th><th>Einstand €</th><th>Aktuell €</th><th>P&amp;L €</th><th>P&amp;L %</th>
+            </tr></thead>
+            <tbody id="ibkrBody"></tbody>
+            <tfoot id="ibkrFoot"></tfoot>
+          </table>
+          <div style="margin-top:12px;border-top:2px solid var(--border);padding-top:6px;">
+            <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:4px 6px;">Trades</div>
+            <table class="perf-table">
+              <thead><tr>
+                <th>Datum</th><th>Ticker</th><th style="text-align:center">K/V</th><th style="text-align:right">Stück</th><th style="text-align:right">Preis</th><th style="text-align:right">Wert €</th><th style="text-align:right">Prov. €</th>
+              </tr></thead>
+              <tbody id="ibkrTradesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section><!-- end #view-ibkr -->
+
+<!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
+<section id="view-screener" class="page">
+  <div class="page-placeholder">
+    <div class="pp-icon">🔍</div>
+    <div class="pp-title">Screener</div>
+    <div>Wird hier eingebaut — Logik aus dem Jupyter-Notebook.</div>
+  </div>
+</section><!-- end #view-screener -->
+
+<!-- ══ SEITE: EINSTELLUNGEN ═══════════════════════════════════════════════════ -->
+<section id="view-settings" class="page">
+  <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">Konto</h2>
+      <div class="settings-row">
+        <span class="settings-label">Angemeldet als</span>
+        <span id="set-user" class="settings-val">—</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Sitzung</span>
+        <button class="header-btn" onclick="doLogout()">→ Logout</button>
+      </div>
+    </div>
+
+    <div class="settings-card">
+      <h2 class="settings-h">IBKR Flex Query
+        <span id="set-ibkr-status" class="settings-badge">—</span>
+      </h2>
+      <p class="settings-hint">Token und Query-ID werden verschlüsselt und <b>pro Benutzer</b> gespeichert.</p>
+      <label class="settings-field">
+        <span>Flex Token</span>
+        <input type="password" id="set-flex-token" placeholder="Neuen Token eingeben…" autocomplete="off">
+      </label>
+      <label class="settings-field">
+        <span>Query ID</span>
+        <input type="text" id="set-query-id" placeholder="z.B. 987654" autocomplete="off">
+      </label>
+      <div class="settings-actions">
+        <button class="refresh-btn" onclick="settingsSaveIbkr(this)">Speichern</button>
+        <span id="set-ibkr-msg" class="settings-msg"></span>
+      </div>
+      <p class="settings-hint" style="margin-top:12px;">
+        Anlegen in IBKR: <b>Account Management → Settings → Flex Web Service</b> aktivieren (ergibt den Token),
+        dann unter <b>Flex Queries</b> eine <i>Activity</i>-Query mit Positionen, Cash und Trades erstellen (ergibt die Query-ID).
+        Aus Sicherheitsgründen wird ein gespeicherter Token hier nie wieder angezeigt — zum Ändern einfach neu eingeben.
+      </p>
+    </div>
+
+  </div>
+</section><!-- end #view-settings -->
+
+</div><!-- end #page-container -->
+
 
 <footer>
   <span>Daten: Yahoo Finance (verzögert)</span>
@@ -410,6 +474,7 @@
 
 <script src="/static/shared.js?v={{APP_VERSION}}"></script>
 <script src="/static/desktop.js?v={{APP_VERSION}}"></script>
+<script src="/static/router.js?v={{APP_VERSION}}"></script>
 <script>
   document.getElementById('dropZone').addEventListener('click', function() {
     document.getElementById('fileInput').click();
