@@ -465,6 +465,56 @@
   </div>
 </section><!-- end #view-tax -->
 
+<!-- ══ SEITE: STEUER + (vollständige §20-Berechnung, Phase 1) ══════════════════ -->
+<section id="view-steuer2" class="page">
+  <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">🧮 Steuer + — §20-Berechnung
+        <span class="settings-badge no" style="text-transform:none;letter-spacing:0">Phase 1 · ohne Währungs-FIFO</span>
+      </h2>
+      <p class="settings-hint">
+        Vollständigere Berechnung nach deutschem Recht (§20 EStG): getrennte
+        Verlustverrechnungstöpfe (Aktien-Topf vs. allgemeiner Topf), Termingeschäfte
+        <b>ohne</b> 20.000-€-Grenze (JStG 2024), anrechenbare ausländische Quellensteuer,
+        Abgeltungsteuer + Soli. <b>Ohne</b> Sparer-Pauschbetrag (macht das Finanzamt),
+        ohne Kirchensteuer/Günstigerprüfung. Lade alle Jahres-CSVs seit Depoteröffnung.
+      </p>
+      <div class="drop-zone" id="tax2Drop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');taxFullUpload(event.dataTransfer.files)">
+        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-CSVs hierher ziehen oder klicken (Mehrfachauswahl)</div>
+        <input type="file" id="tax2File" accept=".csv" multiple style="display:none" onchange="taxFullUpload(this.files)">
+      </div>
+      <div id="tax2-msg" class="settings-msg" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="settings-card" id="tax2-result" style="display:none;">
+      <h2 class="settings-h">Steuerliche Ermittlung
+        <span style="flex:1"></span>
+        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
+          Steuerjahr
+          <select id="tax2-year-select" onchange="taxFullSelectYear(this.value)"
+            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
+        </label>
+      </h2>
+      <div class="tax-cards" id="tax2-cards"></div>
+      <div id="tax2-toepfe"></div>
+      <div id="tax2-steuer"></div>
+      <p class="settings-hint" style="margin-top:14px;">
+        ⚠️ <b>Ohne Gewähr — keine Steuerberatung</b>, rechnerische Aufbereitung zur Prüfung
+        durch einen Steuerberater. <b>Phase 1:</b> Fremdwährungsguthaben (§20, Regel F) ist
+        <b>noch nicht</b> enthalten (folgt in Phase 2) — die Beträge können sich dadurch ändern.
+        Der Aktien-Verlustverrechnungstopf (§20 Abs. 6 S. 4) ist verfassungsrechtlich umstritten
+        (BVerfG, Az. 2 BvL 3/21), wird aber nach geltendem Recht angewandt. Quellensteuer-Anrechnung
+        vereinfacht (DBA-Satz 15 % auf ausl. Dividenden). Investmentfonds/ETFs (KAP-INV) separat.
+      </p>
+    </div>
+
+  </div>
+</section><!-- end #view-steuer2 -->
+
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
   <div class="page-placeholder">
@@ -534,6 +584,9 @@
   });
   document.getElementById('taxDrop').addEventListener('click', function() {
     document.getElementById('taxFile').click();
+  });
+  document.getElementById('tax2Drop').addEventListener('click', function() {
+    document.getElementById('tax2File').click();
   });
   function readFile(file) {
     if (!file) return;

@@ -32,6 +32,10 @@ var PAGES = [
         onShow: null   // Upload-gesteuert; nichts vorzuladen
     },
     {
+        id: 'steuer2', label: 'Steuer +', icon: '🧮',
+        onShow: null   // Vollständige §20-Berechnung (Phase 1), Upload-gesteuert
+    },
+    {
         id: 'screener', label: 'Screener', icon: '🔍',
         onShow: null   // Platzhalter — wird später befüllt
     },

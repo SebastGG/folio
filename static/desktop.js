@@ -2095,6 +2095,105 @@ function _taxRenderYearTable() {
         + head + '</tr></thead><tbody>' + body + '</tbody></table></div>';
 }
 
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 15. STEUER + — vollständige §20-Berechnung (Phase 1)      ║
+// ╚══════════════════════════════════════════════════════════╝
+
+var _taxData2 = null;
+
+async function taxFullUpload(fileList) {
+    var files = fileList ? Array.prototype.slice.call(fileList) : [];
+    if (!files.length) return;
+    var msg = document.getElementById('tax2-msg');
+    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
+    setMsg('Verarbeite ' + files.length + ' Datei(en) … (FX-Kurse werden geladen)', '');
+    try {
+        var fd = new FormData();
+        files.forEach(function(f) { fd.append('files', f); });
+        var res = await fetch('/api/tax/report', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
+        if (res && res.ok) {
+            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet', 'ok');
+            taxFullRender(res);
+        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
+    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+}
+
+function taxFullRender(data) {
+    _taxData2 = data;
+    var box = document.getElementById('tax2-result');
+    if (box) box.style.display = '';
+    var sel = document.getElementById('tax2-year-select');
+    if (sel) {
+        sel.innerHTML = (data.available_years || []).map(function(y) {
+            return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
+        }).join('');
+    }
+    taxFullSelectYear(data.year);
+}
+
+function taxFullSelectYear(year) {
+    if (!_taxData2 || !_taxData2.years || !_taxData2.years[year]) return;
+    _taxFullRenderYear(_taxData2.years[year]);
+}
+
+function _taxFullRenderYear(d) {
+    var t = d.tax || {};
+    var ak = t.aktien_topf || {}, al = t.allg_topf || {};
+    var eur = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'); };
+    var card = function(label, val, accent) {
+        return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
+             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
+    };
+    var cardsEl = document.getElementById('tax2-cards');
+    if (cardsEl) cardsEl.innerHTML =
+          card('Bemessungsgrundlage', t.bemessungsgrundlage, 'var(--accent)')
+        + card('Abgeltungst. + Soli', t.steuer_brutto, 'var(--red)')
+        + card('Anrechenb. ausl. QSt', t.qst_anrechenbar, 'var(--green)')
+        + card('Steuer (Phase 1)', t.steuer_netto, 'var(--red)');
+
+    var sec = function(label, note) {
+        return '<tr class="pr-section"><td colspan="2">' + label
+             + (note ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0">— ' + note + '</span>' : '') + '</td></tr>';
+    };
+    var row = function(label, val, indent, strong, color) {
+        return '<tr class="pr-row"' + (strong ? ' style="font-weight:700"' : '') + '>'
+             + '<td style="' + (indent ? 'padding-left:18px;color:var(--muted)' : '') + '">' + label + '</td>'
+             + '<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    };
+    var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+
+    var toepfe = document.getElementById('tax2-toepfe');
+    if (toepfe) toepfe.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Aktien-Topf', '§20 Abs. 6 S.4 — nur untereinander verrechenbar · BVerfG 2 BvL 3/21')
+        + row('Aktiengewinne', ak.gewinn, true, false, 'var(--green)')
+        + row('Aktienverluste', ak.verlust, true, false, 'var(--red)')
+        + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
+        + (ak.verlustvortrag > 0 ? row('→ Verlustvortrag (nicht verrechenbar)', ak.verlustvortrag, true, false, 'var(--red)')
+                                 : row('→ steuerpflichtig', ak.steuerbar, true, false))
+        + sec('Allgemeiner Topf', 'Termingeschäfte (ohne 20k-Grenze), Dividenden, Zinsen')
+        + row('Termingeschäfte (netto)', al.termingeschaefte, true, false, R(al.termingeschaefte))
+        + row('Dividenden', al.dividenden, true)
+        + row('Zinsen', al.zinsen, true)
+        + row('Fremdwährung (Regel F)', al.waehrung, true)
+        + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
+        + (al.verlustvortrag > 0 ? row('→ Verlustvortrag', al.verlustvortrag, true, false, 'var(--red)')
+                                 : row('→ steuerpflichtig', al.steuerbar, true, false))
+        + '</tbody></table>';
+
+    var steuer = document.getElementById('tax2-steuer');
+    if (steuer) steuer.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Steuerberechnung', 'ohne Sparer-Pauschbetrag · ohne KiSt')
+        + row('Bemessungsgrundlage', t.bemessungsgrundlage, false, true)
+        + row('Abgeltungsteuer 25 %', t.abgeltungsteuer, true)
+        + row('Solidaritätszuschlag 5,5 %', t.soli, true)
+        + row('Steuer brutto', t.steuer_brutto, false, true, 'var(--red)')
+        + row('abzgl. anrechenbare ausl. Quellensteuer', t.qst_anrechenbar, true, false, 'var(--green)')
+        + row('Verbleibende Steuer (Phase 1)', t.steuer_netto, false, true, 'var(--red)')
+        + '</tbody></table>';
+}
+
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
 function _taxRenderYear(d, filesYears) {
     // Beträge mit Minuszeichen (de-DE setzt das Minus automatisch)

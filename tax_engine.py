@@ -325,6 +325,39 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
               "net": g(p["gewinn"] - p["verlust"])}
              for (y, s), p in pos.items() if y == yr],
             key=lambda x: (_catord.get(x["category"], 9), -x["net"]))
+
+        # ── §20-Verlustverrechnungstöpfe + Steuer (Phase 1) ──────────────────
+        # Phase 1: OHNE Sparer-Pauschbetrag (macht das Finanzamt), ohne KiSt,
+        # ohne Günstigerprüfung, OHNE Fremdwährungs-FIFO (Regel F = Phase 2).
+        ak_net   = by["aktien_gewinn"] - by["aktien_verlust"]      # Aktien-Topf (§20(6)S.4)
+        fut_net  = by["futures_gewinn"] - by["futures_verlust"]    # Termingeschäfte (kein 20k-Limit)
+        son_net  = by["sonstige_gewinn"] - by["sonstige_verlust"]
+        allg_net = fut_net + son_net + dividends + interest        # allgemeiner Topf
+        ak_steuerbar   = max(0.0, ak_net)
+        allg_steuerbar = max(0.0, allg_net)
+        base   = ak_steuerbar + allg_steuerbar                     # Bemessungsgrundlage (vor Pauschbetrag)
+        abgelt = base * 0.25
+        soli   = abgelt * 0.055
+        steuer_brutto = abgelt + soli
+        # Anrechenbare ausl. Quellensteuer: max. DBA-Satz 15% der ausl. Dividenden, max. bis zur Steuer
+        qst_anrechenbar = min(withholding, 0.15 * max(0.0, dividends), steuer_brutto)
+        steuer_netto = max(0.0, steuer_brutto - qst_anrechenbar)
+        tax = {
+            "aktien_topf":       {"gewinn": g(by["aktien_gewinn"]), "verlust": g(by["aktien_verlust"]),
+                                   "netto": g(ak_net), "steuerbar": g(ak_steuerbar),
+                                   "verlustvortrag": g(max(0.0, -ak_net))},
+            "allg_topf":         {"termingeschaefte": g(fut_net), "dividenden": g(dividends),
+                                   "zinsen": g(interest), "sonstige": g(son_net),
+                                   "waehrung": None,  # Phase 2 (Regel F)
+                                   "netto": g(allg_net), "steuerbar": g(allg_steuerbar),
+                                   "verlustvortrag": g(max(0.0, -allg_net))},
+            "bemessungsgrundlage": g(base),
+            "abgeltungsteuer":   g(abgelt),
+            "soli":              g(soli),
+            "steuer_brutto":     g(steuer_brutto),
+            "qst_anrechenbar":   g(qst_anrechenbar),
+            "steuer_netto":      g(steuer_netto),
+        }
         return {
             "year": yr,
             "positions": positions,
@@ -340,6 +373,7 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
             "dividends_eur": g(dividends),
             "interest_eur": g(interest),
             "withholding_eur": g(withholding),
+            "tax": tax,
         }
 
     avail = sorted(set(list(peryear.keys()) + list(income_by_year.keys())))
