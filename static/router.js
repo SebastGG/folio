@@ -28,6 +28,10 @@ var PAGES = [
         onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
     },
     {
+        id: 'tax', label: 'Steuer', icon: '📑',
+        onShow: null   // Upload-gesteuert; nichts vorzuladen
+    },
+    {
         id: 'screener', label: 'Screener', icon: '🔍',
         onShow: null   // Platzhalter — wird später befüllt
     },

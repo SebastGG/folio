@@ -412,6 +412,45 @@
   </div>
 </section><!-- end #view-ibkr -->
 
+<!-- ══ SEITE: STEUER ══════════════════════════════════════════════════════════ -->
+<section id="view-tax" class="page">
+  <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">📑 Steuer-Report (Anlage KAP)
+        <span class="settings-badge" id="tax-year" style="display:none"></span>
+      </h2>
+      <p class="settings-hint">
+        Lade dein <b>IBKR Activity Statement (CSV)</b> für ein Steuerjahr hoch
+        (Reports → Activity → Format CSV). Die Datei wird verarbeitet, aber <b>nicht gespeichert</b>.
+        Ausgewertet werden Dividenden, Zinsen und ausländische Quellensteuer.
+      </p>
+      <div class="drop-zone" id="taxDrop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');taxUpload(event.dataTransfer.files[0])">
+        <div style="font-size:11px;color:var(--muted);">📄 IBKR Activity CSV hierher ziehen oder klicken</div>
+        <input type="file" id="taxFile" accept=".csv" style="display:none" onchange="taxUpload(this.files[0])">
+      </div>
+      <div id="tax-msg" class="settings-msg" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="settings-card" id="tax-result" style="display:none;">
+      <h2 class="settings-h">Ergebnis</h2>
+      <div class="tax-cards" id="tax-cards"></div>
+      <div id="tax-kap"></div>
+      <div id="tax-breakdown"></div>
+      <p class="settings-hint" style="margin-top:14px;">
+        ⚠️ <b>Ohne Gewähr</b> — keine Steuerberatung. Beträge stammen aus IBKRs eigener
+        EUR-Umrechnung. Die genauen Zeilennummern der Anlage KAP hängen vom Formularjahr ab;
+        bitte mit Steuerberater/Elster prüfen. Veräußerungsgewinne, Vorabpauschale und
+        Optionen/Termingeschäfte sind <b>nicht</b> enthalten.
+      </p>
+    </div>
+
+  </div>
+</section><!-- end #view-tax -->
+
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
   <div class="page-placeholder">
@@ -478,6 +517,9 @@
 <script>
   document.getElementById('dropZone').addEventListener('click', function() {
     document.getElementById('fileInput').click();
+  });
+  document.getElementById('taxDrop').addEventListener('click', function() {
+    document.getElementById('taxFile').click();
   });
   function readFile(file) {
     if (!file) return;

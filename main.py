@@ -29,7 +29,7 @@ import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -1030,4 +1030,111 @@ async def ibkr_isin_resolve(isin: str, request: Request):
     except Exception as e:
         print(f"ISIN resolve error for {isin}: {e}")
         return JSONResponse(content=[])
+
+# ── Deutscher Steuer-Report (IBKR Activity Statement → Anlage KAP) ───────────────
+# Stateless: Upload wird geparst und sofort zurückgegeben, nichts gespeichert.
+# Quelle der EUR-Werte: IBKR liefert je Sektion eine "Gesamt <Sektion> in EUR"-Zeile,
+# d.h. die Währungsumrechnung kommt von IBKR (kein eigenes FX nötig).
+
+def _parse_de_number(s: str):
+    """IBKR-CSV nutzt Punkt als Dezimaltrenner; tolerant gegenüber Tausender-Kommas."""
+    s = (s or "").strip().replace('"', '')
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        try:
+            return float(s.replace(",", ""))
+        except ValueError:
+            return None
+
+def _parse_ibkr_tax_csv(text: str) -> dict:
+    """
+    Parst ein deutsches IBKR Activity Statement (CSV) und extrahiert die für die
+    Anlage KAP relevanten Sektionen: Dividenden, Zinsen, Quellensteuer.
+    """
+    import csv as _csv
+    from collections import Counter
+
+    sections = {"Dividenden": "dividends", "Zinsen": "interest", "Quellensteuer": "withholding"}
+    out = {
+        "dividends": {"total_eur": None, "by_currency": {}, "items": []},
+        "interest":  {"total_eur": None, "by_currency": {}, "items": []},
+        "withholding": {"total_eur": None, "by_currency": {}, "items": []},
+    }
+    years: Counter = Counter()
+
+    reader = _csv.reader(text.splitlines())  # splitlines: robust gegen \r\n / \r / \n
+    for row in reader:
+        if len(row) < 6:
+            continue
+        sec, typ = row[0].strip(), row[1].strip()
+        key = sections.get(sec)
+        if not key or typ != "Data":
+            continue
+        col2   = row[2].strip()   # Währung ODER Summen-Label
+        datum  = row[3].strip()
+        desc   = row[4].strip()
+        betrag = _parse_de_number(row[5])
+        if betrag is None:
+            continue
+
+        # Gesamtzeile in EUR der ganzen Sektion (z.B. "Gesamt Dividenden in EUR")
+        if col2.startswith("Gesamt ") and col2.endswith(" in EUR"):
+            out[key]["total_eur"] = betrag
+            continue
+        # Pro-Währung EUR-Subtotal ("Gesamtwert in EUR") und natives Subtotal ("Gesamt") überspringen
+        if col2 == "Gesamtwert in EUR" or col2 == "Gesamt":
+            continue
+        # Echte Einzelposition: col2 ist ein Währungscode
+        if 2 <= len(col2) <= 4 and col2.isalpha():
+            out[key]["by_currency"][col2] = out[key]["by_currency"].get(col2, 0.0) + betrag
+            out[key]["items"].append({
+                "currency": col2, "date": datum, "description": desc, "amount": betrag,
+                "code": (row[6].strip() if len(row) > 6 else ""),
+            })
+            if len(datum) >= 4 and datum[:4].isdigit():
+                years[datum[:4]] += 1
+
+    # Fallback: falls keine Gesamtzeile, native Summe (nur korrekt, wenn alles EUR)
+    for key in out:
+        if out[key]["total_eur"] is None and out[key]["by_currency"]:
+            out[key]["total_eur"] = round(sum(out[key]["by_currency"].values()), 2)
+
+    div = out["dividends"]["total_eur"] or 0.0
+    interest = out["interest"]["total_eur"] or 0.0
+    wht = out["withholding"]["total_eur"] or 0.0  # negativ (Steuerabzug)
+
+    out["summary"] = {
+        "year": years.most_common(1)[0][0] if years else None,
+        "dividends_eur": round(div, 2),
+        "interest_eur": round(interest, 2),
+        "withholding_eur": round(wht, 2),
+        "foreign_withholding_eur": round(abs(wht), 2),
+        "kapitalertraege_eur": round(div + interest, 2),
+    }
+    return out
+
+@app.post("/api/tax/report")
+async def tax_report(file: UploadFile = File(...)):
+    """
+    Nimmt ein IBKR Activity Statement (CSV) entgegen und gibt die Anlage-KAP-
+    relevanten Summen (Dividenden, Zinsen, ausländische Quellensteuer) zurück.
+    Stateless — die Datei wird nicht gespeichert.
+    """
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8-sig", errors="replace")
+        result = _parse_ibkr_tax_csv(text)
+        s = result["summary"]
+        if not any([s["dividends_eur"], s["interest_eur"], s["withholding_eur"]]):
+            return JSONResponse(
+                {"ok": False, "error": "Keine Dividenden/Zinsen/Quellensteuer gefunden — "
+                                       "ist das ein IBKR Activity Statement (CSV)?"},
+                status_code=422)
+        return JSONResponse({"ok": True, **result})
+    except Exception as e:
+        print(f"tax_report error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 

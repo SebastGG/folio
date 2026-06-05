@@ -1932,3 +1932,80 @@ async function settingsSaveIbkr(btn) {
         if (btn) btn.disabled = false;
     }
 }
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 14. STEUER-REPORT (IBKR Activity CSV → Anlage KAP)        ║
+// ╚══════════════════════════════════════════════════════════╝
+
+/** Lädt das IBKR Activity CSV hoch und rendert das Ergebnis. Stateless. */
+async function taxUpload(file) {
+    if (!file) return;
+    var msg = document.getElementById('tax-msg');
+    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
+    setMsg('Verarbeite ' + file.name + ' …', '');
+    try {
+        var fd = new FormData();
+        fd.append('file', file);
+        var res = await fetch('/api/tax/report', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
+        if (res && res.ok) { setMsg('✓ ' + file.name + ' ausgewertet', 'ok'); taxRender(res); }
+        else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    }
+}
+
+/** Rendert Cards + Anlage-KAP-Orientierung + Aufschlüsselung je Währung. */
+function taxRender(data) {
+    var s = data.summary || {};
+    var box = document.getElementById('tax-result');
+    if (box) box.style.display = '';
+
+    var yEl = document.getElementById('tax-year');
+    if (yEl && s.year) { yEl.style.display = ''; yEl.textContent = 'Steuerjahr ' + s.year; yEl.className = 'settings-badge ok'; }
+
+    var eur = function(v) {
+        return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+    };
+
+    var card = function(label, val, accent) {
+        return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
+             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
+    };
+    var cardsEl = document.getElementById('tax-cards');
+    if (cardsEl) cardsEl.innerHTML =
+          card('Dividenden', s.dividends_eur)
+        + card('Zinsen', s.interest_eur)
+        + card('Ausl. Quellensteuer', s.foreign_withholding_eur, 'var(--red)')
+        + card('Kapitalerträge gesamt', s.kapitalertraege_eur, 'var(--accent)');
+
+    var kap = document.getElementById('tax-kap');
+    if (kap) kap.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><tbody>'
+        + '<tr class="pr-section"><td colspan="2">Anlage KAP — Orientierung (ohne Gewähr)</td></tr>'
+        + '<tr class="pr-row"><td>Kapitalerträge (Dividenden + Zinsen)</td><td>' + eur(s.kapitalertraege_eur) + '</td></tr>'
+        + '<tr class="pr-row"><td style="padding-left:22px;color:var(--muted)">davon Dividenden</td><td>' + eur(s.dividends_eur) + '</td></tr>'
+        + '<tr class="pr-row"><td style="padding-left:22px;color:var(--muted)">davon Zinsen</td><td>' + eur(s.interest_eur) + '</td></tr>'
+        + '<tr class="pr-row"><td>Anrechenbare ausländische Quellensteuer</td><td>' + eur(s.foreign_withholding_eur) + '</td></tr>'
+        + '</tbody></table>';
+
+    var bd = document.getElementById('tax-breakdown');
+    if (bd) {
+        var secName = { dividends: 'Dividenden', interest: 'Zinsen', withholding: 'Quellensteuer' };
+        var h = '';
+        ['dividends', 'interest', 'withholding'].forEach(function(k) {
+            var sec = data[k];
+            if (!sec) return;
+            var rows = Object.keys(sec.by_currency || {}).sort().map(function(c) {
+                return '<tr class="pr-row"><td>' + c + '</td><td>'
+                     + (sec.by_currency[c]).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                     + '</td></tr>';
+            }).join('');
+            h += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+               + secName[k] + ' — ' + (sec.items ? sec.items.length : 0) + ' Positionen, Gesamt ' + eur(sec.total_eur) + '</summary>'
+               + '<table class="pr-table" style="margin-top:6px"><tbody>'
+               + '<tr class="pr-section"><td colspan="2">Summen je Währung (nativ)</td></tr>'
+               + rows + '</tbody></table></details>';
+        });
+        bd.innerHTML = h;
+    }
+}
