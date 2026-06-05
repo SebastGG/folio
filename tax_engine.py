@@ -234,12 +234,12 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
             except Exception as e:
                 print(f"[tax] FX laden {c} fehlgeschlagen: {e}")
 
-    res = {
-        "aktien_gewinn": 0.0, "aktien_verlust": 0.0,        # Z.20 / Z.23
-        "sonstige_gewinn": 0.0, "sonstige_verlust": 0.0,    # Z.22 (Verluste) u.a.
-        "futures_gewinn": 0.0, "futures_verlust": 0.0,      # Termingeschäfte (separat)
-        "warnings": [],
-    }
+    # Realisierte Ergebnisse je VERKAUFSJAHR sammeln (ein FIFO-Durchlauf für alle Jahre)
+    def _ybucket():
+        return {"aktien_gewinn": 0.0, "aktien_verlust": 0.0,
+                "futures_gewinn": 0.0, "futures_verlust": 0.0,
+                "sonstige_gewinn": 0.0, "sonstige_verlust": 0.0}
+    peryear = _dd(_ybucket)
 
     for sym, evs in events.items():
         evs = sorted(evs, key=lambda e: (e["date"], 0 if e["t"] == "split" else 1))
@@ -279,54 +279,64 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                         realized = proceeds - cost
                 except Exception:
                     realized = None
-                if realized is not None and d[:4] == target_year:
+                if realized is not None:
+                    by = peryear[d[:4]]
                     if is_aktie:
-                        if realized >= 0: res["aktien_gewinn"] += realized
-                        else: res["aktien_verlust"] += -realized
+                        if realized >= 0: by["aktien_gewinn"] += realized
+                        else: by["aktien_verlust"] += -realized
                     elif cat == "Futures":
-                        if realized >= 0: res["futures_gewinn"] += realized
-                        else: res["futures_verlust"] += -realized
+                        if realized >= 0: by["futures_gewinn"] += realized
+                        else: by["futures_verlust"] += -realized
                     else:
-                        if realized >= 0: res["sonstige_gewinn"] += realized
-                        else: res["sonstige_verlust"] += -realized
+                        if realized >= 0: by["sonstige_gewinn"] += realized
+                        else: by["sonstige_verlust"] += -realized
                 lot[0] += (match if lot[0] < 0 else -match)
                 rem    += (match if rem < 0 else -match)
                 if abs(lot[0]) < 1e-9: lots.pop(0)
             if abs(rem) > 1e-9:
                 lots.append([rem, price, cpu, d, cur])
 
-    # Erträge des Zieljahres
-    tfile = next((f for f in files if f["year"] == target_year), None)
-    dividends = tfile["dividends_eur"] if tfile else 0.0
-    interest  = tfile["interest_eur"] if tfile else 0.0
-    withholding = abs(tfile["withholding_eur"]) if tfile else 0.0
-    div_de    = tfile["div_de_eur"] if tfile else 0.0
-
     g = lambda x: round(x, 2)
-    aktien_gewinn = g(res["aktien_gewinn"]); aktien_verlust = g(res["aktien_verlust"])
-    futures_gewinn = g(res["futures_gewinn"]); futures_verlust = g(res["futures_verlust"])
-    sonstige_gewinn = g(res["sonstige_gewinn"]); sonstige_verlust = g(res["sonstige_verlust"])
-    # Ausländische Kapitalerträge (Z.19): Erträge + realisierte Netto-Ergebnisse (vereinfacht)
-    kap_foreign = g(dividends - div_de + interest
-                    + res["aktien_gewinn"] - res["aktien_verlust"]
-                    + res["futures_gewinn"] - res["futures_verlust"]
-                    + res["sonstige_gewinn"] - res["sonstige_verlust"])
+    income_by_year = {f["year"]: f for f in files if f["year"]}
+
+    def _year_result(yr: str) -> dict:
+        by = peryear.get(yr, _ybucket())
+        fy = income_by_year.get(yr)
+        dividends   = fy["dividends_eur"] if fy else 0.0
+        interest    = fy["interest_eur"]  if fy else 0.0
+        withholding = abs(fy["withholding_eur"]) if fy else 0.0
+        div_de      = fy["div_de_eur"]    if fy else 0.0
+        # Ausländische Kapitalerträge (Z.19): ausl. Erträge + realisierte Netto-Ergebnisse
+        kap_foreign = g(dividends - div_de + interest
+                        + by["aktien_gewinn"] - by["aktien_verlust"]
+                        + by["futures_gewinn"] - by["futures_verlust"]
+                        + by["sonstige_gewinn"] - by["sonstige_verlust"])
+        return {
+            "year": yr,
+            "line7_inland_abgeltung": g(div_de),                       # mit dt. Steuerabzug
+            "line18_inland": None,                                     # nicht zuverlässig berechenbar
+            "line19_foreign": kap_foreign,
+            "line20_aktien_gewinn": g(by["aktien_gewinn"]),
+            "line22_sonstige_verlust": g(by["futures_verlust"] + by["sonstige_verlust"]),
+            "line23_aktien_verlust": g(by["aktien_verlust"]),
+            "aktien_gewinn": g(by["aktien_gewinn"]), "aktien_verlust": g(by["aktien_verlust"]),
+            "futures_gewinn": g(by["futures_gewinn"]), "futures_verlust": g(by["futures_verlust"]),
+            "sonstige_gewinn": g(by["sonstige_gewinn"]), "sonstige_verlust": g(by["sonstige_verlust"]),
+            "dividends_eur": g(dividends),
+            "interest_eur": g(interest),
+            "withholding_eur": g(withholding),
+        }
+
+    avail = sorted(set(list(peryear.keys()) + list(income_by_year.keys())))
+    years = {y: _year_result(y) for y in avail}
+    default_year = target_year if (target_year in years) else (avail[-1] if avail else None)
 
     return {
-        "year": target_year,
-        "line18_inland": g(div_de),
-        "line19_foreign": kap_foreign,
-        "line20_aktien_gewinn": aktien_gewinn,
-        # Z.22 = Verluste aus Nicht-Aktien (Futures = "non-share" laut PwC + Sonstige)
-        "line22_sonstige_verlust": g(res["futures_verlust"] + res["sonstige_verlust"]),
-        "line23_aktien_verlust": aktien_verlust,
-        "aktien_gewinn": aktien_gewinn, "aktien_verlust": aktien_verlust,
-        "futures_gewinn": futures_gewinn, "futures_verlust": futures_verlust,
-        "sonstige_gewinn": sonstige_gewinn, "sonstige_verlust": sonstige_verlust,
-        "dividends_eur": g(dividends),
-        "interest_eur": g(interest),
-        "withholding_eur": g(withholding),
+        "year": default_year,
+        "available_years": avail,
         "files_years": [f["year"] for f in files],
+        "years": years,
+        **(years.get(default_year, {})),   # Default-Jahr flach für Abwärtskompatibilität
     }
 
 

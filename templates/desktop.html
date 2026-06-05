@@ -438,7 +438,14 @@
     </div>
 
     <div class="settings-card" id="tax-result" style="display:none;">
-      <h2 class="settings-h">Ergebnis</h2>
+      <h2 class="settings-h">Zusammenfassung der Kapitalerträge
+        <span style="flex:1"></span>
+        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
+          Steuerjahr
+          <select id="tax-year-select" onchange="taxSelectYear(this.value)"
+            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
+        </label>
+      </h2>
       <div class="tax-cards" id="tax-cards"></div>
       <div id="tax-kap"></div>
       <div id="tax-breakdown"></div>

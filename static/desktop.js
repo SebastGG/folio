@@ -1959,52 +1959,78 @@ async function taxUpload(fileList) {
     }
 }
 
-/** Rendert die Anlage-KAP-Werte (Aktien/Termingeschäfte/Erträge). */
-function taxRender(d) {
+/** Speichert die Mehrjahres-Antwort, füllt das Jahres-Dropdown, rendert das Default-Jahr. */
+var _taxData = null;
+function taxRender(data) {
+    _taxData = data;
     var box = document.getElementById('tax-result');
     if (box) box.style.display = '';
-    var yEl = document.getElementById('tax-year');
-    if (yEl && d.year) { yEl.style.display = ''; yEl.textContent = 'Steuerjahr ' + d.year; yEl.className = 'settings-badge ok'; }
 
-    var eur = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; };
+    var sel = document.getElementById('tax-year-select');
+    if (sel) {
+        sel.innerHTML = (data.available_years || []).map(function(y) {
+            return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
+        }).join('');
+    }
+    taxSelectYear(data.year);
+}
+
+/** Wechselt das angezeigte Steuerjahr (instant, ohne erneuten Upload). */
+function taxSelectYear(year) {
+    if (!_taxData || !_taxData.years || !_taxData.years[year]) return;
+    _taxRenderYear(_taxData.years[year], _taxData.files_years || []);
+}
+
+/** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
+function _taxRenderYear(d, filesYears) {
+    // PwC-Konvention: negative Beträge in Klammern
+    var pwc = function(v) {
+        if (v == null) return '—';
+        var a = Math.abs(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (v < 0 ? '(' + a + ')' : a) + ' €';
+    };
     var card = function(label, val, accent) {
         return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
-             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
+             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + pwc(val) + '</div></div>';
     };
-
-    var aktienNetto = (d.aktien_gewinn || 0) - (d.aktien_verlust || 0);
     var cardsEl = document.getElementById('tax-cards');
     if (cardsEl) cardsEl.innerHTML =
-          card('Aktien-Gewinne (Z.20)', d.aktien_gewinn, 'var(--green)')
-        + card('Aktien-Verluste (Z.23)', d.aktien_verlust, 'var(--red)')
-        + card('Aktien netto', aktienNetto, aktienNetto >= 0 ? 'var(--green)' : 'var(--red)')
-        + card('Dividenden', d.dividends_eur)
-        + card('Zinsen', d.interest_eur)
-        + card('Quellensteuer', d.withholding_eur, 'var(--red)');
+          card('Ausländ. Kapitalerträge (Z.19)', d.line19_foreign, (d.line19_foreign || 0) < 0 ? 'var(--red)' : 'var(--green)')
+        + card('Aktiengewinne (Z.20)', d.line20_aktien_gewinn, 'var(--green)')
+        + card('Aktienverluste (Z.23)', d.line23_aktien_verlust, 'var(--red)')
+        + card('Nicht-Aktien-Verluste (Z.22)', d.line22_sonstige_verlust, 'var(--red)');
 
-    var row = function(label, val, indent, color) {
-        return '<tr class="pr-row"><td style="' + (indent ? 'padding-left:22px;color:var(--muted)' : '') + '">' + label + '</td>'
-             + '<td style="' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    // PwC-Stil-Tabelle: [Zeile] [Bezeichnung] [Betrag]
+    var r = function(line, label, val, indent, strong) {
+        return '<tr class="pr-row"' + (strong ? ' style="font-weight:600"' : '') + '>'
+             + '<td style="width:54px;color:var(--muted)">' + (line ? 'Zeile ' + line : '') + '</td>'
+             + '<td style="' + (indent ? 'padding-left:16px;color:var(--muted)' : '') + '">' + label + '</td>'
+             + '<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums">' + pwc(val) + '</td></tr>';
     };
+    var sec = function(label) { return '<tr class="pr-section"><td colspan="3">' + label + '</td></tr>'; };
+
     var kap = document.getElementById('tax-kap');
     if (kap) kap.innerHTML =
-          '<table class="pr-table" style="margin-top:14px"><tbody>'
-        + '<tr class="pr-section"><td colspan="2">Aktien-Veräußerungen (Anlage KAP)</td></tr>'
-        + row('Gewinne aus Aktienveräußerung (Z.20)', d.aktien_gewinn, false, 'var(--green)')
-        + row('Verluste aus Aktienveräußerung (Z.23)', d.aktien_verlust, false, 'var(--red)')
-        + row('Netto Aktien', aktienNetto, true)
-        + '<tr class="pr-section"><td colspan="2">Termingeschäfte / Nicht-Aktien (Futures)</td></tr>'
-        + row('Gewinne (in Z.19 enthalten)', d.futures_gewinn, false, 'var(--green)')
-        + row('Verluste (Z.22)', d.line22_sonstige_verlust, false, 'var(--red)')
-        + '<tr class="pr-section"><td colspan="2">Erträge</td></tr>'
-        + row('Dividenden (gesamt)', d.dividends_eur)
-        + row('davon inländisch (~DE)', d.line18_inland, true)
-        + row('Zinsen', d.interest_eur)
-        + row('Quellensteuer', d.withholding_eur, false, 'var(--red)')
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col style="width:54px"><col><col style="width:120px"></colgroup><tbody>'
+        + sec('Kapitalerträge mit deutschem Steuerabzug')
+        + r('7', 'Kapitalerträge', d.line7_inland_abgeltung)
+        + sec('Kapitalerträge ohne deutschen Steuerabzug')
+        + r('18', 'Inländische Kapitalerträge', d.line18_inland)
+        + r('19', 'Ausländische Kapitalerträge', d.line19_foreign, false, true)
+        + r('20', 'darin: Gewinne aus Aktienveräußerung', d.line20_aktien_gewinn, true)
+        + r('22', 'darin: Verluste aus Nicht-Aktien', d.line22_sonstige_verlust, true)
+        + r('23', 'darin: Verluste aus Aktienveräußerung', d.line23_aktien_verlust, true)
+        + sec('Erträge (Detail)')
+        + r('', 'Dividenden (gesamt)', d.dividends_eur)
+        + r('', 'Zinsen', d.interest_eur)
+        + r('', 'Anrechenbare ausländische Quellensteuer', d.withholding_eur)
+        + r('', 'Termingeschäfte — Gewinne', d.futures_gewinn, true)
+        + r('', 'Termingeschäfte — Verluste', d.futures_verlust, true)
         + '</tbody></table>';
 
     var bd = document.getElementById('tax-breakdown');
     if (bd) bd.innerHTML =
-          '<p class="settings-hint" style="margin-top:12px">Verarbeitete Jahre: <b>'
-        + (d.files_years || []).filter(Boolean).join(', ') + '</b></p>';
+          '<p class="settings-hint" style="margin-top:12px">Hochgeladene Jahre: <b>'
+        + (filesYears || []).filter(Boolean).join(', ') + '</b> · Zeile 18 wird (mangels '
+        + 'Emittenten-Klassifikation) nicht zuverlässig berechnet.</p>';
 }
