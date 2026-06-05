@@ -156,7 +156,7 @@ def parse_file(text: str) -> dict:
             out["trades"].append({
                 "date": date, "qty": qty, "price": price, "comm": comm or 0.0,
                 "currency": r[4].strip(), "category": r[3].strip(), "symbol": r[5].strip(),
-                "realguv": _num(r[13]) or 0.0,   # IBKRs realisierter G&V (Handelswährung)
+                "proceeds": _num(r[10]) or 0.0,  # Erlös (enthält bei Futures den Multiplikator)
             })
             if len(date) >= 4:
                 years[date[:4]] += 1
@@ -252,18 +252,13 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
             cat = e["category"]
             if cat in _FOREX_CATS:
                 continue  # Forex: kein §20-Veräußerungsgeschäft
-            # Futures (Termingeschäfte): IBKRs realisierten G&V nutzen (Multiplikator/MTM),
-            # in EUR zum Handelstag. Kein FIFO (Kontraktbuchung).
-            if cat == "Futures":
-                if e["date"][:4] == target_year and e.get("realguv"):
-                    try:
-                        eur = e["realguv"] * fx_to_eur(e["currency"], e["date"])
-                    except Exception:
-                        eur = 0.0
-                    if eur >= 0: res["futures_gewinn"] += eur
-                    else: res["futures_verlust"] += -eur
-                continue
-            q, price, d, cur = e["qty"], e["price"], e["date"], e["currency"]
+            q, d, cur = e["qty"], e["date"], e["currency"]
+            # Futures: effektiver Preis = Erlös/Menge (enthält den Kontrakt-Multiplikator);
+            # sonst der normale Stückkurs. Beides läuft durch dasselbe FIFO + EUR pro Bein.
+            if cat == "Futures" and q:
+                price = abs(e["proceeds"] / q)
+            else:
+                price = e["price"]
             cpu = (e["comm"] / abs(q)) if q else 0.0
             if not lots or (lots[-1][0] > 0) == (q > 0):
                 lots.append([q, price, cpu, d, cur])
@@ -288,6 +283,9 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                     if is_aktie:
                         if realized >= 0: res["aktien_gewinn"] += realized
                         else: res["aktien_verlust"] += -realized
+                    elif cat == "Futures":
+                        if realized >= 0: res["futures_gewinn"] += realized
+                        else: res["futures_verlust"] += -realized
                     else:
                         if realized >= 0: res["sonstige_gewinn"] += realized
                         else: res["sonstige_verlust"] += -realized
@@ -319,7 +317,8 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
         "line18_inland": g(div_de),
         "line19_foreign": kap_foreign,
         "line20_aktien_gewinn": aktien_gewinn,
-        "line22_sonstige_verlust": sonstige_verlust,
+        # Z.22 = Verluste aus Nicht-Aktien (Futures = "non-share" laut PwC + Sonstige)
+        "line22_sonstige_verlust": g(res["futures_verlust"] + res["sonstige_verlust"]),
         "line23_aktien_verlust": aktien_verlust,
         "aktien_gewinn": aktien_gewinn, "aktien_verlust": aktien_verlust,
         "futures_gewinn": futures_gewinn, "futures_verlust": futures_verlust,

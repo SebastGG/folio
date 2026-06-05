@@ -1993,9 +1993,9 @@ function taxRender(d) {
         + row('Gewinne aus Aktienveräußerung (Z.20)', d.aktien_gewinn, false, 'var(--green)')
         + row('Verluste aus Aktienveräußerung (Z.23)', d.aktien_verlust, false, 'var(--red)')
         + row('Netto Aktien', aktienNetto, true)
-        + '<tr class="pr-section"><td colspan="2">Termingeschäfte (Futures)</td></tr>'
-        + row('Gewinne', d.futures_gewinn, false, 'var(--green)')
-        + row('Verluste', d.futures_verlust, false, 'var(--red)')
+        + '<tr class="pr-section"><td colspan="2">Termingeschäfte / Nicht-Aktien (Futures)</td></tr>'
+        + row('Gewinne (in Z.19 enthalten)', d.futures_gewinn, false, 'var(--green)')
+        + row('Verluste (Z.22)', d.line22_sonstige_verlust, false, 'var(--red)')
         + '<tr class="pr-section"><td colspan="2">Erträge</td></tr>'
         + row('Dividenden (gesamt)', d.dividends_eur)
         + row('davon inländisch (~DE)', d.line18_inland, true)
