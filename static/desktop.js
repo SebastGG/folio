@@ -1485,6 +1485,37 @@ updateClock();
 // ║ 12. IBKR POSITIONEN (Desktop)                             ║
 // ╚══════════════════════════════════════════════════════════╝
 
+// ── IBKR Live-Bewertung ──────────────────────────────────────────────────────
+// Mengen + Einstand kommen aus dem Flex-Sync, der AKTUELLE Wert wird mit Live-
+// Yahoo-Kursen gerechnet (× Menge, in Base umgerechnet). Fällt auf den IBKR-
+// position_value zurück, wenn kein Live-Kurs vorliegt (z.B. Ticker nicht im Basket).
+
+/** Währung→Base-Raten aus IBKRs eigenen FX-Raten der Positionen. */
+function ibkrCcyFx() {
+    var ccyFx = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if (p.currency && p.fx_rate_to_base) ccyFx[p.currency] = p.fx_rate_to_base;
+    });
+    return ccyFx;
+}
+
+/** Wechselkurs einer Notierungswährung nach Base (GBp/GBX = GBP/100). null = unbekannt. */
+function ibkrFxToBase(cur, ccyFx) {
+    if (!cur) return null;
+    if (cur === 'GBp' || cur === 'GBX') return ccyFx['GBP'] ? ccyFx['GBP'] / 100 : null;
+    return (cur in ccyFx) ? ccyFx[cur] : null;
+}
+
+/** Aktueller Wert einer Position in Base: Live-Yahoo-Kurs × Menge, sonst IBKR-Wert. */
+function ibkrLiveValue(p, ccyFx) {
+    var fx    = p.fx_rate_to_base || 1.0;
+    var qty   = p.quantity || 0;
+    var ysym  = ibkrPosYahoo(p);
+    var liveP = perfData[ysym];
+    var yrate = (liveP && liveP.price) ? ibkrFxToBase(tickerCurrencies[ysym], ccyFx) : null;
+    return (yrate !== null) ? qty * liveP.price * yrate : (p.position_value || 0) * fx;
+}
+
 function renderPortfolioReport() {
     var el = document.getElementById('portfolioReport');
     if (!el) return;
@@ -1493,15 +1524,7 @@ function renderPortfolioReport() {
     var cashEur  = cashBase ? (cashBase.ending_cash || 0) : 0;
 
     // Währung→Base aus IBKRs eigenen FX-Raten (konsistent mit Positions-Bewertung)
-    var ccyFx = {};
-    (ibkrPositions || []).forEach(function(p) {
-        if (p.currency && p.fx_rate_to_base) ccyFx[p.currency] = p.fx_rate_to_base;
-    });
-    function fxToBase(cur) {
-        if (!cur) return null;
-        if (cur === 'GBp' || cur === 'GBX') return ccyFx['GBP'] ? ccyFx['GBP'] / 100 : null;
-        return (cur in ccyFx) ? ccyFx[cur] : null;
-    }
+    var ccyFx = ibkrCcyFx();
 
     var longG = {}, shortG = {};
     (ibkrPositions || []).forEach(function(p) {
@@ -1509,14 +1532,8 @@ function renderPortfolioReport() {
         var qty = p.quantity || 0;
         var cb  = (p.cost_basis_money || 0) * fx;
         var cls = (p.asset_class || 'OTHER').toUpperCase();
-        // Live-Kurs aus Yahoo (über gemapptes Symbol), korrekt aus dessen Währung
-        // nach Base umgerechnet — sonst IBKR-Wert (immer korrekt in Base).
-        var ysym  = ibkrPosYahoo(p);
-        var liveP = perfData[ysym];
-        var yrate = (liveP && liveP.price) ? fxToBase(tickerCurrencies[ysym]) : null;
-        var pv = (yrate !== null)
-            ? qty * liveP.price * yrate
-            : (p.position_value || 0) * fx;
+        // Aktueller Wert mit Live-Yahoo-Kurs (sonst IBKR-Wert) — siehe ibkrLiveValue.
+        var pv  = ibkrLiveValue(p, ccyFx);
         var grp = qty >= 0 ? longG : shortG;
         if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };
         grp[cls].value += pv;
@@ -1602,21 +1619,18 @@ function ibkrRenderTable() {
             + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
     };
 
-    var html = '', totalPnl = 0, totalValue = 0, totalCost = 0, totalValueEur = 0, totalCostEur = 0, totalPnlEur = 0;
+    var html = '', totalValueEur = 0, totalCostEur = 0, totalPnlEur = 0;
 
     // ── Positionen ─────────────────────────────────────────────
     if (hasPosns) {
         html += sectionHdr('Positionen');
+        var ccyFx = ibkrCcyFx();
         ibkrPositions.forEach(function(p) {
             var fx       = p.fx_rate_to_base || 1.0;
-            var pnlMoney = (p.position_value || 0) - (p.cost_basis_money || 0);
-            var cbmEur   = (p.cost_basis_money || 0) * fx;
-            var pvEur    = (p.position_value  || 0) * fx;
-            var pnlEur   = pnlMoney * fx;
-            var pnlPct   = p.cost_basis_money ? pnlMoney / Math.abs(p.cost_basis_money) * 100 : 0;
-            totalPnl      += pnlMoney;
-            totalValue    += (p.position_value || 0);
-            totalCost     += (p.cost_basis_money || 0);
+            var cbmEur   = (p.cost_basis_money || 0) * fx;   // Einstand aus IBKR
+            var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert mit Live-Kurs
+            var pnlEur   = pvEur - cbmEur;
+            var pnlPct   = cbmEur ? pnlEur / Math.abs(cbmEur) * 100 : 0;
             totalValueEur += pvEur;
             totalCostEur  += cbmEur;
             totalPnlEur   += pnlEur;
@@ -1659,7 +1673,6 @@ function ibkrRenderTable() {
     // ── Footer ──────────────────────────────────────────────────
     var footHtml = '';
     if (hasPosns && totalValueEur !== 0) {
-        var tPnlPct    = totalCost    ? totalPnl    / Math.abs(totalCost)    * 100 : 0;
         var tPnlPctEur = totalCostEur ? totalPnlEur / Math.abs(totalCostEur) * 100 : 0;
         var tc = totalPnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'

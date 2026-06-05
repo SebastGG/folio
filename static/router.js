@@ -24,7 +24,8 @@ var PAGES = [
     },
     {
         id: 'ibkr', label: 'IBKR', icon: '📋',
-        onShow: null   // Daten werden beim Startup geladen; Tabellen sind bereits gefüllt
+        // Neu rendern, damit der Depotwert die aktuellsten Live-Kurse nutzt
+        onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
     },
     {
         id: 'screener', label: 'Screener', icon: '🔍',
