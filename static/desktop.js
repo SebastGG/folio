@@ -1937,75 +1937,74 @@ async function settingsSaveIbkr(btn) {
 // ║ 14. STEUER-REPORT (IBKR Activity CSV → Anlage KAP)        ║
 // ╚══════════════════════════════════════════════════════════╝
 
-/** Lädt das IBKR Activity CSV hoch und rendert das Ergebnis. Stateless. */
-async function taxUpload(file) {
-    if (!file) return;
+/** Lädt alle IBKR Activity CSVs hoch (Multi-File) und rendert das Ergebnis. Stateless. */
+async function taxUpload(fileList) {
+    var files = fileList ? Array.prototype.slice.call(fileList) : [];
+    if (!files.length) return;
     var msg = document.getElementById('tax-msg');
     function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
-    setMsg('Verarbeite ' + file.name + ' …', '');
+    setMsg('Verarbeite ' + files.length + ' Datei(en) … (FX-Kurse werden geladen, kann kurz dauern)', '');
     try {
         var fd = new FormData();
-        fd.append('file', file);
+        files.forEach(function(f) { fd.append('files', f); });
         var res = await fetch('/api/tax/report', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
-        if (res && res.ok) { setMsg('✓ ' + file.name + ' ausgewertet', 'ok'); taxRender(res); }
-        else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
+        if (res && res.ok) {
+            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet', 'ok');
+            taxRender(res);
+        } else {
+            setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
     } catch (e) {
         setMsg('Fehler: ' + e.message, 'err');
     }
 }
 
-/** Rendert Cards + Anlage-KAP-Orientierung + Aufschlüsselung je Währung. */
-function taxRender(data) {
-    var s = data.summary || {};
+/** Rendert die Anlage-KAP-Werte (Aktien/Termingeschäfte/Erträge). */
+function taxRender(d) {
     var box = document.getElementById('tax-result');
     if (box) box.style.display = '';
-
     var yEl = document.getElementById('tax-year');
-    if (yEl && s.year) { yEl.style.display = ''; yEl.textContent = 'Steuerjahr ' + s.year; yEl.className = 'settings-badge ok'; }
+    if (yEl && d.year) { yEl.style.display = ''; yEl.textContent = 'Steuerjahr ' + d.year; yEl.className = 'settings-badge ok'; }
 
-    var eur = function(v) {
-        return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
-    };
-
+    var eur = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; };
     var card = function(label, val, accent) {
         return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
              + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
     };
+
+    var aktienNetto = (d.aktien_gewinn || 0) - (d.aktien_verlust || 0);
     var cardsEl = document.getElementById('tax-cards');
     if (cardsEl) cardsEl.innerHTML =
-          card('Dividenden', s.dividends_eur)
-        + card('Zinsen', s.interest_eur)
-        + card('Ausl. Quellensteuer', s.foreign_withholding_eur, 'var(--red)')
-        + card('Kapitalerträge gesamt', s.kapitalertraege_eur, 'var(--accent)');
+          card('Aktien-Gewinne (Z.20)', d.aktien_gewinn, 'var(--green)')
+        + card('Aktien-Verluste (Z.23)', d.aktien_verlust, 'var(--red)')
+        + card('Aktien netto', aktienNetto, aktienNetto >= 0 ? 'var(--green)' : 'var(--red)')
+        + card('Dividenden', d.dividends_eur)
+        + card('Zinsen', d.interest_eur)
+        + card('Quellensteuer', d.withholding_eur, 'var(--red)');
 
+    var row = function(label, val, indent, color) {
+        return '<tr class="pr-row"><td style="' + (indent ? 'padding-left:22px;color:var(--muted)' : '') + '">' + label + '</td>'
+             + '<td style="' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    };
     var kap = document.getElementById('tax-kap');
     if (kap) kap.innerHTML =
           '<table class="pr-table" style="margin-top:14px"><tbody>'
-        + '<tr class="pr-section"><td colspan="2">Anlage KAP — Orientierung (ohne Gewähr)</td></tr>'
-        + '<tr class="pr-row"><td>Kapitalerträge (Dividenden + Zinsen)</td><td>' + eur(s.kapitalertraege_eur) + '</td></tr>'
-        + '<tr class="pr-row"><td style="padding-left:22px;color:var(--muted)">davon Dividenden</td><td>' + eur(s.dividends_eur) + '</td></tr>'
-        + '<tr class="pr-row"><td style="padding-left:22px;color:var(--muted)">davon Zinsen</td><td>' + eur(s.interest_eur) + '</td></tr>'
-        + '<tr class="pr-row"><td>Anrechenbare ausländische Quellensteuer</td><td>' + eur(s.foreign_withholding_eur) + '</td></tr>'
+        + '<tr class="pr-section"><td colspan="2">Aktien-Veräußerungen (Anlage KAP)</td></tr>'
+        + row('Gewinne aus Aktienveräußerung (Z.20)', d.aktien_gewinn, false, 'var(--green)')
+        + row('Verluste aus Aktienveräußerung (Z.23)', d.aktien_verlust, false, 'var(--red)')
+        + row('Netto Aktien', aktienNetto, true)
+        + '<tr class="pr-section"><td colspan="2">Termingeschäfte (Futures)</td></tr>'
+        + row('Gewinne', d.futures_gewinn, false, 'var(--green)')
+        + row('Verluste', d.futures_verlust, false, 'var(--red)')
+        + '<tr class="pr-section"><td colspan="2">Erträge</td></tr>'
+        + row('Dividenden (gesamt)', d.dividends_eur)
+        + row('davon inländisch (~DE)', d.line18_inland, true)
+        + row('Zinsen', d.interest_eur)
+        + row('Quellensteuer', d.withholding_eur, false, 'var(--red)')
         + '</tbody></table>';
 
     var bd = document.getElementById('tax-breakdown');
-    if (bd) {
-        var secName = { dividends: 'Dividenden', interest: 'Zinsen', withholding: 'Quellensteuer' };
-        var h = '';
-        ['dividends', 'interest', 'withholding'].forEach(function(k) {
-            var sec = data[k];
-            if (!sec) return;
-            var rows = Object.keys(sec.by_currency || {}).sort().map(function(c) {
-                return '<tr class="pr-row"><td>' + c + '</td><td>'
-                     + (sec.by_currency[c]).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                     + '</td></tr>';
-            }).join('');
-            h += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
-               + secName[k] + ' — ' + (sec.items ? sec.items.length : 0) + ' Positionen, Gesamt ' + eur(sec.total_eur) + '</summary>'
-               + '<table class="pr-table" style="margin-top:6px"><tbody>'
-               + '<tr class="pr-section"><td colspan="2">Summen je Währung (nativ)</td></tr>'
-               + rows + '</tbody></table></details>';
-        });
-        bd.innerHTML = h;
-    }
+    if (bd) bd.innerHTML =
+          '<p class="settings-hint" style="margin-top:12px">Verarbeitete Jahre: <b>'
+        + (d.files_years || []).filter(Boolean).join(', ') + '</b></p>';
 }

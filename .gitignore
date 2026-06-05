@@ -11,6 +11,10 @@ package.json
 package-lock.json
 test_*.js
 
+# Lokale Entwicklungs-/Validierungsskripte (nicht für Produktion)
+tax_validate*.py
+seed_test.py
+
 # Lokale Laufzeitdaten (Produktion liegt auf Cloudron unter /app/data)
 data/
 .env
