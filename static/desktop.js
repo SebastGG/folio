@@ -2166,16 +2166,16 @@ function _taxFullRenderYear(d) {
     if (toepfe) toepfe.innerHTML =
           '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
         + sec('Aktien-Topf', '§20 Abs. 6 S.4 — nur untereinander verrechenbar · BVerfG 2 BvL 3/21')
-        + row('Aktiengewinne', ak.gewinn, true, false, 'var(--green)')
-        + row('Aktienverluste', ak.verlust, true, false, 'var(--red)')
+        + row('Aktiengewinne · Anlage KAP Z.20', ak.gewinn, true, false, 'var(--green)')
+        + row('Aktienverluste · Anlage KAP Z.23', ak.verlust, true, false, 'var(--red)')
         + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
         + (ak.verlustvortrag > 0 ? row('→ Verlustvortrag (nicht verrechenbar)', ak.verlustvortrag, true, false, 'var(--red)')
                                  : row('→ steuerpflichtig', ak.steuerbar, true, false))
-        + sec('Allgemeiner Topf', 'Termingeschäfte (ohne 20k-Grenze), Dividenden, Zinsen')
-        + row('Termingeschäfte (netto)', al.termingeschaefte, true, false, R(al.termingeschaefte))
-        + row('Dividenden', al.dividenden, true)
-        + row('Zinsen', al.zinsen, true)
-        + row('Fremdwährung (Regel F)', al.waehrung, true, false, R(al.waehrung))
+        + sec('Allgemeiner Topf', 'Anlage KAP — Erträge/Gewinne in Z.19, Verluste in Z.22')
+        + row('Termingeschäfte (netto) · Z.19 / Z.22', al.termingeschaefte, true, false, R(al.termingeschaefte))
+        + row('Dividenden · Z.19', al.dividenden, true)
+        + row('Zinsen · Z.19', al.zinsen, true)
+        + row('Fremdwährung (Regel F) · Z.19 / Z.22', al.waehrung, true, false, R(al.waehrung))
         + Object.keys(al.waehrung_detail || {}).sort().map(function(c) {
               return '<tr class="pr-row"><td style="padding-left:34px;color:var(--muted);font-size:10px">'
                    + c + '</td><td style="text-align:right;font-size:10px;color:' + R(al.waehrung_detail[c])
@@ -2194,7 +2194,7 @@ function _taxFullRenderYear(d) {
         + row('Abgeltungsteuer 25 %', t.abgeltungsteuer, true)
         + row('Solidaritätszuschlag 5,5 %', t.soli, true)
         + row('Steuer brutto', t.steuer_brutto, false, true, 'var(--red)')
-        + row('abzgl. anrechenbare ausl. Quellensteuer', t.qst_anrechenbar, true, false, 'var(--green)')
+        + row('abzgl. anrechenbare ausl. Quellensteuer · Z.41', t.qst_anrechenbar, true, false, 'var(--green)')
         + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
         + '</tbody></table>';
 }
