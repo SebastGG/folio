@@ -240,6 +240,8 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                 "futures_gewinn": 0.0, "futures_verlust": 0.0,
                 "sonstige_gewinn": 0.0, "sonstige_verlust": 0.0}
     peryear = _dd(_ybucket)
+    # Nachweis je (Jahr, Symbol) — Summe ergibt die Topf-Werte (Z.20/23/22)
+    pos = _dd(lambda: {"cat": "", "gewinn": 0.0, "verlust": 0.0})
 
     for sym, evs in events.items():
         evs = sorted(evs, key=lambda e: (e["date"], 0 if e["t"] == "split" else 1))
@@ -281,6 +283,10 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                     realized = None
                 if realized is not None:
                     by = peryear[d[:4]]
+                    p  = pos[(d[:4], sym)]
+                    p["cat"] = "Aktien" if is_aktie else ("Futures" if cat == "Futures" else "Sonstige")
+                    if realized >= 0: p["gewinn"] += realized
+                    else: p["verlust"] += -realized
                     if is_aktie:
                         if realized >= 0: by["aktien_gewinn"] += realized
                         else: by["aktien_verlust"] += -realized
@@ -311,8 +317,17 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                         + by["aktien_gewinn"] - by["aktien_verlust"]
                         + by["futures_gewinn"] - by["futures_verlust"]
                         + by["sonstige_gewinn"] - by["sonstige_verlust"])
+        # Nachweis je Position (Summe = Topf-Werte)
+        _catord = {"Aktien": 0, "Futures": 1, "Sonstige": 2}
+        positions = sorted(
+            [{"symbol": s, "category": p["cat"],
+              "gewinn": g(p["gewinn"]), "verlust": g(p["verlust"]),
+              "net": g(p["gewinn"] - p["verlust"])}
+             for (y, s), p in pos.items() if y == yr],
+            key=lambda x: (_catord.get(x["category"], 9), -x["net"]))
         return {
             "year": yr,
+            "positions": positions,
             "line7_inland_abgeltung": g(div_de),                       # mit dt. Steuerabzug
             "line18_inland": None,                                     # nicht zuverlässig berechenbar
             "line19_foreign": kap_foreign,

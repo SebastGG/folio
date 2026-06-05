@@ -1972,6 +1972,7 @@ function taxRender(data) {
             return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
         }).join('');
     }
+    _taxRenderYearTable();          // Jahres-Vergleichstabelle (einmal, alle Jahre)
     taxSelectYear(data.year);
 }
 
@@ -1979,6 +1980,119 @@ function taxRender(data) {
 function taxSelectYear(year) {
     if (!_taxData || !_taxData.years || !_taxData.years[year]) return;
     _taxRenderYear(_taxData.years[year], _taxData.files_years || []);
+    _taxRenderChart(year);
+}
+
+/** Jahr per Klick (Chart/Tabelle) wählen — aktualisiert auch das Dropdown. */
+function taxPickYear(y) {
+    var s = document.getElementById('tax-year-select');
+    if (s) s.value = y;
+    taxSelectYear(y);
+}
+
+/** Nachweis je Position: Symbol → Gewinn/Verlust/Netto, Summen je Topf = Z.20/23/22. */
+function _taxRenderPositions(positions) {
+    var el = document.getElementById('tax-positions');
+    if (!el) return;
+    var eur = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var groups = [
+        { cat: 'Aktien',   title: 'Aktien',                     note: 'Summe Gewinne = Z.20 · Summe Verluste = Z.23' },
+        { cat: 'Futures',  title: 'Termingeschäfte (Futures)',  note: 'Summe Verluste fließt in Z.22' },
+        { cat: 'Sonstige', title: 'Sonstige',                   note: '' }
+    ];
+    var html = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 4px;">'
+             + 'Nachweis je Position — so summieren sich Gewinne/Verluste</div>'
+             + '<div style="overflow-x:auto"><table class="perf-table" style="min-width:400px"><thead><tr>'
+             + '<th style="text-align:left">Symbol</th><th style="text-align:right">Gewinn €</th>'
+             + '<th style="text-align:right">Verlust €</th><th style="text-align:right">Netto €</th></tr></thead><tbody>';
+    var any = false;
+    groups.forEach(function(grp) {
+        var rows = (positions || []).filter(function(p) { return p.category === grp.cat; });
+        if (!rows.length) return;
+        any = true;
+        var sg = 0, sv = 0;
+        html += '<tr class="pr-section"><td colspan="4">' + grp.title
+              + (grp.note ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0">— ' + grp.note + '</span>' : '')
+              + '</td></tr>';
+        rows.forEach(function(p) {
+            sg += p.gewinn; sv += p.verlust;
+            html += '<tr><td>' + p.symbol + '</td>'
+                 + '<td style="text-align:right;color:var(--green)">' + (p.gewinn ? eur(p.gewinn) : '–') + '</td>'
+                 + '<td style="text-align:right;color:var(--red)">' + (p.verlust ? eur(p.verlust) : '–') + '</td>'
+                 + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + (p.net >= 0 ? 'var(--green)' : 'var(--red)') + '">' + eur(p.net) + '</td></tr>';
+        });
+        html += '<tr style="font-weight:700;border-top:1px solid var(--border)"><td>Summe ' + grp.title + '</td>'
+              + '<td style="text-align:right;color:var(--green)">' + eur(sg) + '</td>'
+              + '<td style="text-align:right;color:var(--red)">' + eur(sv) + '</td>'
+              + '<td style="text-align:right;color:' + ((sg - sv) >= 0 ? 'var(--green)' : 'var(--red)') + '">' + eur(sg - sv) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = any ? html : '';
+}
+
+/** Balkendiagramm über die Steuerjahre: Gewinne (grün) / Verluste (rot), Netto-Label. */
+function _taxRenderChart(selYear) {
+    var el = document.getElementById('tax-chart');
+    if (!el || !_taxData || !_taxData.available_years) return;
+    var rows = _taxData.available_years.map(function(y) {
+        var d = _taxData.years[y] || {};
+        var g = (d.aktien_gewinn || 0) + (d.futures_gewinn || 0) + (d.sonstige_gewinn || 0);
+        var l = (d.aktien_verlust || 0) + (d.futures_verlust || 0) + (d.sonstige_verlust || 0);
+        return { y: y, g: g, l: l, net: g - l };
+    });
+    var maxAbs = Math.max(1, Math.max.apply(null, rows.map(function(d) { return Math.max(d.g, d.l); })));
+    var W = 620, H = 220, padL = 12, padR = 12, padTop = 26, padBot = 28;
+    var plotH = H - padTop - padBot, zeroY = padTop + plotH / 2, half = plotH / 2;
+    var n = rows.length, slot = (W - padL - padR) / Math.max(1, n), bw = Math.min(46, slot * 0.5);
+    var fmt = function(v) { return (v >= 0 ? '+' : '') + Math.round(v).toLocaleString('de-DE'); };
+    var svg = '<line x1="' + padL + '" y1="' + zeroY + '" x2="' + (W - padR) + '" y2="' + zeroY + '" stroke="var(--border)"/>';
+    rows.forEach(function(d, i) {
+        var cx = padL + slot * i + slot / 2, sel = (d.y === selYear), op = sel ? '1' : '0.5';
+        var gh = d.g / maxAbs * half, lh = d.l / maxAbs * half;
+        if (sel) svg += '<rect x="' + (cx - slot / 2 + 2) + '" y="' + padTop + '" width="' + (slot - 4) + '" height="' + plotH + '" fill="var(--bg)"/>';
+        svg += '<rect x="' + (cx - bw / 2) + '" y="' + (zeroY - gh) + '" width="' + bw + '" height="' + gh + '" fill="var(--green)" opacity="' + op + '"/>';
+        svg += '<rect x="' + (cx - bw / 2) + '" y="' + zeroY + '" width="' + bw + '" height="' + lh + '" fill="var(--red)" opacity="' + op + '"/>';
+        svg += '<text x="' + cx + '" y="' + (padTop - 9) + '" text-anchor="middle" font-size="10" font-weight="700" fill="' + (d.net >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmt(d.net) + '</text>';
+        svg += '<text x="' + cx + '" y="' + (H - 9) + '" text-anchor="middle" font-size="11" font-weight="' + (sel ? '700' : '400') + '" fill="' + (sel ? 'var(--text)' : 'var(--muted)') + '">' + d.y + '</text>';
+        svg += '<rect x="' + (cx - slot / 2) + '" y="' + padTop + '" width="' + slot + '" height="' + plotH + '" fill="transparent" style="cursor:pointer" onclick="taxPickYear(\'' + d.y + '\')"><title>' + d.y + ': Netto ' + fmt(d.net) + ' €</title></rect>';
+    });
+    el.innerHTML = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 2px;">Verlauf über die Steuerjahre — Gewinne (grün) / Verluste (rot), Netto je Jahr</div>'
+        + '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto" preserveAspectRatio="xMidYMid meet">' + svg + '</svg>';
+}
+
+/** Jahres-Vergleichstabelle: Kennzahlen als Zeilen, Jahre als Spalten. */
+function _taxRenderYearTable() {
+    var el = document.getElementById('tax-yeartable');
+    if (!el || !_taxData || !_taxData.available_years) return;
+    var ys = _taxData.available_years;
+    var num = function(v) {
+        if (v == null) return '—';
+        return v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    var metrics = [
+        { k: 'line19_foreign',          label: 'Ausländ. Kapitalerträge (Z.19)', strong: true },
+        { k: 'line20_aktien_gewinn',    label: 'Aktiengewinne (Z.20)' },
+        { k: 'line23_aktien_verlust',   label: 'Aktienverluste (Z.23)' },
+        { k: 'line22_sonstige_verlust', label: 'Nicht-Aktien-Verluste (Z.22)' },
+        { k: 'dividends_eur',           label: 'Dividenden' },
+        { k: 'interest_eur',            label: 'Zinsen' },
+        { k: 'withholding_eur',         label: 'Quellensteuer' }
+    ];
+    var head = '<th style="text-align:left">Kennzahl (EUR)</th>'
+        + ys.map(function(y) {
+            return '<th style="text-align:right;cursor:pointer" onclick="taxPickYear(\'' + y + '\')">' + y + '</th>';
+        }).join('');
+    var body = metrics.map(function(m) {
+        var cells = ys.map(function(y) {
+            var v = (_taxData.years[y] || {})[m.k];
+            var col = (typeof v === 'number' && v < 0) ? 'var(--red)' : '';
+            return '<td style="text-align:right;font-variant-numeric:tabular-nums;' + (col ? 'color:' + col : '') + '">' + num(v) + '</td>';
+        }).join('');
+        return '<tr' + (m.strong ? ' style="font-weight:600"' : '') + '><td>' + m.label + '</td>' + cells + '</tr>';
+    }).join('');
+    el.innerHTML = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 4px;">Vergleich je Steuerjahr</div>'
+        + '<div style="overflow-x:auto"><table class="perf-table" style="min-width:420px"><thead><tr>'
+        + head + '</tr></thead><tbody>' + body + '</tbody></table></div>';
 }
 
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
@@ -2026,6 +2140,8 @@ function _taxRenderYear(d, filesYears) {
         + r('', 'Termingeschäfte — Gewinne', d.futures_gewinn, true)
         + r('', 'Termingeschäfte — Verluste', d.futures_verlust, true)
         + '</tbody></table>';
+
+    _taxRenderPositions(d.positions || []);
 
     var bd = document.getElementById('tax-breakdown');
     if (bd) bd.innerHTML =
