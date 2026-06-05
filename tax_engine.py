@@ -127,6 +127,7 @@ def parse_file(text: str) -> dict:
         "corp_actions": [],     # {date, symbol, ratio}  (nur Splits)
         "dividends_eur": 0.0, "interest_eur": 0.0, "withholding_eur": 0.0,
         "div_de_eur": 0.0,      # näherungsweise inländisch (DE-ISIN), EUR
+        "fx_realized": {},      # Regel F: realisiertes Fremdwährungsergebnis je Währung in EUR
     }
     from collections import Counter
     years: Counter = Counter()
@@ -134,6 +135,10 @@ def parse_file(text: str) -> dict:
     sec_eur_label = {
         "Dividenden": "dividends_eur", "Zinsen": "interest_eur", "Quellensteuer": "withholding_eur",
     }
+    # Realisierte Performance: IBKR rechnet das Fremdwährungs-Ergebnis (Regel F) mit
+    # vollständiger Historie selbst in Basis-EUR. Wir lesen "Realisiert Gesamt" je Devisen-Währung.
+    _REAL_SEC = "Übersicht  zur realisierten und unrealisierten Performance"  # doppeltes Leerzeichen!
+    _realhdr = None
 
     for r in _csv.reader(text.splitlines()):
         if len(r) < 3:
@@ -171,6 +176,22 @@ def parse_file(text: str) -> dict:
                     "symbol": r[6].split("(")[0].strip(),
                     "ratio": float(m.group(1)) / float(m.group(2)),
                 })
+            continue
+
+        # Regel F: realisiertes Fremdwährungsergebnis aus der Performance-Übersicht
+        if sec == _REAL_SEC:
+            if typ == "Header":
+                _realhdr = {name.strip(): i for i, name in enumerate(r)}
+            elif typ == "Data" and _realhdr:
+                ci = _realhdr.get("Vermögenswertkategorie")
+                si = _realhdr.get("Symbol")
+                gi = _realhdr.get("Realisiert Gesamt")
+                if (ci is not None and gi is not None and ci < len(r)
+                        and r[ci].strip() == "Devisen"):
+                    cur = r[si].strip() if (si is not None and si < len(r)) else ""
+                    val = _num(r[gi]) if gi < len(r) else None
+                    if cur and val is not None:
+                        out["fx_realized"][cur] = out["fx_realized"].get(cur, 0.0) + val
             continue
 
         # Erträge: EUR-Gesamtzeilen je Sektion
@@ -326,13 +347,15 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
              for (y, s), p in pos.items() if y == yr],
             key=lambda x: (_catord.get(x["category"], 9), -x["net"]))
 
-        # ── §20-Verlustverrechnungstöpfe + Steuer (Phase 1) ──────────────────
-        # Phase 1: OHNE Sparer-Pauschbetrag (macht das Finanzamt), ohne KiSt,
-        # ohne Günstigerprüfung, OHNE Fremdwährungs-FIFO (Regel F = Phase 2).
+        # ── §20-Verlustverrechnungstöpfe + Steuer (Phase 2) ──────────────────
+        # OHNE Sparer-Pauschbetrag (macht das Finanzamt), ohne KiSt, ohne Günstigerprüfung.
+        # Fremdwährung (Regel F): IBKRs realisiertes Devisen-Ergebnis (Basis-EUR) → allg. Topf.
+        fx_detail   = (fy["fx_realized"] if fy else {}) or {}
+        waehrung_net = sum(fx_detail.values())                    # Regel F: realisiertes FX-Ergebnis
         ak_net   = by["aktien_gewinn"] - by["aktien_verlust"]      # Aktien-Topf (§20(6)S.4)
         fut_net  = by["futures_gewinn"] - by["futures_verlust"]    # Termingeschäfte (kein 20k-Limit)
         son_net  = by["sonstige_gewinn"] - by["sonstige_verlust"]
-        allg_net = fut_net + son_net + dividends + interest        # allgemeiner Topf
+        allg_net = fut_net + son_net + dividends + interest + waehrung_net   # allgemeiner Topf
         ak_steuerbar   = max(0.0, ak_net)
         allg_steuerbar = max(0.0, allg_net)
         base   = ak_steuerbar + allg_steuerbar                     # Bemessungsgrundlage (vor Pauschbetrag)
@@ -348,7 +371,8 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                                    "verlustvortrag": g(max(0.0, -ak_net))},
             "allg_topf":         {"termingeschaefte": g(fut_net), "dividenden": g(dividends),
                                    "zinsen": g(interest), "sonstige": g(son_net),
-                                   "waehrung": None,  # Phase 2 (Regel F)
+                                   "waehrung_detail": {c: g(v) for c, v in fx_detail.items()},
+                                   "waehrung": g(waehrung_net),  # Regel F (IBKR-Realisierung)
                                    "netto": g(allg_net), "steuerbar": g(allg_steuerbar),
                                    "verlustvortrag": g(max(0.0, -allg_net))},
             "bemessungsgrundlage": g(base),

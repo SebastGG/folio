@@ -2149,7 +2149,7 @@ function _taxFullRenderYear(d) {
           card('Bemessungsgrundlage', t.bemessungsgrundlage, 'var(--accent)')
         + card('Abgeltungst. + Soli', t.steuer_brutto, 'var(--red)')
         + card('Anrechenb. ausl. QSt', t.qst_anrechenbar, 'var(--green)')
-        + card('Steuer (Phase 1)', t.steuer_netto, 'var(--red)');
+        + card('Verbleibende Steuer', t.steuer_netto, 'var(--red)');
 
     var sec = function(label, note) {
         return '<tr class="pr-section"><td colspan="2">' + label
@@ -2175,7 +2175,12 @@ function _taxFullRenderYear(d) {
         + row('Termingeschäfte (netto)', al.termingeschaefte, true, false, R(al.termingeschaefte))
         + row('Dividenden', al.dividenden, true)
         + row('Zinsen', al.zinsen, true)
-        + row('Fremdwährung (Regel F)', al.waehrung, true)
+        + row('Fremdwährung (Regel F)', al.waehrung, true, false, R(al.waehrung))
+        + Object.keys(al.waehrung_detail || {}).sort().map(function(c) {
+              return '<tr class="pr-row"><td style="padding-left:34px;color:var(--muted);font-size:10px">'
+                   + c + '</td><td style="text-align:right;font-size:10px;color:' + R(al.waehrung_detail[c])
+                   + '">' + eur(al.waehrung_detail[c]) + '</td></tr>';
+          }).join('')
         + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
         + (al.verlustvortrag > 0 ? row('→ Verlustvortrag', al.verlustvortrag, true, false, 'var(--red)')
                                  : row('→ steuerpflichtig', al.steuerbar, true, false))
@@ -2190,7 +2195,7 @@ function _taxFullRenderYear(d) {
         + row('Solidaritätszuschlag 5,5 %', t.soli, true)
         + row('Steuer brutto', t.steuer_brutto, false, true, 'var(--red)')
         + row('abzgl. anrechenbare ausl. Quellensteuer', t.qst_anrechenbar, true, false, 'var(--green)')
-        + row('Verbleibende Steuer (Phase 1)', t.steuer_netto, false, true, 'var(--red)')
+        + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
         + '</tbody></table>';
 }
 

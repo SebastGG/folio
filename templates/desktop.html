@@ -471,7 +471,7 @@
 
     <div class="settings-card">
       <h2 class="settings-h">🧮 Steuer + — §20-Berechnung
-        <span class="settings-badge no" style="text-transform:none;letter-spacing:0">Phase 1 · ohne Währungs-FIFO</span>
+        <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">inkl. Fremdwährung (Regel F)</span>
       </h2>
       <p class="settings-hint">
         Vollständigere Berechnung nach deutschem Recht (§20 EStG): getrennte
@@ -504,11 +504,13 @@
       <div id="tax2-steuer"></div>
       <p class="settings-hint" style="margin-top:14px;">
         ⚠️ <b>Ohne Gewähr — keine Steuerberatung</b>, rechnerische Aufbereitung zur Prüfung
-        durch einen Steuerberater. <b>Phase 1:</b> Fremdwährungsguthaben (§20, Regel F) ist
-        <b>noch nicht</b> enthalten (folgt in Phase 2) — die Beträge können sich dadurch ändern.
-        Der Aktien-Verlustverrechnungstopf (§20 Abs. 6 S. 4) ist verfassungsrechtlich umstritten
-        (BVerfG, Az. 2 BvL 3/21), wird aber nach geltendem Recht angewandt. Quellensteuer-Anrechnung
-        vereinfacht (DBA-Satz 15 % auf ausl. Dividenden). Investmentfonds/ETFs (KAP-INV) separat.
+        durch einen Steuerberater. <b>Fremdwährung (Regel F):</b> verzinsliches Guthaben → §20;
+        verwendet IBKRs eigene realisierte Devisen-Ergebnisse in Basis-EUR (vollständige Historie,
+        IBKR-Kurse statt EZB — geringe Abweichung). Der Aktien-Verlustverrechnungstopf
+        (§20 Abs. 6 S. 4) ist verfassungsrechtlich umstritten (BVerfG, Az. 2 BvL 3/21), wird aber
+        nach geltendem Recht angewandt. Quellensteuer-Anrechnung vereinfacht (DBA-Satz 15 % auf
+        ausl. Dividenden). Investmentfonds/ETFs (KAP-INV) separat. Sparer-Pauschbetrag, Kirchensteuer
+        und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
       </p>
     </div>
 
