@@ -27,12 +27,15 @@ import time
 import sqlite3
 import shutil
 import tempfile
+import secrets as _secrets
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # ── Konfiguration ──────────────────────────────────────────────────────────────
 # Cloudron: /app/data ist beschreibbar, /app/code ist read-only
@@ -57,6 +60,46 @@ if os.path.exists(_hash_path):
     if _build_hash and _build_hash != "dev":
         APP_VERSION = f"{APP_VERSION}+{_build_hash}"
 
+# ── OIDC / Authentifizierung ────────────────────────────────────────────────────
+# Cloudron stellt via 'oidc'-Addon die OAuth-Endpunkte + Client-Credentials als
+# Env-Variablen bereit. Wir führen den Authorization-Code-Flow selbst aus und legen
+# die Identität (E-Mail) in ein signiertes Session-Cookie. Daraus liest get_user()
+# den echten Benutzer → eigenes Datenverzeichnis pro User.
+# WICHTIG (Cloudron): Env-Variablen können sich bei Neustart ändern → zur Laufzeit lesen.
+
+_SESSION_COOKIE  = "folio_session"
+_STATE_COOKIE    = "folio_oauth_state"
+_SESSION_MAX_AGE = 30 * 86400   # 30 Tage
+
+def _oidc_cfg() -> dict:
+    return {
+        "auth":     os.environ.get("CLOUDRON_OIDC_AUTH_ENDPOINT", "").strip(),
+        "token":    os.environ.get("CLOUDRON_OIDC_TOKEN_ENDPOINT", "").strip(),
+        "profile":  os.environ.get("CLOUDRON_OIDC_PROFILE_ENDPOINT", "").strip(),
+        "client_id":     os.environ.get("CLOUDRON_OIDC_CLIENT_ID", "").strip(),
+        "client_secret": os.environ.get("CLOUDRON_OIDC_CLIENT_SECRET", "").strip(),
+        "origin":   os.environ.get("CLOUDRON_APP_ORIGIN", "").strip().rstrip("/"),
+    }
+
+def _oidc_enabled() -> bool:
+    c = _oidc_cfg()
+    return bool(c["auth"] and c["token"] and c["client_id"] and c["origin"])
+
+def _cookie_secure() -> bool:
+    return _oidc_cfg()["origin"].startswith("https://")
+
+def _session_signer() -> URLSafeTimedSerializer:
+    """Signierschlüssel persistent in BASE_DATA_DIR (überlebt Neustarts → Sessions bleiben gültig)."""
+    key_file = os.path.join(BASE_DATA_DIR, "session.key")
+    if os.path.exists(key_file):
+        with open(key_file) as f:
+            secret = f.read().strip()
+    else:
+        secret = _secrets.token_hex(32)
+        with open(key_file, "w") as f:
+            f.write(secret)
+    return URLSafeTimedSerializer(secret, salt="folio-session")
+
 # ── App-Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI()
 
@@ -77,14 +120,32 @@ _last_update: dict[str, float] = {}
 _last_update_lock = threading.Lock()
 
 # ── User-Verwaltung ────────────────────────────────────────────────────────────
+def _sanitize_user(user: str) -> str:
+    """Macht eine Identität (z.B. E-Mail) sicher als Verzeichnisnamen — kein Path Traversal."""
+    user = re.sub(r'[^a-zA-Z0-9_@.\-]', '', (user or "").strip().lower())
+    while ".." in user:
+        user = user.replace("..", ".")
+    user = user.strip(".")
+    return user[:120]
+
 def get_user(request: Request) -> str:
     """
-    Liest den eingeloggten User aus dem Cloudron proxyAuth Header.
-    Fallback: 'default' (für lokale Entwicklung ohne proxyAuth)
+    Liefert den eingeloggten Benutzer aus dem signierten Session-Cookie (OIDC).
+    Ohne OIDC (lokale Entwicklung) Fallback auf 'default'. Ist OIDC aktiv und kein
+    gültiges Cookie vorhanden, wird "" zurückgegeben (→ Middleware leitet zum Login).
     """
-    user = request.headers.get("X-Forwarded-User", "").strip()
-    user = re.sub(r'[^a-zA-Z0-9_\-]', '', user)  # kein Punkt — verhindert Path Traversal via ".."
-    return user or "default"
+    cookie = request.cookies.get(_SESSION_COOKIE)
+    if cookie:
+        try:
+            data = _session_signer().loads(cookie, max_age=_SESSION_MAX_AGE)
+            u = _sanitize_user(data.get("user", ""))
+            if u:
+                return u
+        except (BadSignature, SignatureExpired):
+            pass
+    if not _oidc_enabled():
+        return "default"   # lokale Entwicklung ohne OIDC
+    return ""
 
 def get_user_dir(user: str) -> str:
     """Gibt das persistente Datenverzeichnis für einen User zurück."""
@@ -101,6 +162,86 @@ def get_user_files(user: str) -> dict:
         "notes":    os.path.join(d, "notes.json"),
         "data_dir": d,
     }
+
+# ── Auth-Middleware + OAuth-Routen ──────────────────────────────────────────────
+_AUTH_PUBLIC = ("/health", "/login", "/callback", "/logout", "/favicon.ico")
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    path = request.url.path
+    if not _oidc_enabled() or path in _AUTH_PUBLIC or path.startswith("/static/"):
+        return await call_next(request)
+    if get_user(request):
+        return await call_next(request)
+    # Nicht eingeloggt: API → 401, Seiten → Redirect zum Login
+    if path.startswith("/api/"):
+        return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
+    return RedirectResponse("/login")
+
+@app.get("/login")
+async def login(request: Request):
+    c = _oidc_cfg()
+    if not _oidc_enabled():
+        return RedirectResponse("/")
+    state = _secrets.token_urlsafe(24)
+    params = urllib.parse.urlencode({
+        "response_type": "code",
+        "client_id":     c["client_id"],
+        "redirect_uri":  c["origin"] + "/callback",
+        "scope":         "openid profile email",
+        "state":         state,
+    })
+    resp = RedirectResponse(c["auth"] + "?" + params)
+    resp.set_cookie(_STATE_COOKIE, state, max_age=600, httponly=True,
+                    secure=_cookie_secure(), samesite="lax")
+    return resp
+
+@app.get("/callback")
+async def callback(request: Request, code: str = "", state: str = ""):
+    import httpx
+    c = _oidc_cfg()
+    if not _oidc_enabled():
+        return RedirectResponse("/")
+    if not code or not state or state != request.cookies.get(_STATE_COOKIE):
+        return HTMLResponse("Login fehlgeschlagen (ungültiger State). "
+                            "<a href='/login'>Erneut versuchen</a>", status_code=400)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            tok = await client.post(c["token"], data={
+                "grant_type":    "authorization_code",
+                "code":          code,
+                "redirect_uri":  c["origin"] + "/callback",
+                "client_id":     c["client_id"],
+                "client_secret": c["client_secret"],
+            }, headers={"Accept": "application/json"})
+            tok.raise_for_status()
+            access = tok.json().get("access_token")
+            if not access:
+                return HTMLResponse("Kein Access-Token erhalten.", status_code=400)
+            prof = await client.get(c["profile"], headers={"Authorization": "Bearer " + access})
+            prof.raise_for_status()
+            info = prof.json()
+    except Exception as e:
+        print(f"OIDC callback error: {e}")
+        return HTMLResponse("Login fehlgeschlagen. <a href='/login'>Erneut versuchen</a>",
+                            status_code=502)
+
+    user = info.get("email") or info.get("preferred_username") or info.get("sub")
+    if not _sanitize_user(user or ""):
+        return HTMLResponse("Kein Benutzer im OIDC-Profil gefunden.", status_code=400)
+
+    resp = RedirectResponse("/")
+    resp.set_cookie(_SESSION_COOKIE, _session_signer().dumps({"user": user}),
+                    max_age=_SESSION_MAX_AGE, httponly=True,
+                    secure=_cookie_secure(), samesite="lax")
+    resp.delete_cookie(_STATE_COOKIE)
+    return resp
+
+@app.get("/logout")
+async def logout():
+    resp = RedirectResponse("/")
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_db(db_file: str) -> sqlite3.Connection:

@@ -1983,11 +1983,10 @@ function taxSelectYear(year) {
 
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
 function _taxRenderYear(d, filesYears) {
-    // PwC-Konvention: negative Beträge in Klammern
+    // Beträge mit Minuszeichen (de-DE setzt das Minus automatisch)
     var pwc = function(v) {
         if (v == null) return '—';
-        var a = Math.abs(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return (v < 0 ? '(' + a + ')' : a) + ' €';
+        return v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
     };
     var card = function(label, val, accent) {
         return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
