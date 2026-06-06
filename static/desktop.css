@@ -115,6 +115,11 @@ header {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; padding: 20px 22px;
 }
+/* Steuer-Seiten: volle Breite, damit die (FIFO-)Tabellen gut lesbar sind */
+#view-tax .settings-wrap,
+#view-steuer2 .settings-wrap { align-items: stretch; }
+#view-tax .settings-card,
+#view-steuer2 .settings-card { max-width: none; }
 .settings-h {
   font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
