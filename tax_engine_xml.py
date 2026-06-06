@@ -338,8 +338,27 @@ def compute_tax_report_xml(xml_texts: list[str], target_year: str | None = None,
         # versteuert → NICHT erneut in die Bemessungsgrundlage.
         div_foreign = dividends - div_de
         allg_net = fut_net + fo_net + so_net + div_foreign + interest + fxnet
-        ak_steuerbar = max(0.0, ak_net)
-        allg_steuerbar = max(0.0, allg_net)
+
+        # ── Topf-übergreifende Verrechnung (§20 Abs. 6) ───────────────────────────
+        # 1. Aktien-Verluste zuerst gegen Aktien-Gewinne (im Aktien-Topf, S.4):
+        #    negativ → Vortrag (gefangen, nur ggü. künftigen Aktiengewinnen).
+        # 2. Allgemeine Verluste dürfen ZUSÄTZLICH den verbleibenden Aktien-Gewinn
+        #    mindern (Überlauf) — Termingeschäfte-Verluste sind seit JStG 2024 frei
+        #    verrechenbar. Umgekehrt NICHT: Aktien-Verluste mindern keine allg. Gewinne.
+        #    Diese Reihenfolge ist zwingend und zugleich die günstigste (frei
+        #    vortragbarer allg. Verlust bleibt übrig statt gefangenem Aktien-Verlust).
+        ak_verlustvortrag = max(0.0, -ak_net)
+        rest_aktiengewinn = max(0.0, ak_net)
+        if allg_net >= 0:
+            spillover = 0.0
+            ak_steuerbar = rest_aktiengewinn
+            allg_steuerbar = allg_net
+            allg_verlustvortrag = 0.0
+        else:
+            spillover = min(rest_aktiengewinn, -allg_net)   # allg. Verlust mindert Aktiengewinn
+            ak_steuerbar = rest_aktiengewinn - spillover
+            allg_steuerbar = 0.0
+            allg_verlustvortrag = -allg_net - spillover
         base = ak_steuerbar + allg_steuerbar
         abgelt = base * 0.25
         soli = abgelt * 0.055
@@ -395,14 +414,15 @@ def compute_tax_report_xml(xml_texts: list[str], target_year: str | None = None,
             "tax": {
                 "aktien_topf": {"gewinn": g(ak["gewinn"]), "verlust": g(ak["verlust"]),
                                 "netto": g(ak_net), "steuerbar": g(ak_steuerbar),
-                                "verlustvortrag": g(max(0.0, -ak_net))},
+                                "verlustvortrag": g(ak_verlustvortrag)},
                 "allg_topf": {"termingeschaefte": g(fut_net), "fonds": g(fo_net),
                               "sonstige": g(so_net), "dividenden": g(div_foreign),
                               "zinsen": g(interest), "waehrung": g(fxnet),
                               "waehrung_detail": {c: g(v) for c, v in
                                                   (fxyear[yr]["by_ccy"].items() if yr in fxyear else [])},
                               "netto": g(allg_net), "steuerbar": g(allg_steuerbar),
-                              "verlustvortrag": g(max(0.0, -allg_net))},
+                              "verlustvortrag": g(allg_verlustvortrag)},
+                "spillover": g(spillover),   # allg. Verlust, der Aktiengewinn gemindert hat
                 "nicht_abzugsfaehig": {"zinsen_gezahlt": g(interest_paid), "gebuehren": g(fees)},
                 "bemessungsgrundlage": g(base),
                 "abgeltungsteuer": g(abgelt), "soli": g(soli),

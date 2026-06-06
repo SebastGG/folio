@@ -2333,8 +2333,12 @@ function _taxXmlRenderYear(d) {
         + row('Aktiengewinne · Anlage KAP Z.20', ak.gewinn, true, false, 'var(--green)')
         + row('Aktienverluste · Anlage KAP Z.23', ak.verlust, true, false, 'var(--red)')
         + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
-        + (ak.verlustvortrag > 0 ? row('→ Verlustvortrag (nicht verrechenbar)', ak.verlustvortrag, true, false, 'var(--red)')
-                                 : row('→ steuerpflichtig', ak.steuerbar, true, false))
+        + (ak.verlustvortrag > 0
+              ? row('→ Verlustvortrag (nur ggü. Aktiengewinnen)', ak.verlustvortrag, true, false, 'var(--red)')
+              : (t.spillover > 0
+                    ? row('abzgl. allgemeine Verluste (Überlauf)', -t.spillover, true, false, 'var(--red)')
+                      + row('→ steuerpflichtig', ak.steuerbar, true, true)
+                    : row('→ steuerpflichtig', ak.steuerbar, true, false)))
         + sec('Allgemeiner Topf', 'Anlage KAP — Erträge/Gewinne Z.19, Verluste Z.22')
         + row('Termingeschäfte (netto) · Z.19 / Z.22', al.termingeschaefte, true, false, R(al.termingeschaefte))
         + row('ETF/Fonds (netto, vor Teilfreistellung)', al.fonds, true, false, R(al.fonds))
@@ -2348,8 +2352,10 @@ function _taxXmlRenderYear(d) {
           }).join('')
         + (al.sonstige ? row('Sonstige (netto)', al.sonstige, true, false, R(al.sonstige)) : '')
         + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
-        + (al.verlustvortrag > 0 ? row('→ Verlustvortrag', al.verlustvortrag, true, false, 'var(--red)')
-                                 : row('→ steuerpflichtig', al.steuerbar, true, false))
+        + (t.spillover > 0 ? row('davon gegen Aktiengewinn verrechnet', t.spillover, true, false, 'var(--green)') : '')
+        + (al.verlustvortrag > 0 ? row('→ Verlustvortrag (frei verrechenbar)', al.verlustvortrag, true, false, 'var(--red)')
+           : (al.steuerbar > 0 ? row('→ steuerpflichtig', al.steuerbar, true, false)
+                               : (t.spillover > 0 ? row('→ vollständig verrechnet', 0, true, false) : '')))
         + '</tbody></table>';
 
     var steuer = document.getElementById('tax3-steuer');
