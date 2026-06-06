@@ -518,6 +518,63 @@
   </div>
 </section><!-- end #view-steuer2 -->
 
+<!-- ══ SEITE: STEUER ++ (Flex-XML, Closed Lots) ═══════════════════════════════ -->
+<section id="view-steuer3" class="page">
+  <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">🔎 Steuer ++ — auf Basis der IBKR Flex-XML
+        <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">prüffähig · Closed Lots + EZB</span>
+      </h2>
+      <p class="settings-hint">
+        Nutzt IBKRs <b>autoritatives Lot-Matching</b> aus der Flex-Query (Detailgrad
+        „Closed Lots") und rechnet die EUR-Umrechnung selbst mit <b>EZB-Referenzkursen pro
+        Bein</b>. Damit entfallen die FIFO-/Split-/Spinoff-Näherungen der CSV-Variante.
+        Echte Klassifikation (Aktien / ETF-Fonds / Termingeschäfte via <code>subCategory</code>),
+        DE/Ausland-Split, Devisen (Regel F) pro Lot, vollständiges Journal je Veräußerung.
+        Lade die Flex-<b>XML</b>-Statements aller Jahre seit Depoteröffnung.
+      </p>
+      <div class="drop-zone" id="tax3Drop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');taxXmlUpload(event.dataTransfer.files)">
+        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl)</div>
+        <input type="file" id="tax3File" accept=".xml" multiple style="display:none" onchange="taxXmlUpload(this.files)">
+      </div>
+      <div id="tax3-msg" class="settings-msg" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="settings-card" id="tax3-result" style="display:none;">
+      <h2 class="settings-h">Steuerliche Ermittlung
+        <span style="flex:1"></span>
+        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
+          Steuerjahr
+          <select id="tax3-year-select" onchange="taxXmlSelectYear(this.value)"
+            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
+        </label>
+      </h2>
+      <div class="tax-cards" id="tax3-cards"></div>
+      <div id="tax3-toepfe"></div>
+      <div id="tax3-steuer"></div>
+      <div id="tax3-journal"></div>
+      <div id="tax3-income"></div>
+      <p class="settings-hint" style="margin-top:14px;">
+        ⚠️ <b>Ohne Gewähr — keine Steuerberatung.</b> Rechnerische Aufbereitung zur Prüfung durch
+        einen Steuerberater. Realisierte G/V je geschlossenem Lot aus IBKRs FIFO-Matching, EUR pro
+        Bein zum EZB-Referenzkurs (Frankfurter-API, Forward-Fill aufs Wochenende). <b>Aktien-Topf</b>
+        (§20 Abs. 6 S. 4) verfassungsrechtlich umstritten (BVerfG 2 BvL 3/21), nach geltendem Recht
+        angewandt. <b>Termingeschäfte</b> ohne 20.000-€-Grenze (JStG 2024). <b>Devisen (Regel F):</b>
+        IBKRs realisiertes Ergebnis je FX-Lot in EUR. <b>ETF/Fonds:</b> Teilfreistellung (§20 InvStG)
+        ist <u>noch nicht</u> angewandt — Bruttowert, gesondert prüfen. Gezahlte Zinsen und Gebühren
+        sind nach §20 Abs. 9 <b>nicht abzugsfähig</b> (nur informativ gezeigt). Inländische Dividenden
+        (Z.7, an der Quelle versteuert) bleiben aus der Bemessungsgrundlage. Sparer-Pauschbetrag,
+        Kirchensteuer und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
+      </p>
+    </div>
+
+  </div>
+</section><!-- end #view-steuer3 -->
+
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
   <div class="page-placeholder">

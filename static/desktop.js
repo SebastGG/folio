@@ -2258,6 +2258,211 @@ function _taxFullRenderJournal(d) {
         : '';
 }
 
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 16. STEUER ++ — Flex-XML (Closed Lots) + EZB pro Bein     ║
+// ╚══════════════════════════════════════════════════════════╝
+
+var _taxData3 = null;
+
+async function taxXmlUpload(fileList) {
+    var files = fileList ? Array.prototype.slice.call(fileList) : [];
+    if (!files.length) return;
+    var msg = document.getElementById('tax3-msg');
+    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
+    setMsg('Verarbeite ' + files.length + ' XML-Datei(en) … (EZB-Kurse werden geladen)', '');
+    try {
+        var fd = new FormData();
+        files.forEach(function(f) { fd.append('files', f); });
+        var res = await fetch('/api/tax/report-xml', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
+        if (res && res.ok) {
+            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet · '
+                 + res.lot_count + ' Lots, ' + res.fx_lot_count + ' Devisen-Lots', 'ok');
+            taxXmlRender(res);
+        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
+    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+}
+
+function taxXmlRender(data) {
+    _taxData3 = data;
+    var box = document.getElementById('tax3-result');
+    if (box) box.style.display = '';
+    var sel = document.getElementById('tax3-year-select');
+    if (sel) {
+        sel.innerHTML = (data.available_years || []).map(function(y) {
+            return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
+        }).join('');
+    }
+    taxXmlSelectYear(data.year);
+}
+
+function taxXmlSelectYear(year) {
+    if (!_taxData3 || !_taxData3.years || !_taxData3.years[year]) return;
+    _taxXmlRenderYear(_taxData3.years[year]);
+}
+
+function _taxXmlRenderYear(d) {
+    var t = d.tax || {};
+    var ak = t.aktien_topf || {}, al = t.allg_topf || {}, na = t.nicht_abzugsfaehig || {};
+    var eur = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'); };
+    var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+    var card = function(label, val, accent) {
+        return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
+             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
+    };
+    var cardsEl = document.getElementById('tax3-cards');
+    if (cardsEl) cardsEl.innerHTML =
+          card('Bemessungsgrundlage', t.bemessungsgrundlage, 'var(--accent)')
+        + card('Abgeltungst. + Soli', t.steuer_brutto, 'var(--red)')
+        + card('Anrechenb. ausl. QSt', t.qst_anrechenbar, 'var(--green)')
+        + card('Verbleibende Steuer', t.steuer_netto, 'var(--red)');
+
+    var sec = function(label, note) {
+        return '<tr class="pr-section"><td colspan="2">' + label
+             + (note ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0">— ' + note + '</span>' : '') + '</td></tr>';
+    };
+    var row = function(label, val, indent, strong, color) {
+        return '<tr class="pr-row"' + (strong ? ' style="font-weight:700"' : '') + '>'
+             + '<td style="' + (indent ? 'padding-left:18px;color:var(--muted)' : '') + '">' + label + '</td>'
+             + '<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    };
+
+    var toepfe = document.getElementById('tax3-toepfe');
+    if (toepfe) toepfe.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Aktien-Topf', '§20 Abs. 6 S.4 — nur untereinander verrechenbar · BVerfG 2 BvL 3/21')
+        + row('Aktiengewinne · Anlage KAP Z.20', ak.gewinn, true, false, 'var(--green)')
+        + row('Aktienverluste · Anlage KAP Z.23', ak.verlust, true, false, 'var(--red)')
+        + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
+        + (ak.verlustvortrag > 0 ? row('→ Verlustvortrag (nicht verrechenbar)', ak.verlustvortrag, true, false, 'var(--red)')
+                                 : row('→ steuerpflichtig', ak.steuerbar, true, false))
+        + sec('Allgemeiner Topf', 'Anlage KAP — Erträge/Gewinne Z.19, Verluste Z.22')
+        + row('Termingeschäfte (netto) · Z.19 / Z.22', al.termingeschaefte, true, false, R(al.termingeschaefte))
+        + row('ETF/Fonds (netto, vor Teilfreistellung)', al.fonds, true, false, R(al.fonds))
+        + row('Ausländische Dividenden · Z.19', al.dividenden, true)
+        + row('Zinsen · Z.19', al.zinsen, true)
+        + row('Devisen (Regel F) · Z.19 / Z.22', al.waehrung, true, false, R(al.waehrung))
+        + Object.keys(al.waehrung_detail || {}).sort().map(function(c) {
+              return '<tr class="pr-row"><td style="padding-left:34px;color:var(--muted);font-size:10px">'
+                   + c + '</td><td style="text-align:right;font-size:10px;color:' + R(al.waehrung_detail[c])
+                   + '">' + eur(al.waehrung_detail[c]) + '</td></tr>';
+          }).join('')
+        + (al.sonstige ? row('Sonstige (netto)', al.sonstige, true, false, R(al.sonstige)) : '')
+        + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
+        + (al.verlustvortrag > 0 ? row('→ Verlustvortrag', al.verlustvortrag, true, false, 'var(--red)')
+                                 : row('→ steuerpflichtig', al.steuerbar, true, false))
+        + '</tbody></table>';
+
+    var steuer = document.getElementById('tax3-steuer');
+    if (steuer) steuer.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Steuerberechnung', 'ohne Sparer-Pauschbetrag · ohne KiSt')
+        + row('Bemessungsgrundlage', t.bemessungsgrundlage, false, true)
+        + row('Abgeltungsteuer 25 %', t.abgeltungsteuer, true)
+        + row('Solidaritätszuschlag 5,5 %', t.soli, true)
+        + row('Steuer brutto', t.steuer_brutto, false, true, 'var(--red)')
+        + row('abzgl. anrechenbare ausl. Quellensteuer · Z.41', t.qst_anrechenbar, true, false, 'var(--green)')
+        + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
+        + ((na.zinsen_gezahlt || na.gebuehren)
+            ? sec('nachrichtlich — nicht abzugsfähig (§20 Abs. 9)')
+              + row('gezahlte Zinsen', na.zinsen_gezahlt, true, false, 'var(--muted)')
+              + row('Gebühren', na.gebuehren, true, false, 'var(--muted)')
+            : '')
+        + '</tbody></table>';
+
+    _taxXmlRenderJournal(d);
+    _taxXmlRenderIncome(d);
+}
+
+/** Prüffähiges Journal je Veräußerung: EZB-Rechnung + IBKR-Gegencheck (Handelswährung). */
+function _taxXmlRenderJournal(d) {
+    var el = document.getElementById('tax3-journal');
+    if (!el) return;
+    var jr = d.journal || [];
+    var n2 = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var d4 = function(v) { return v == null ? '' : v.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 4 }); };
+    var labels = { 'Aktien': 'Aktien-Topf', 'Futures': 'Termingeschäfte', 'Fonds': 'ETF/Fonds', 'Sonstige': 'Sonstige' };
+
+    function block(cat) {
+        var rows = jr.filter(function(j) { return j.category === cat; });
+        if (!rows.length) return '';
+        var sg = rows.reduce(function(s, j) { return s + j.gewinn_eur; }, 0);
+        var head = '<tr>'
+            + '<th style="text-align:left">Symbol</th><th style="text-align:right">Menge</th>'
+            + '<th style="text-align:left">Kauf</th><th style="text-align:right">Kurs</th><th style="text-align:right">FX</th><th style="text-align:right">Anschaffung €</th>'
+            + '<th style="text-align:left">Verkauf</th><th style="text-align:right">Kurs</th><th style="text-align:right">FX</th><th style="text-align:right">Erlös €</th>'
+            + '<th style="text-align:right">G/V €</th><th style="text-align:right" title="IBKR realisiert, Handelswährung — Gegencheck">IBKR ⓘ</th></tr>';
+        var body = rows.map(function(j) {
+            return '<tr><td>' + j.symbol + (j.short ? ' <span style="color:var(--muted);font-size:9px">(short)</span>' : '') + '</td>'
+                + '<td style="text-align:right">' + d4(j.menge) + '</td>'
+                + '<td style="color:var(--muted)">' + j.kauf_datum + '</td>'
+                + '<td style="text-align:right">' + d4(j.kauf_kurs) + ' ' + j.currency + '</td>'
+                + '<td style="text-align:right;color:var(--muted)">' + d4(j.fx_kauf) + '</td>'
+                + '<td style="text-align:right">' + n2(j.anschaffung_eur) + '</td>'
+                + '<td style="color:var(--muted)">' + j.verkauf_datum + '</td>'
+                + '<td style="text-align:right">' + d4(j.verkauf_kurs) + ' ' + j.currency + '</td>'
+                + '<td style="text-align:right;color:var(--muted)">' + d4(j.fx_verkauf) + '</td>'
+                + '<td style="text-align:right">' + n2(j.erloes_eur) + '</td>'
+                + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + (j.gewinn_eur >= 0 ? 'var(--green)' : 'var(--red)') + '">' + n2(j.gewinn_eur) + '</td>'
+                + '<td style="text-align:right;color:var(--muted);font-size:9px">' + n2(j.ibkr_pnl_local) + ' ' + j.currency + '</td></tr>';
+        }).join('');
+        return '<details style="margin-top:10px"' + (cat === 'Aktien' ? ' open' : '') + '><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+            + (labels[cat] || cat) + ' — ' + rows.length + ' Veräußerungen, Summe G/V ' + n2(sg) + ' €</summary>'
+            + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:860px;font-size:10px">'
+            + '<thead>' + head + '</thead><tbody>' + body + '</tbody></table></div></details>';
+    }
+
+    var html = block('Aktien') + block('Futures') + block('Fonds') + block('Sonstige');
+    el.innerHTML = html
+        ? '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 4px;">Prüffähiges Journal je Veräußerung (EZB pro Bein · IBKR-Spalte = Gegencheck in Handelswährung)</div>' + html
+        : '';
+}
+
+/** Ertrags-Detail: jede Dividende/Zins/Quellensteuer + Devisen-Lots, zur Quelle nachvollziehbar. */
+function _taxXmlRenderIncome(d) {
+    var el = document.getElementById('tax3-income');
+    if (!el) return;
+    var inc = d.income_detail || [];
+    var fx = d.fx_detail || [];
+    var n2 = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var d5 = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 5 }); };
+    var html = '';
+
+    if (inc.length) {
+        var rows = inc.slice().sort(function(a, b) { return a.date < b.date ? -1 : 1; }).map(function(c) {
+            return '<tr><td style="color:var(--muted)">' + c.date + '</td><td>' + c.type + '</td>'
+                + '<td>' + (c.symbol || '') + '</td>'
+                + '<td style="text-align:center;color:var(--muted)">' + (c.country || '') + (c.foreign ? '' : ' 🇩🇪') + '</td>'
+                + '<td style="text-align:right">' + n2(c.amount_local) + ' ' + c.currency + '</td>'
+                + '<td style="text-align:right;color:var(--muted)">' + d5(c.fx) + '</td>'
+                + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + n2(c.amount_eur) + ' €</td></tr>';
+        }).join('');
+        html += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+            + 'Erträge im Detail — ' + inc.length + ' Posten (Dividenden, Zinsen, Quellensteuer)</summary>'
+            + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:620px;font-size:10px">'
+            + '<thead><tr><th style="text-align:left">Datum</th><th style="text-align:left">Art</th><th style="text-align:left">Symbol</th>'
+            + '<th>Land</th><th style="text-align:right">Betrag</th><th style="text-align:right">EZB-FX</th><th style="text-align:right">EUR</th></tr></thead>'
+            + '<tbody>' + rows + '</tbody></table></div></details>';
+    }
+
+    if (fx.length) {
+        var s = fx.reduce(function(a, x) { return a + x.realized_eur; }, 0);
+        var rows2 = fx.slice().sort(function(a, b) { return a.date < b.date ? -1 : 1; }).map(function(x) {
+            return '<tr><td style="color:var(--muted)">' + x.date + '</td><td>' + x.currency + '</td>'
+                + '<td style="color:var(--muted);font-size:9px">' + (x.desc || '') + '</td>'
+                + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + (x.realized_eur >= 0 ? 'var(--green)' : 'var(--red)') + '">' + n2(x.realized_eur) + ' €</td></tr>';
+        }).join('');
+        html += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+            + 'Devisen (Regel F) im Detail — ' + fx.length + ' FX-Lots, Summe ' + n2(s) + ' € <span style="font-style:italic">(IBKR-realisiert in EUR)</span></summary>'
+            + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:480px;font-size:10px">'
+            + '<thead><tr><th style="text-align:left">Datum</th><th style="text-align:left">Währung</th><th style="text-align:left">Auslöser</th><th style="text-align:right">realisiert €</th></tr></thead>'
+            + '<tbody>' + rows2 + '</tbody></table></div></details>';
+    }
+
+    el.innerHTML = html
+        ? '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 4px;">Erträge & Devisen — Drill-down zur Quelle</div>' + html
+        : '';
+}
+
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
 function _taxRenderYear(d, filesYears) {
     // Beträge mit Minuszeichen (de-DE setzt das Minus automatisch)

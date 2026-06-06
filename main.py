@@ -1215,3 +1215,43 @@ async def tax_report(request: Request, files: list[UploadFile] = File(...), year
         print(f"tax_report error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+
+# ── Steuer ++ : Berechnung aus IBKR Flex *XML* (Closed Lots) ─────────────────────
+# Nutzt IBKRs autoritatives Lot-Matching (Detailgrad „Closed Lots") + EZB-FX pro Bein.
+# Transparenter & korrekter als die CSV-Variante: echte Klassifikation (Aktien/ETF/
+# Futures via subCategory), DE/Ausland-Split, Devisen (Regel F) pro Lot, prüffähiges
+# Journal. Berechnung in tax_engine_xml.py. Stateless.
+
+@app.post("/api/tax/report-xml")
+async def tax_report_xml(request: Request, files: list[UploadFile] = File(...), year: str = ""):
+    import asyncio
+    import tax_engine_xml
+    user  = get_user(request)
+    files_u = get_user_files(user)
+    fx_cache = os.path.join(files_u["data_dir"], "fx_cache")
+    os.makedirs(fx_cache, exist_ok=True)
+
+    texts = []
+    for f in files:
+        raw = await f.read()
+        texts.append(raw.decode("utf-8-sig", errors="replace"))
+    if not texts:
+        return JSONResponse({"ok": False, "error": "Keine Datei erhalten"}, status_code=422)
+
+    def _run():
+        return tax_engine_xml.compute_tax_report_xml(
+            texts, target_year=(year or None), cache_dir=fx_cache)
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run)   # FX-Fetch blockiert → Threadpool
+        if not result.get("year"):
+            return JSONResponse(
+                {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
+                                       "Statements (XML) mit Detailgrad Closed Lots?"},
+                status_code=422)
+        return JSONResponse({"ok": True, **result})
+    except Exception as e:
+        print(f"tax_report_xml error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+

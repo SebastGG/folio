@@ -36,6 +36,10 @@ var PAGES = [
         onShow: null   // Vollständige §20-Berechnung (Phase 1), Upload-gesteuert
     },
     {
+        id: 'steuer3', label: 'Steuer ++', icon: '🔎',
+        onShow: null   // Flex-XML (Closed Lots) + EZB pro Bein, Upload-gesteuert
+    },
+    {
         id: 'screener', label: 'Screener', icon: '🔍',
         onShow: null   // Platzhalter — wird später befüllt
     },

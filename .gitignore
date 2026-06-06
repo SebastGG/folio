@@ -13,8 +13,13 @@ test_*.js
 
 # Lokale Entwicklungs-/Validierungsskripte (nicht für Produktion)
 tax_validate*.py
+test_*.py
 seed_test.py
 mock_oidc.py
+
+# Persönliche IBKR-Exporte — NIEMALS committen (Kontonr., Adresse, Geburtsdatum)
+*Steuer_xml.xml
+U[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 
 # Lokale Laufzeitdaten (Produktion liegt auf Cloudron unter /app/data)
 data/
