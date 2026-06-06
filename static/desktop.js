@@ -2197,6 +2197,65 @@ function _taxFullRenderYear(d) {
         + row('abzgl. anrechenbare ausl. Quellensteuer · Z.41', t.qst_anrechenbar, true, false, 'var(--green)')
         + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
         + '</tbody></table>';
+
+    _taxFullRenderJournal(d);
+}
+
+/** Prüffähiges FIFO-Journal je Topf (jede Veräußerung mit Kauf/Verkauf-Bein, FX, EUR). */
+function _taxFullRenderJournal(d) {
+    var el = document.getElementById('tax2-journal');
+    if (!el) return;
+    var jr = d.journal || [];
+    var t = d.tax || {}, al = t.allg_topf || {};
+    var n2 = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var d4 = function(v) { return (v || 0).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 4 }); };
+
+    function block(title, cat) {
+        var rows = jr.filter(function(j) { return j.category === cat; });
+        if (!rows.length) return '';
+        var sg = rows.reduce(function(s, j) { return s + j.gewinn_eur; }, 0);
+        var head = '<tr>'
+            + '<th style="text-align:left">Symbol</th><th style="text-align:right">Stück</th>'
+            + '<th style="text-align:left">Kauf</th><th style="text-align:right">Kurs</th><th style="text-align:right">FX</th><th style="text-align:right">Anschaffung €</th>'
+            + '<th style="text-align:left">Verkauf</th><th style="text-align:right">Kurs</th><th style="text-align:right">FX</th><th style="text-align:right">Erlös €</th>'
+            + '<th style="text-align:right">G/V €</th></tr>';
+        var body = rows.map(function(j) {
+            return '<tr><td>' + j.symbol + (j.short ? ' <span style="color:var(--muted);font-size:9px">(short)</span>' : '') + '</td>'
+                + '<td style="text-align:right">' + d4(j.menge) + '</td>'
+                + '<td style="color:var(--muted)">' + j.kauf_datum + '</td>'
+                + '<td style="text-align:right">' + d4(j.kauf_kurs) + ' ' + j.waehrung + '</td>'
+                + '<td style="text-align:right;color:var(--muted)">' + d4(j.fx_kauf) + '</td>'
+                + '<td style="text-align:right">' + n2(j.anschaffung_eur) + '</td>'
+                + '<td style="color:var(--muted)">' + j.verkauf_datum + '</td>'
+                + '<td style="text-align:right">' + d4(j.verkauf_kurs) + ' ' + j.waehrung + '</td>'
+                + '<td style="text-align:right;color:var(--muted)">' + d4(j.fx_verkauf) + '</td>'
+                + '<td style="text-align:right">' + n2(j.erloes_eur) + '</td>'
+                + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + (j.gewinn_eur >= 0 ? 'var(--green)' : 'var(--red)') + '">' + n2(j.gewinn_eur) + '</td></tr>';
+        }).join('');
+        return '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+            + title + ' — ' + rows.length + ' Veräußerungen, Summe G/V ' + n2(sg) + ' €</summary>'
+            + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:760px;font-size:10px">'
+            + '<thead>' + head + '</thead><tbody>' + body + '</tbody></table></div></details>';
+    }
+
+    // Fremdwährung: IBKR-realisiert, keine Einzel-FIFO verfügbar
+    var fx = al.waehrung_detail || {};
+    var fxBlock = '';
+    if (Object.keys(fx).length) {
+        var rows = Object.keys(fx).sort().map(function(c) {
+            return '<tr><td>' + c + '</td><td style="text-align:right;color:' + (fx[c] >= 0 ? 'var(--green)' : 'var(--red)') + '">' + n2(fx[c]) + ' €</td></tr>';
+        }).join('');
+        fxBlock = '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+            + 'Fremdwährung (Regel F) — IBKR-realisiert, ' + n2(al.waehrung) + ' € <span style="font-style:italic">(keine Einzel-FIFO im Statement)</span></summary>'
+            + '<table class="pr-table" style="margin-top:6px;max-width:280px"><tbody>' + rows + '</tbody></table></details>';
+    }
+
+    var html = block('Aktien-Topf (FIFO-Journal)', 'Aktien')
+             + block('Termingeschäfte (FIFO-Journal)', 'Futures')
+             + fxBlock;
+    el.innerHTML = html
+        ? '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 4px;">Prüffähiges FIFO-Journal (aufklappen)</div>' + html
+        : '';
 }
 
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */

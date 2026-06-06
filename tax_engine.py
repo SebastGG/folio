@@ -263,6 +263,7 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
     peryear = _dd(_ybucket)
     # Nachweis je (Jahr, Symbol) — Summe ergibt die Topf-Werte (Z.20/23/22)
     pos = _dd(lambda: {"cat": "", "gewinn": 0.0, "verlust": 0.0})
+    journal = []   # prüffähiges FIFO-Journal: jede Zuordnung mit Kauf/Verkauf-Bein, FX, EUR
 
     for sym, evs in events.items():
         evs = sorted(evs, key=lambda e: (e["date"], 0 if e["t"] == "split" else 1))
@@ -292,14 +293,17 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                 bprice, bcpu, bdate, bcur = lot[1], lot[2], lot[3], lot[4]
                 is_aktie = cat in _AKTIEN_CATS
                 try:
-                    if lot[0] > 0:   # long verkauft
-                        proceeds = (match * price + cpu * match) * fx_to_eur(cur, d)
-                        cost     = (match * bprice - bcpu * match) * fx_to_eur(bcur, bdate)
-                        realized = proceeds - cost
-                    else:            # short zurückgekauft
-                        proceeds = (match * bprice + bcpu * match) * fx_to_eur(bcur, bdate)
-                        cost     = (match * price - cpu * match) * fx_to_eur(cur, d)
-                        realized = proceeds - cost
+                    if lot[0] > 0:   # long: Kauf=Lot (bdate), Verkauf=Trade (d)
+                        fx_kauf, fx_verk = fx_to_eur(bcur, bdate), fx_to_eur(cur, d)
+                        kauf_d, kauf_kurs, verk_d, verk_kurs = bdate, bprice, d, price
+                        cost     = (match * bprice - bcpu * match) * fx_kauf
+                        proceeds = (match * price + cpu * match) * fx_verk
+                    else:            # short: Verkauf=Lot (bdate), Rückkauf/Anschaffung=Trade (d)
+                        fx_kauf, fx_verk = fx_to_eur(cur, d), fx_to_eur(bcur, bdate)
+                        kauf_d, kauf_kurs, verk_d, verk_kurs = d, price, bdate, bprice
+                        cost     = (match * price - cpu * match) * fx_kauf
+                        proceeds = (match * bprice + bcpu * match) * fx_verk
+                    realized = proceeds - cost
                 except Exception:
                     realized = None
                 if realized is not None:
@@ -308,6 +312,15 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
                     p["cat"] = "Aktien" if is_aktie else ("Futures" if cat == "Futures" else "Sonstige")
                     if realized >= 0: p["gewinn"] += realized
                     else: p["verlust"] += -realized
+                    journal.append({
+                        "year": d[:4], "symbol": sym, "category": p["cat"], "waehrung": cur,
+                        "menge": round(match, 4), "short": lot[0] < 0,
+                        "kauf_datum": kauf_d, "kauf_kurs": round(kauf_kurs, 4), "fx_kauf": round(fx_kauf, 5),
+                        "anschaffung_eur": round(cost, 2),
+                        "verkauf_datum": verk_d, "verkauf_kurs": round(verk_kurs, 4), "fx_verkauf": round(fx_verk, 5),
+                        "erloes_eur": round(proceeds, 2),
+                        "gewinn_eur": round(realized, 2),
+                    })
                     if is_aktie:
                         if realized >= 0: by["aktien_gewinn"] += realized
                         else: by["aktien_verlust"] += -realized
@@ -347,6 +360,10 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
              for (y, s), p in pos.items() if y == yr],
             key=lambda x: (_catord.get(x["category"], 9), -x["net"]))
 
+        # Prüffähiges FIFO-Journal des Jahres (Aktien/Futures je Zuordnung)
+        jrnl = sorted([j for j in journal if j["year"] == yr],
+                      key=lambda j: (_catord.get(j["category"], 9), j["verkauf_datum"], j["symbol"]))
+
         # ── §20-Verlustverrechnungstöpfe + Steuer (Phase 2) ──────────────────
         # OHNE Sparer-Pauschbetrag (macht das Finanzamt), ohne KiSt, ohne Günstigerprüfung.
         # Fremdwährung (Regel F): IBKRs realisiertes Devisen-Ergebnis (Basis-EUR) → allg. Topf.
@@ -385,6 +402,7 @@ def compute_tax_report(csv_texts: list[str], target_year: str | None = None,
         return {
             "year": yr,
             "positions": positions,
+            "journal": jrnl,
             "line7_inland_abgeltung": g(div_de),                       # mit dt. Steuerabzug
             "line18_inland": None,                                     # nicht zuverlässig berechenbar
             "line19_foreign": kap_foreign,
