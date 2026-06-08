@@ -28,20 +28,8 @@ var PAGES = [
         onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
     },
     {
-        id: 'tax', label: 'Steuer', icon: '📑',
-        // Gespeicherte CSVs beim Öffnen automatisch auswerten (einmal/Session)
-        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('tax'); }
-    },
-    {
-        id: 'steuer2', label: 'Steuer +', icon: '🧮',
-        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer2'); }
-    },
-    {
-        id: 'steuer3', label: 'Steuer ++', icon: '🔎',
-        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer3'); }
-    },
-    {
-        id: 'steuer4', label: 'Steuer +++', icon: '🏛️',
+        id: 'steuer4', label: 'IBKR Steuer Report', icon: '🏛️',
+        // Gespeicherte XMLs beim Öffnen automatisch auswerten (einmal/Session)
         onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer4'); }
     },
     {

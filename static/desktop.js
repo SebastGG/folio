@@ -2475,7 +2475,7 @@ async function taxKonvexPdf() {
         var blob = await resp.blob();
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
-        a.href = url; a.download = 'Steuerbericht_' + year + '_Steuer+++.pdf';
+        a.href = url; a.download = 'IBKR-Steuer-Report_' + year + '.pdf';
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
     } catch (err) {
@@ -2838,9 +2838,6 @@ function _taxRenderYear(d, filesYears) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 var _TAX_CFG = {
-    tax:     { ep: '/api/tax/report',        kind: 'csv', msg: 'tax-msg',  ind: 'tax-stored',  render: taxRender,       loaded: false },
-    steuer2: { ep: '/api/tax/report',        kind: 'csv', msg: 'tax2-msg', ind: 'tax2-stored', render: taxFullRender,   loaded: false },
-    steuer3: { ep: '/api/tax/report-xml',    kind: 'xml', msg: 'tax3-msg', ind: 'tax3-stored', render: taxXmlRender,    loaded: false },
     steuer4: { ep: '/api/tax/report-konvex', kind: 'xml', msg: 'tax4-msg', ind: 'tax4-stored', render: taxKonvexRender, loaded: false }
 };
 

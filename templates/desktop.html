@@ -412,188 +412,23 @@
   </div>
 </section><!-- end #view-ibkr -->
 
-<!-- ══ SEITE: STEUER ══════════════════════════════════════════════════════════ -->
-<section id="view-tax" class="page">
-  <div class="settings-wrap">
-
-    <div class="settings-card">
-      <h2 class="settings-h">📑 Steuer-Report (Anlage KAP)
-        <span class="settings-badge" id="tax-year" style="display:none"></span>
-      </h2>
-      <p class="settings-hint">
-        Lade <b>alle IBKR Activity Statements (CSV) seit Depoteröffnung</b> hoch
-        (Reports → Activity → je Jahr, Format CSV) — die Historie wird für die
-        FIFO-Berechnung der Veräußerungsgewinne gebraucht. Dateien werden verarbeitet,
-        aber <b>nicht gespeichert</b>. Gewinne/Verluste werden via FIFO mit EUR-Umrechnung
-        pro Trade (ECB-Kurse) gerechnet.
-      </p>
-      <div class="drop-zone" id="taxDrop"
-        ondragover="event.preventDefault();this.classList.add('over')"
-        ondragleave="this.classList.remove('over')"
-        ondrop="event.preventDefault();this.classList.remove('over');taxUpload(event.dataTransfer.files)">
-        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-CSVs hierher ziehen oder klicken (Mehrfachauswahl)</div>
-        <input type="file" id="taxFile" accept=".csv" multiple style="display:none" onchange="taxUpload(this.files)">
-      </div>
-      <div id="tax-msg" class="settings-msg" style="margin-top:8px;"></div>
-      <div id="tax-stored" class="settings-hint" style="margin-top:6px;display:none;"></div>
-    </div>
-
-    <div class="settings-card" id="tax-result" style="display:none;">
-      <h2 class="settings-h">Zusammenfassung der Kapitalerträge
-        <span style="flex:1"></span>
-        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
-          Steuerjahr
-          <select id="tax-year-select" onchange="taxSelectYear(this.value)"
-            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
-        </label>
-      </h2>
-      <div class="tax-cards" id="tax-cards"></div>
-      <div id="tax-kap"></div>
-      <div id="tax-positions"></div>
-      <div id="tax-chart"></div>
-      <div id="tax-yeartable"></div>
-      <div id="tax-breakdown"></div>
-      <p class="settings-hint" style="margin-top:14px;">
-        ⚠️ <b>Ohne Gewähr — keine Steuerberatung.</b> Aktien-Gewinne/-Verluste via FIFO mit
-        EUR-Umrechnung pro Trade (ECB-Referenzkurse), inkl. Aktiensplits. <b>Nicht</b> berücksichtigt:
-        Investmentfonds/ETFs (separate Anlage KAP-INV mit Teilfreistellung), die genaue
-        Aufteilung inländisch/ausländisch (Z.18/19), Vorabpauschale sowie Spinoffs/Symbolwechsel
-        (geringe Restabweichung). Termingeschäfte werden separat ausgewiesen. Validiert gegen einen
-        PwC-Report (~0,1–0,5 % Abweichung) — bitte trotzdem mit Steuerberater/Elster gegenprüfen.
-      </p>
-    </div>
-
-  </div>
-</section><!-- end #view-tax -->
-
-<!-- ══ SEITE: STEUER + (vollständige §20-Berechnung, Phase 1) ══════════════════ -->
-<section id="view-steuer2" class="page">
-  <div class="settings-wrap">
-
-    <div class="settings-card">
-      <h2 class="settings-h">🧮 Steuer + — §20-Berechnung
-        <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">inkl. Fremdwährung (Regel F)</span>
-      </h2>
-      <p class="settings-hint">
-        Vollständigere Berechnung nach deutschem Recht (§20 EStG): getrennte
-        Verlustverrechnungstöpfe (Aktien-Topf vs. allgemeiner Topf), Termingeschäfte
-        <b>ohne</b> 20.000-€-Grenze (JStG 2024), anrechenbare ausländische Quellensteuer,
-        Abgeltungsteuer + Soli. <b>Ohne</b> Sparer-Pauschbetrag (macht das Finanzamt),
-        ohne Kirchensteuer/Günstigerprüfung. Lade alle Jahres-CSVs seit Depoteröffnung.
-      </p>
-      <div class="drop-zone" id="tax2Drop"
-        ondragover="event.preventDefault();this.classList.add('over')"
-        ondragleave="this.classList.remove('over')"
-        ondrop="event.preventDefault();this.classList.remove('over');taxFullUpload(event.dataTransfer.files)">
-        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-CSVs hierher ziehen oder klicken (Mehrfachauswahl)</div>
-        <input type="file" id="tax2File" accept=".csv" multiple style="display:none" onchange="taxFullUpload(this.files)">
-      </div>
-      <div id="tax2-msg" class="settings-msg" style="margin-top:8px;"></div>
-      <div id="tax2-stored" class="settings-hint" style="margin-top:6px;display:none;"></div>
-    </div>
-
-    <div class="settings-card" id="tax2-result" style="display:none;">
-      <h2 class="settings-h">Steuerliche Ermittlung
-        <span style="flex:1"></span>
-        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
-          Steuerjahr
-          <select id="tax2-year-select" onchange="taxFullSelectYear(this.value)"
-            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
-        </label>
-      </h2>
-      <div class="tax-cards" id="tax2-cards"></div>
-      <div id="tax2-toepfe"></div>
-      <div id="tax2-steuer"></div>
-      <div id="tax2-journal"></div>
-      <p class="settings-hint" style="margin-top:14px;">
-        ⚠️ <b>Ohne Gewähr — keine Steuerberatung</b>, rechnerische Aufbereitung zur Prüfung
-        durch einen Steuerberater. <b>Fremdwährung (Regel F):</b> verzinsliches Guthaben → §20;
-        verwendet IBKRs eigene realisierte Devisen-Ergebnisse in Basis-EUR (vollständige Historie,
-        IBKR-Kurse statt EZB — geringe Abweichung). Der Aktien-Verlustverrechnungstopf
-        (§20 Abs. 6 S. 4) ist verfassungsrechtlich umstritten (BVerfG, Az. 2 BvL 3/21), wird aber
-        nach geltendem Recht angewandt. Quellensteuer-Anrechnung vereinfacht (DBA-Satz 15 % auf
-        ausl. Dividenden). Investmentfonds/ETFs (KAP-INV) separat. Sparer-Pauschbetrag, Kirchensteuer
-        und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
-      </p>
-    </div>
-
-  </div>
-</section><!-- end #view-steuer2 -->
-
-<!-- ══ SEITE: STEUER ++ (Flex-XML, Closed Lots) ═══════════════════════════════ -->
-<section id="view-steuer3" class="page">
-  <div class="settings-wrap">
-
-    <div class="settings-card">
-      <h2 class="settings-h">🔎 Steuer ++ — auf Basis der IBKR Flex-XML
-        <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">prüffähig · Closed Lots + EZB</span>
-      </h2>
-      <p class="settings-hint">
-        Nutzt IBKRs <b>autoritatives Lot-Matching</b> aus der Flex-Query (Detailgrad
-        „Closed Lots") und rechnet die EUR-Umrechnung selbst mit <b>EZB-Referenzkursen pro
-        Bein</b>. Damit entfallen die FIFO-/Split-/Spinoff-Näherungen der CSV-Variante.
-        Echte Klassifikation (Aktien / ETF-Fonds / Termingeschäfte via <code>subCategory</code>),
-        DE/Ausland-Split, Devisen (Regel F) pro Lot, vollständiges Journal je Veräußerung.
-        Lade die Flex-<b>XML</b>-Statements aller Jahre seit Depoteröffnung.
-      </p>
-      <div class="drop-zone" id="tax3Drop"
-        ondragover="event.preventDefault();this.classList.add('over')"
-        ondragleave="this.classList.remove('over')"
-        ondrop="event.preventDefault();this.classList.remove('over');taxXmlUpload(event.dataTransfer.files)">
-        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl)</div>
-        <input type="file" id="tax3File" accept=".xml" multiple style="display:none" onchange="taxXmlUpload(this.files)">
-      </div>
-      <div id="tax3-msg" class="settings-msg" style="margin-top:8px;"></div>
-      <div id="tax3-stored" class="settings-hint" style="margin-top:6px;display:none;"></div>
-    </div>
-
-    <div class="settings-card" id="tax3-result" style="display:none;">
-      <h2 class="settings-h">Steuerliche Ermittlung
-        <span style="flex:1"></span>
-        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
-          Steuerjahr
-          <select id="tax3-year-select" onchange="taxXmlSelectYear(this.value)"
-            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
-        </label>
-      </h2>
-      <div class="tax-cards" id="tax3-cards"></div>
-      <div id="tax3-toepfe"></div>
-      <div id="tax3-steuer"></div>
-      <div id="tax3-journal"></div>
-      <div id="tax3-income"></div>
-      <p class="settings-hint" style="margin-top:14px;">
-        ⚠️ <b>Ohne Gewähr — keine Steuerberatung.</b> Rechnerische Aufbereitung zur Prüfung durch
-        einen Steuerberater. Realisierte G/V je geschlossenem Lot aus IBKRs FIFO-Matching, EUR pro
-        Bein zum EZB-Referenzkurs (Frankfurter-API, Forward-Fill aufs Wochenende). <b>Aktien-Topf</b>
-        (§20 Abs. 6 S. 4) verfassungsrechtlich umstritten (BVerfG 2 BvL 3/21), nach geltendem Recht
-        angewandt. <b>Termingeschäfte</b> ohne 20.000-€-Grenze (JStG 2024). <b>Devisen (Regel F):</b>
-        IBKRs realisiertes Ergebnis je FX-Lot in EUR. <b>ETF/Fonds:</b> Teilfreistellung (§20 InvStG)
-        ist <u>noch nicht</u> angewandt — Bruttowert, gesondert prüfen. Gezahlte Zinsen und Gebühren
-        sind nach §20 Abs. 9 <b>nicht abzugsfähig</b> (nur informativ gezeigt). Inländische Dividenden
-        (Z.7, an der Quelle versteuert) bleiben aus der Bemessungsgrundlage. Sparer-Pauschbetrag,
-        Kirchensteuer und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
-      </p>
-    </div>
-
-  </div>
-</section><!-- end #view-steuer3 -->
-
-<!-- ══ SEITE: STEUER +++ (Konvex-Engine · Anlage KAP / KAP-INV) ════════════════ -->
+<!-- ══ SEITE: IBKR STEUER REPORT (Anlage KAP / KAP-INV) ═══════════════════════ -->
 <section id="view-steuer4" class="page">
   <div class="settings-wrap">
 
     <div class="settings-card">
-      <h2 class="settings-h">🏛️ Steuer +++ — Anlage KAP &amp; KAP-INV (Konvex-Engine)
+      <h2 class="settings-h">🏛️ IBKR Steuer Report — Anlage KAP &amp; KAP-INV
         <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">InvStG · KAP-INV · Zuflussprinzip</span>
       </h2>
       <p class="settings-hint">
-        Vollständige <b>Anlage-KAP-Ermittlung</b> auf Basis der Engine von
-        <a href="https://github.com/KonvexInvestment/ibkr-steuer" target="_blank" rel="noopener" style="color:var(--accent)">KonvexInvestment/ibkr-steuer</a>.
-        Zusätzlich zu Steuer ++: <b>InvStG-Teilfreistellung</b> (30/15/60/0 %) tatsächlich
-        angewandt + separate <b>Anlage KAP-INV</b>, <b>Stillhalterprämien</b> mit Zuflussprinzip
+        Vollständige <b>Anlage-KAP-Ermittlung</b> aus den IBKR-Flex-Statements auf Basis der Engine von
+        <a href="https://github.com/KonvexInvestment/ibkr-steuer" target="_blank" rel="noopener" style="color:var(--accent)">KonvexInvestment/ibkr-steuer</a>:
+        <b>InvStG-Teilfreistellung</b> (30/15/60/0 %) tatsächlich angewandt + separate
+        <b>Anlage KAP-INV</b>, <b>Stillhalterprämien</b> mit Zuflussprinzip
         (BMF Rn. 25-35, Cross-Year-Matching), offizielle <b>Anlage-KAP-Zeilennummern</b>
-        (7/19/20/22/23/37/38/41) und getrennte deutsche/ausländische Quellensteuer.
-        Lade die Flex-<b>XML</b>-Statements aller Jahre seit Depoteröffnung (eines Kontos).
+        (7/19/20/22/23/37/38/41), getrennte deutsche/ausländische Quellensteuer, prüffähiges
+        Trade-Journal und PDF-Export. Lade die Flex-<b>XML</b>-Statements aller Jahre seit
+        Depoteröffnung (eines Kontos).
       </p>
       <div class="drop-zone" id="tax4Drop"
         ondragover="event.preventDefault();this.classList.add('over')"
@@ -645,7 +480,7 @@
         anders als IBKR/PwCs „non-share assets"-Darstellung, die den Nominalwert pro Bein umrechnet).
         <b>Aktien-Topf</b> (§20 Abs. 6 S. 4) nach geltendem Recht, verfassungs-
         rechtlich umstritten (BVerfG 2 BvL 3/21). <b>Termingeschäfte</b> ohne 20.000-€-Grenze (JStG 2024).
-        Abgeltungsteuer aus den ermittelten Töpfen abgeleitet (gleiche §20-Abs.-6-Logik wie Steuer ++).
+        Abgeltungsteuer aus den ermittelten Töpfen abgeleitet (§20 Abs. 6 EStG).
         Sparer-Pauschbetrag, Kirchensteuer und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
       </p>
     </div>
@@ -719,15 +554,6 @@
 <script>
   document.getElementById('dropZone').addEventListener('click', function() {
     document.getElementById('fileInput').click();
-  });
-  document.getElementById('taxDrop').addEventListener('click', function() {
-    document.getElementById('taxFile').click();
-  });
-  document.getElementById('tax2Drop').addEventListener('click', function() {
-    document.getElementById('tax2File').click();
-  });
-  document.getElementById('tax3Drop').addEventListener('click', function() {
-    document.getElementById('tax3File').click();
   });
   function readFile(file) {
     if (!file) return;

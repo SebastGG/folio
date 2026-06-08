@@ -67,7 +67,7 @@ class _PDF(FPDF):
         self.set_y(-10)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(150, 150, 150)
-        self.cell(0, 4, _s("Steuer +++ (Folio · Engine KonvexInvestment/ibkr-steuer) — "
+        self.cell(0, 4, _s("IBKR Steuer Report (Folio · Engine KonvexInvestment/ibkr-steuer) — "
                            "ohne Gewähr, keine Steuerberatung"), align="L")
         self.cell(0, 4, f"Seite {self.page_no()}", align="R")
 
@@ -321,7 +321,7 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
     created = created_at or datetime.now().strftime("%d.%m.%Y %H:%M")
     sub = f"Anlage KAP / KAP-INV  ·  Konto {account or '-'}  ·  " \
           f"Basiswaehrung {year_data.get('base_currency', 'EUR')}  ·  erstellt {created}"
-    pdf = _PDF(f"Steuerbericht {yr} — Steuer +++", sub)
+    pdf = _PDF(f"IBKR Steuer Report {yr}", sub)
 
     t = year_data.get("tax", {})
     z = year_data.get("zeile", {})

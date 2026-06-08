@@ -1430,7 +1430,7 @@ async def tax_report_konvex_pdf(request: Request, year: str = ""):
         pdf_bytes, yr = result
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition":
-                                 f'attachment; filename="Steuerbericht_{yr}_Steuer-plus-plus-plus.pdf"'})
+                                 f'attachment; filename="IBKR-Steuer-Report_{yr}.pdf"'})
     except Exception as e:
         print(f"tax_report_konvex_pdf error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
