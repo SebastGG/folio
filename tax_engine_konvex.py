@@ -51,6 +51,129 @@ def _g(v, nd=2):
         return None
 
 
+_CAT_LABELS = {'STK': 'Aktie', 'OPT': 'Option', 'FUT': 'Future',
+               'FOP': 'Futures-Option', 'FSFOP': 'Flex-Option',
+               'BILL': 'T-Bill', 'BOND': 'Anleihe'}
+_TOPF_LABELS = {'Topf1': 'Topf 1 — Aktien (§20 Abs. 2 Nr. 1)',
+                'Topf2': 'Topf 2 — Sonstiges (Termingeschäfte, Stillhalter, FX)',
+                'KAP-INV': 'Anlage KAP-INV (InvStG)'}
+
+
+def _fmt_instrument(row: dict) -> str:
+    """Anzeigename: Symbol (+ Option-Details bzw. Beschreibung)."""
+    sym = row.get('symbol', '') or ''
+    desc = row.get('description', '') or ''
+    pc = row.get('putCall', '') or ''
+    strike = row.get('strike', '') or ''
+    expiry = row.get('expiry', '') or ''
+    if pc and strike and expiry:
+        pc_label = 'Call' if pc == 'C' else 'Put'
+        exp = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}" if len(expiry) == 8 else expiry[:10]
+        return f"{sym} ({pc_label} {strike} exp. {exp})"
+    if desc and sym:
+        return f"{sym} ({desc})"
+    return sym or desc or ''
+
+
+def _group_key(row: dict) -> str:
+    us = (row.get('underlyingSymbol', '') or '').strip()
+    if us:
+        return us.split()[0]
+    sym = (row.get('symbol', '') or '').strip()
+    return sym.split()[0] if sym else '?'
+
+
+def _bs_label(row: dict) -> str:
+    bs, oc = row.get('buySell', ''), row.get('openClose', '')
+    return {('SELL', 'O'): 'STO', ('BUY', 'C'): 'BTC',
+            ('BUY', 'O'): 'BTO', ('SELL', 'C'): 'STC'}.get((bs, oc), bs or '')
+
+
+def _build_journal(d: dict) -> dict:
+    """
+    Prüffähiges Trade-Journal je Topf/Wertpapier — entspricht dem Konvex-Excel-
+    Export. Reale Trades (trade_details) + synthetisierte Tageskurs-Korrektur-
+    Zeilen (aus fx_correction_details, §20 Abs. 4), gruppiert mit Zwischensummen.
+    InvStG/Tageskurs sind aktiv (GUI-Defaults) — wie im offiziellen Report.
+    """
+    rows = list(d.get('trade_details', []) or [])
+
+    # Tageskurs-Korrektur-Zeilen synthetisieren (Futures sind in der Engine bereits
+    # ausgeschlossen → erscheinen hier korrekt nicht).
+    for lot in (d.get('fx_correction_details', []) or []):
+        delta = float(lot.get('delta_eur', 0) or 0)
+        if abs(delta) < 0.005:
+            continue
+        open_dt = (lot.get('openDateTime', '') or '')[:10]
+        note = (f"Tageskurs-Korrektur (Kauf {open_dt}, Kurs "
+                f"{float(lot.get('fx_open', 0) or 0):.5f} → {float(lot.get('fx_close', 0) or 0):.5f})")
+        topf = lot.get('topf', 'Topf2')
+        # KAP-INV: nach Teilfreistellung
+        if topf == 'KAP-INV':
+            taxable = lot.get('taxable_delta_eur')
+            if taxable is not None:
+                delta = float(taxable)
+        rows.append({
+            'reportDate': lot.get('reportDate', ''), 'dateTime': lot.get('reportDate', ''),
+            'symbol': lot.get('symbol', ''), 'description': note,
+            'isin': lot.get('isin', ''), 'assetCategory': lot.get('assetCategory', ''),
+            'buySell': '', 'openClose': '', 'quantity': lot.get('quantity', ''),
+            'currency': lot.get('currency', ''), 'tradePrice': 0,
+            'cost': lot.get('cost', 0), 'proceeds': 0, 'fifoPnlRealized': 0,
+            'ibCommission': 0, 'fxRateToBase': 0, 'pnl_eur': delta,
+            'topf': topf, 'underlyingSymbol': lot.get('underlyingSymbol', ''),
+            'putCall': '', 'strike': '', 'expiry': '', 'source': 'tageskurs_korrektur',
+        })
+
+    def _row(r):
+        return {
+            'datum': (r.get('reportDate', '') or '')[:10],
+            'handelsdatum': (r.get('dateTime', '') or '')[:10],
+            'wertpapier': _fmt_instrument(r),
+            'isin': r.get('isin', '') or '',
+            'kategorie': _CAT_LABELS.get(r.get('assetCategory', ''), r.get('assetCategory', '') or ''),
+            'kv': _bs_label(r),
+            'stk': r.get('quantity', '') or '',
+            'kurs': _g(r.get('tradePrice'), 4),
+            'kostenbasis': _g(r.get('cost')),
+            'erloese': _g(r.get('proceeds')),
+            'gv_orig': _g(r.get('fifoPnlRealized')),
+            'kommission': _g(r.get('ibCommission')),
+            'waehrung': r.get('currency', '') or '',
+            'fx': _g(r.get('fxRateToBase'), 4),
+            'gv_eur': _g(r.get('pnl_eur')),
+            'anmerkung': r.get('description', '') if r.get('source') != 'trades' else '',
+            'source': r.get('source', 'trades'),
+        }
+
+    out = {}
+    for topf_key in ('Topf1', 'Topf2', 'KAP-INV'):
+        topf_rows = [r for r in rows if r.get('topf') == topf_key]
+        if not topf_rows:
+            continue
+        groups = {}
+        for r in topf_rows:
+            groups.setdefault(_group_key(r), []).append(r)
+        grp_out, topf_total = [], 0.0
+        for key in sorted(groups):
+            grs = sorted(groups[key], key=lambda r: (r.get('dateTime') or r.get('reportDate') or ''))
+            isin = next((r.get('isin') for r in grs if r.get('isin')), '')
+            desc = next((r.get('description') for r in grs
+                         if r.get('description') and r.get('source') == 'trades'), '')
+            gtotal = sum(float(r.get('pnl_eur', 0) or 0) for r in grs)
+            topf_total += gtotal
+            grp_out.append({
+                'key': key, 'isin': isin, 'desc': desc,
+                'total': _g(gtotal), 'rows': [_row(r) for r in grs],
+            })
+        out[topf_key] = {
+            'label': _TOPF_LABELS.get(topf_key, topf_key),
+            'total': _g(topf_total),
+            'groups': grp_out,
+        }
+    return out
+
+
 def _peek_xml_meta(text: str) -> dict | None:
     """accountId + Zeitraum aus einer Flex-XML lesen (ohne volle Verarbeitung)."""
     try:
@@ -229,6 +352,9 @@ def _shape_year(d: dict) -> dict:
     return {
         'tax_year': eur('tax_year'),
         'base_currency': eur('base_currency', 'EUR'),
+
+        # Prüffähiges Trade-Journal je Topf/Wertpapier (= Konvex-Excel-Export)
+        'journal': _build_journal(d),
 
         # offizielle Anlage-KAP / KAP-INV Zeilen (final, = Konvex-Report)
         'zeile': {

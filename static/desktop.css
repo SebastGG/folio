@@ -117,9 +117,13 @@ header {
 }
 /* Steuer-Seiten: volle Breite, damit die (FIFO-)Tabellen gut lesbar sind */
 #view-tax .settings-wrap,
-#view-steuer2 .settings-wrap { align-items: stretch; }
+#view-steuer2 .settings-wrap,
+#view-steuer3 .settings-wrap,
+#view-steuer4 .settings-wrap { align-items: stretch; }
 #view-tax .settings-card,
-#view-steuer2 .settings-card { max-width: none; }
+#view-steuer2 .settings-card,
+#view-steuer3 .settings-card,
+#view-steuer4 .settings-card { max-width: none; }
 .settings-h {
   font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
@@ -418,6 +422,33 @@ header {
 .pr-cnt { color: var(--muted); font-weight: 400; }
 .pr-subtotal td { padding: 4px 8px; border-top: 1px solid var(--border); font-weight: 600; background: var(--surface); }
 .pr-total td { padding: 6px 8px; border-top: 2px solid var(--border); font-weight: 700; font-size: 12px; }
+
+/* ── Steuer +++ : zweispaltig (links Bericht, rechts Aufschlüsselung) ───────── */
+.tax4-layout { display: grid; grid-template-columns: minmax(340px, 1fr) minmax(0, 1.7fr); gap: 22px; align-items: start; }
+.tax4-left { min-width: 0; }
+.tax4-right { min-width: 0; }
+@media (max-width: 1300px) { .tax4-layout { grid-template-columns: 1fr; } }
+
+/* Trade-Journal (Konvex-Excel-Stil) */
+.jr-topf { margin-top: 14px; }
+.jr-topf-head { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text); padding: 6px 8px; background: var(--surface); border: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; }
+.jr-grp { border: 1px solid var(--border); border-top: none; }
+.jr-grp > summary { cursor: pointer; list-style: none; padding: 4px 8px; font-size: 10px;
+  display: flex; justify-content: space-between; gap: 8px; background: var(--bg); }
+.jr-grp > summary::-webkit-details-marker { display: none; }
+.jr-grp > summary:hover { background: var(--surface); }
+.jr-grp[open] > summary { font-weight: 600; border-bottom: 1px solid var(--border); }
+.jr-tablewrap { overflow-x: auto; }
+.jr-table { width: 100%; border-collapse: collapse; font-size: 9.5px; min-width: 760px; }
+.jr-table th { position: sticky; top: 0; background: var(--bg); color: var(--muted); font-size: 8.5px;
+  text-transform: uppercase; text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.jr-table th:nth-child(1), .jr-table th:nth-child(2), .jr-table th:last-child { text-align: left; }
+.jr-table td { padding: 2px 6px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--bg); }
+.jr-table td:nth-child(2), .jr-table td:last-child { text-align: left; white-space: normal; }
+.jr-row-korr td { color: var(--muted); font-style: italic; }
+.jr-subtotal td { font-weight: 700; border-top: 1px solid var(--border); background: var(--surface); }
 
 /* ── Performance-Tabelle ───────────────────────────────────────────────────── */
 .perf-table {

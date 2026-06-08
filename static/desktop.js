@@ -2594,9 +2594,65 @@ function _taxKonvexRenderYear(d) {
         + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
         + '</tbody></table>';
 
+    _taxKonvexRenderJournal(d.journal || {});
     _taxKonvexRenderKapInv(kap);
     _taxKonvexRenderFx(fx);
     _taxKonvexRenderIncome(inc, fl);
+}
+
+/** Prüffähiges Trade-Journal je Topf/Wertpapier — entspricht dem Konvex-Excel-Export. */
+function _taxKonvexRenderJournal(j) {
+    var el = document.getElementById('tax4-journal');
+    if (!el) return;
+    var n2 = function(v) { return (v == null ? '' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
+    var d4 = function(v) { return (v == null ? '' : v.toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 4 })); };
+    var col = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+    var esc = function(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+
+    var head = '<tr><th>Datum</th><th>K/V</th><th>Stk.</th><th>Kurs</th><th>Kostenb.</th>'
+        + '<th>Erlöse</th><th>G/V lok.</th><th>Komm.</th><th>Whr.</th><th>FX</th><th>G/V €</th><th>Anmerkung</th></tr>';
+
+    function rowHtml(r) {
+        var korr = r.source === 'tageskurs_korrektur';
+        return '<tr class="' + (korr ? 'jr-row-korr' : '') + '">'
+            + '<td>' + r.datum + '</td>'
+            + '<td>' + (r.kv || '') + '</td>'
+            + '<td>' + (r.stk != null ? r.stk : '') + '</td>'
+            + '<td>' + d4(r.kurs) + '</td>'
+            + '<td>' + n2(r.kostenbasis) + '</td>'
+            + '<td>' + n2(r.erloese) + '</td>'
+            + '<td>' + n2(r.gv_orig) + '</td>'
+            + '<td>' + n2(r.kommission) + '</td>'
+            + '<td>' + (r.waehrung || '') + '</td>'
+            + '<td>' + d4(r.fx) + '</td>'
+            + '<td style="font-weight:600;color:' + (korr ? 'var(--muted)' : col(r.gv_eur)) + '">' + n2(r.gv_eur) + '</td>'
+            + '<td style="font-size:8.5px;color:var(--muted)">' + esc(r.anmerkung) + '</td></tr>';
+    }
+
+    function groupHtml(g) {
+        var lbl = esc(g.key) + (g.desc ? ' · ' + esc(g.desc) : '') + (g.isin ? ' <span style="color:var(--muted)">' + g.isin + '</span>' : '');
+        return '<details class="jr-grp"><summary><span>' + lbl + '</span>'
+            + '<span style="color:' + col(g.total) + ';font-weight:600">' + n2(g.total) + ' €</span></summary>'
+            + '<div class="jr-tablewrap"><table class="jr-table"><thead>' + head + '</thead><tbody>'
+            + g.rows.map(rowHtml).join('')
+            + '<tr class="jr-subtotal"><td colspan="10">Zwischensumme ' + esc(g.key) + '</td>'
+            + '<td style="color:' + col(g.total) + '">' + n2(g.total) + '</td><td></td></tr>'
+            + '</tbody></table></div></details>';
+    }
+
+    var html = '';
+    ['Topf1', 'Topf2', 'KAP-INV'].forEach(function(k) {
+        var blk = j[k];
+        if (!blk || !blk.groups.length) return;
+        html += '<div class="jr-topf"><div class="jr-topf-head"><span>' + esc(blk.label) + '</span>'
+            + '<span style="color:' + col(blk.total) + '">Summe ' + n2(blk.total) + ' €</span></div>'
+            + blk.groups.map(groupHtml).join('') + '</div>';
+    });
+
+    el.innerHTML = html
+        ? '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:4px 0 2px;">'
+          + 'Prüffähiges Journal je Veräußerung (= Konvex-Excel-Export · Tageskurs-Korrektur je Lot)</div>' + html
+        : '';
 }
 
 /** Anlage KAP-INV: je Fonds mit InvStG-Teilfreistellung. */
