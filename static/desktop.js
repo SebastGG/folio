@@ -2461,6 +2461,7 @@ function taxKonvexSelectYear(year) {
 function _taxKonvexRenderYear(d) {
     var t = d.tax || {}, z = d.zeile || {}, tp = d.toepfe || {},
         ak = tp.aktien || {}, al = tp.allg || {}, ki = tp.kap_inv || {},
+        z22 = tp.z22_components || {},
         inc = d.income || {}, kap = d.kap_inv || {}, fx = d.fx || {}, fl = d.flags || {};
     var eur = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'); };
     var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
@@ -2528,7 +2529,17 @@ function _taxKonvexRenderYear(d) {
         + (z.kap_inv_net != null ? '<tr class="pr-row"><td style="width:60px;color:var(--muted)">KAP-INV</td>'
             + '<td>Investmenterträge netto (nach Teilfreistellung)</td>'
             + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + R(z.kap_inv_net) + '">' + eur(z.kap_inv_net) + '</td></tr>' : '')
-        + '</tbody></table>';
+        + '</tbody></table>'
+        + (((z22.termingeschaefte || 0) + (z22.waehrung || 0) + (z22.sonstige || 0)) > 0
+            ? '<div style="font-size:10px;color:var(--muted);margin:4px 0 0;padding-left:60px;line-height:1.5">'
+              + '↳ <b>Zeile 22</b> bündelt alle Nicht-Aktien-Verluste: '
+              + 'Termingeschäfte ' + eur(z22.termingeschaefte)
+              + ' + Devisen (Regel F) ' + eur(z22.waehrung)
+              + (z22.sonstige ? ' + Sonstige ' + eur(z22.sonstige) : '')
+              + (z22.rest ? ' + Korrektur ' + eur(z22.rest) : '')
+              + ' = ' + eur(z22.total)
+              + '</div>'
+            : '');
 
     // ── Zwei Töpfe (§20 Abs. 6) ─────────────────────────────────────────────
     var sp = t._spillover != null ? t._spillover : (tp.spillover || 0);
@@ -2546,10 +2557,12 @@ function _taxKonvexRenderYear(d) {
                       + row('→ steuerpflichtig', ak.steuerbar, true, true)
                     : row('→ steuerpflichtig', ak.steuerbar, true, false)))
         + sec('Allgemeiner Topf', 'Anlage KAP — Z.19 / Verluste Z.22 · ohne Investmentfonds')
-        + row('Termingeschäfte (netto)', al.termingeschaefte, true, false, R(al.termingeschaefte))
-        + row('Ausländische Dividenden', al.dividenden, true)
-        + row('Zinsen', al.zinsen, true)
+        + row('Termingeschäfte (Optionen + Futures)', al.termingeschaefte, true, false, R(al.termingeschaefte))
         + row('Devisen (Regel F)', al.waehrung, true, false, R(al.waehrung))
+        + (al.sonstige ? row('Sonstige (T-Bills, Anleihen …)', al.sonstige, true, false, R(al.sonstige)) : '')
+        + row('Ausländische Dividenden · Z.19', al.dividenden, true)
+        + (al.dividenden_de ? row('Inländische Dividenden (auch Z.7)', al.dividenden_de, true, false, 'var(--muted)') : '')
+        + row('Zinsen', al.zinsen, true)
         + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
         + (sp > 0 ? row('davon gegen Aktiengewinn verrechnet', sp, true, false, 'var(--green)') : '')
         + (al.verlustvortrag > 0 ? row('→ Verlustvortrag (frei verrechenbar)', al.verlustvortrag, true, false, 'var(--red)')

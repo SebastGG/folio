@@ -99,6 +99,37 @@ def _shape_year(d: dict) -> dict:
     kap_inv_net = float(kap_inv.get('etf_net_taxable_eur', 0) or 0)
     kap_inv_wht = float(calculate_tax_report.get_kap_inv_wht_for_reporting(kap_inv) or 0)
 
+    # ── Saubere Aufschlüsselung des allgemeinen Topfs (Topf 2) ───────────────
+    # WICHTIG: die Engine bündelt in options_loss/options_gain SOWOHL Termin-
+    # geschäfte (Optionen/Futures) ALS AUCH die Devisen (Regel F) — siehe
+    # calculate_tax_report.py „options_loss += fx_total_loss". Für eine
+    # nachvollziehbare, doppelfreie Anzeige nutzen wir die autoritative
+    # `topf2_by_category` (je Instrumentenklasse getrennt) und gruppieren:
+    #   Termingeschäfte = Optionen + Futures   ·   Devisen = FX (Regel F)
+    #   Sonstige        = T-Bills, Anleihen, Crypto/Commodity ETPs …
+    by_cat = eur('topf2_by_category', {}) or {}
+    _TERMIN = {'Optionen', 'Futures'}
+    _DEVISEN = {'Devisen'}
+
+    def _cat_gl(names):
+        g = sum(float(by_cat[c].get('gain', 0) or 0) for c in by_cat if c in names)
+        l = sum(float(by_cat[c].get('loss', 0) or 0) for c in by_cat if c in names)
+        return g, l
+
+    termin_g, termin_l = _cat_gl(_TERMIN)
+    dev_g, dev_l = _cat_gl(_DEVISEN)
+    _other_names = set(by_cat) - _TERMIN - _DEVISEN
+    other_g, other_l = _cat_gl(_other_names)
+
+    # Zeile-22-Zerlegung: positive Verlustbeträge je Gruppe (Summe = Zeile 22).
+    # Ein evtl. Restbetrag (Korrekturen, die nicht in den Kategorien stecken) wird
+    # transparent als „rest" ausgewiesen, damit die Summe immer auf Zeile 22 passt.
+    z22_total = abs(float(eur('options_loss_eur', 0) or 0))
+    z22_termin = -termin_l
+    z22_dev = -dev_l
+    z22_other = -other_l
+    z22_rest = z22_total - (z22_termin + z22_dev + z22_other)
+
     # ── §20 Abs. 6 EStG — Topf-übergreifende Verrechnung ─────────────────────
     # Identische Logik wie Steuer ++ (tax_engine_xml.py): Aktien-Verluste nur
     # gegen Aktien-Gewinne (S.4 → Vortrag), allgemeine Verluste dürfen den
@@ -184,12 +215,35 @@ def _shape_year(d: dict) -> dict:
                 'verlustvortrag': _g(ak_verlustvortrag),
             },
             'allg': {
-                'termingeschaefte': _g(options_net),
-                'dividenden': _g(div_foreign),
+                # doppelfrei: Termingeschäfte = Optionen+Futures (OHNE Devisen),
+                # Devisen separat — beide aus topf2_by_category abgeleitet.
+                'termingeschaefte': _g(termin_g + termin_l),
+                'termingeschaefte_gewinn': _g(termin_g),
+                'termingeschaefte_verlust': _g(termin_l),
+                'waehrung': _g(dev_g + dev_l),
+                'waehrung_gewinn': _g(dev_g),
+                'waehrung_verlust': _g(dev_l),
+                'sonstige': _g(other_g + other_l),
+                'sonstige_gewinn': _g(other_g),
+                'sonstige_verlust': _g(other_l),
+                'dividenden': _g(div_foreign),       # ausländisch (Z.19)
+                'dividenden_de': _g(div_de),         # inländisch (in topf_2 enthalten, auch Z.7)
                 'zinsen': _g(interest),
-                'waehrung': _g(fx_net),
                 'netto': _g(allg_net), 'steuerbar': _g(allg_steuerbar),
                 'verlustvortrag': _g(allg_verlustvortrag),
+                'by_category': {
+                    c: {'gewinn': _g(v.get('gain')), 'verlust': _g(v.get('loss')),
+                        'netto': _g(float(v.get('gain', 0) or 0) + float(v.get('loss', 0) or 0))}
+                    for c, v in by_cat.items()
+                },
+            },
+            # Aufschlüsselung von Zeile 22 (alle Nicht-Aktien-Verluste, positiv)
+            'z22_components': {
+                'termingeschaefte': _g(z22_termin),
+                'waehrung': _g(z22_dev),
+                'sonstige': _g(z22_other),
+                'rest': _g(z22_rest),
+                'total': _g(z22_total),
             },
             'spillover': _g(spillover),
             'kap_inv': {
