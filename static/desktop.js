@@ -2458,6 +2458,34 @@ function taxKonvexSelectYear(year) {
     _taxKonvexRenderYear(_taxData4.years[year]);
 }
 
+/** Lädt den vollständigen PDF-Steuerbericht für das gewählte Jahr (serverseitig erzeugt). */
+async function taxKonvexPdf() {
+    var sel = document.getElementById('tax4-year-select');
+    var year = sel ? sel.value : (_taxData4 && _taxData4.year);
+    if (!year) return;
+    var btn = document.getElementById('tax4-pdf-btn');
+    var old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ erstelle …'; }
+    try {
+        var resp = await fetch('/api/tax/report-konvex-pdf?year=' + encodeURIComponent(year));
+        if (!resp.ok) {
+            var e = await resp.json().catch(function() { return {}; });
+            throw new Error(e.error || ('HTTP ' + resp.status));
+        }
+        var blob = await resp.blob();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'Steuerbericht_' + year + '_Steuer+++.pdf';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    } catch (err) {
+        var msg = document.getElementById('tax4-msg');
+        if (msg) { msg.textContent = 'PDF-Fehler: ' + err.message; msg.className = 'settings-msg err'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    }
+}
+
 function _taxKonvexRenderYear(d) {
     var t = d.tax || {}, z = d.zeile || {}, tp = d.toepfe || {},
         ak = tp.aktien || {}, al = tp.allg || {}, ki = tp.kap_inv || {},

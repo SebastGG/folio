@@ -21,9 +21,11 @@ mock_oidc.py
 *Steuer_xml.xml
 U[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 
-# Test-Screenshots (enthalten echte Depot-/Steuerdaten) — NIEMALS committen
+# Test-Screenshots + generierte Steuer-PDFs (echte Depot-/Steuerdaten) — NIEMALS committen
 *_screenshot.png
 *screenshot.png
+*.pdf
+_pdfpg*.png
 
 # Lokale Laufzeitdaten (Produktion liegt auf Cloudron unter /app/data)
 data/

@@ -32,7 +32,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -1395,4 +1395,43 @@ async def tax_files_clear(request: Request, kind: str = "xml"):
         return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
     _tax_store_clear(user, kind)
     return JSONResponse({"ok": True, "kind": kind, "files": []})
+
+
+# ── Steuer +++ : PDF-Steuerbericht je Jahr ──────────────────────────────────────
+# Rechnet aus den gespeicherten XMLs (Sorte xml) und liefert einen mehrseitigen
+# PDF-Bericht (Zusammenfassung + vollständiges Trade-Journal) für das gewählte Jahr.
+
+@app.get("/api/tax/report-konvex-pdf")
+async def tax_report_konvex_pdf(request: Request, year: str = ""):
+    import asyncio
+    import tax_engine_konvex
+    import tax_pdf_konvex
+    user = get_user(request)
+
+    texts = _tax_store_load(user, "xml")
+    if not texts:
+        return JSONResponse({"ok": False, "no_files": True,
+                             "error": "Keine gespeicherten XML-Dateien."}, status_code=422)
+
+    def _run():
+        res = tax_engine_konvex.compute_tax_report_konvex(texts, target_year=(year or None))
+        if res.get("error") or not res.get("year"):
+            return None, res
+        yr = year if (year and year in res.get("years", {})) else res["year"]
+        pdf = tax_pdf_konvex.build_pdf(res["years"][yr], account=res.get("account", ""))
+        return (pdf, yr), res
+
+    try:
+        loop = asyncio.get_running_loop()
+        result, res = await loop.run_in_executor(None, _run)
+        if result is None:
+            return JSONResponse({"ok": False, "error": res.get("error", "Kein Steuerjahr")},
+                                status_code=422)
+        pdf_bytes, yr = result
+        return Response(content=pdf_bytes, media_type="application/pdf",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="Steuerbericht_{yr}_Steuer-plus-plus-plus.pdf"'})
+    except Exception as e:
+        print(f"tax_report_konvex_pdf error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
