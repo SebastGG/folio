@@ -575,6 +575,65 @@
   </div>
 </section><!-- end #view-steuer3 -->
 
+<!-- ══ SEITE: STEUER +++ (Konvex-Engine · Anlage KAP / KAP-INV) ════════════════ -->
+<section id="view-steuer4" class="page">
+  <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">🏛️ Steuer +++ — Anlage KAP &amp; KAP-INV (Konvex-Engine)
+        <span class="settings-badge ok" style="text-transform:none;letter-spacing:0">InvStG · KAP-INV · Zuflussprinzip</span>
+      </h2>
+      <p class="settings-hint">
+        Vollständige <b>Anlage-KAP-Ermittlung</b> auf Basis der Engine von
+        <a href="https://github.com/KonvexInvestment/ibkr-steuer" target="_blank" rel="noopener" style="color:var(--accent)">KonvexInvestment/ibkr-steuer</a>.
+        Zusätzlich zu Steuer ++: <b>InvStG-Teilfreistellung</b> (30/15/60/0 %) tatsächlich
+        angewandt + separate <b>Anlage KAP-INV</b>, <b>Stillhalterprämien</b> mit Zuflussprinzip
+        (BMF Rn. 25-35, Cross-Year-Matching), offizielle <b>Anlage-KAP-Zeilennummern</b>
+        (7/19/20/22/23/37/38/41) und getrennte deutsche/ausländische Quellensteuer.
+        Lade die Flex-<b>XML</b>-Statements aller Jahre seit Depoteröffnung (eines Kontos).
+      </p>
+      <div class="drop-zone" id="tax4Drop"
+        ondragover="event.preventDefault();this.classList.add('over')"
+        ondragleave="this.classList.remove('over')"
+        ondrop="event.preventDefault();this.classList.remove('over');taxKonvexUpload(event.dataTransfer.files)"
+        onclick="document.getElementById('tax4File').click()">
+        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl)</div>
+        <input type="file" id="tax4File" accept=".xml" multiple style="display:none" onchange="taxKonvexUpload(this.files)">
+      </div>
+      <div id="tax4-msg" class="settings-msg" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="settings-card" id="tax4-result" style="display:none;">
+      <h2 class="settings-h">Steuerliche Ermittlung
+        <span style="flex:1"></span>
+        <label style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0;">
+          Steuerjahr
+          <select id="tax4-year-select" onchange="taxKonvexSelectYear(this.value)"
+            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
+        </label>
+      </h2>
+      <div id="tax4-warn"></div>
+      <div class="tax-cards" id="tax4-cards"></div>
+      <div id="tax4-zeilen"></div>
+      <div id="tax4-toepfe"></div>
+      <div id="tax4-steuer"></div>
+      <div id="tax4-kapinv"></div>
+      <div id="tax4-fx"></div>
+      <div id="tax4-income"></div>
+      <p class="settings-hint" style="margin-top:14px;">
+        ⚠️ <b>Ohne Gewähr — keine Steuerberatung.</b> Rechnerische Aufbereitung zur Prüfung durch
+        einen Steuerberater. Engine: KonvexInvestment/ibkr-steuer (MIT). Realisierte G/V aus IBKRs
+        Closed-Lot-FIFO, EUR über EZB-Referenzkurse. <b>InvStG-Teilfreistellung</b> ist angewandt
+        (Anlage KAP-INV separat). <b>Aktien-Topf</b> (§20 Abs. 6 S. 4) nach geltendem Recht, verfassungs-
+        rechtlich umstritten (BVerfG 2 BvL 3/21). <b>Termingeschäfte</b> ohne 20.000-€-Grenze (JStG 2024).
+        Abgeltungsteuer aus den ermittelten Töpfen abgeleitet (gleiche §20-Abs.-6-Logik wie Steuer ++).
+        Sparer-Pauschbetrag, Kirchensteuer und Günstigerprüfung bewusst nicht berücksichtigt (Finanzamt).
+      </p>
+    </div>
+
+  </div>
+</section><!-- end #view-steuer4 -->
+
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
   <div class="page-placeholder">

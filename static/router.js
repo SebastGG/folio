@@ -40,6 +40,10 @@ var PAGES = [
         onShow: null   // Flex-XML (Closed Lots) + EZB pro Bein, Upload-gesteuert
     },
     {
+        id: 'steuer4', label: 'Steuer +++', icon: '🏛️',
+        onShow: null   // Konvex-Engine: Anlage KAP/KAP-INV, InvStG, Upload-gesteuert
+    },
+    {
         id: 'screener', label: 'Screener', icon: '🔍',
         onShow: null   // Platzhalter — wird später befüllt
     },

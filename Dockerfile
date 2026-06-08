@@ -15,6 +15,8 @@ COPY CloudronManifest.json .
 COPY main.py .
 COPY tax_engine.py .
 COPY tax_engine_xml.py .
+COPY tax_engine_konvex.py .
+COPY konvex_tax/ konvex_tax/
 COPY start.sh .
 RUN echo "$BUILD_HASH" > /app/code/build_hash.txt
 COPY icon.png .

@@ -2469,6 +2469,260 @@ function _taxXmlRenderIncome(d) {
         : '';
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  STEUER +++ — Konvex-Engine (Anlage KAP / KAP-INV)
+ *  Verbraucht /api/tax/report-konvex (tax_engine_konvex.py).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+var _taxData4 = null;
+
+async function taxKonvexUpload(fileList) {
+    var files = fileList ? Array.prototype.slice.call(fileList) : [];
+    if (!files.length) return;
+    var msg = document.getElementById('tax4-msg');
+    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
+    setMsg('Verarbeite ' + files.length + ' XML-Datei(en) … (Konvex-Engine, je Jahr mit voller Historie)', '');
+    try {
+        var fd = new FormData();
+        files.forEach(function(f) { fd.append('files', f); });
+        var res = await fetch('/api/tax/report-konvex', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
+        if (res && res.ok) {
+            setMsg('✓ ' + (res.available_years || []).join(', ') + ' ausgewertet'
+                 + (res.account ? ' · Konto ' + res.account : ''), 'ok');
+            taxKonvexRender(res);
+        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
+    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+}
+
+function taxKonvexRender(data) {
+    _taxData4 = data;
+    var box = document.getElementById('tax4-result');
+    if (box) box.style.display = '';
+    var sel = document.getElementById('tax4-year-select');
+    if (sel) {
+        sel.innerHTML = (data.available_years || []).map(function(y) {
+            return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
+        }).join('');
+    }
+    taxKonvexSelectYear(data.year);
+}
+
+function taxKonvexSelectYear(year) {
+    if (!_taxData4 || !_taxData4.years || !_taxData4.years[year]) return;
+    _taxKonvexRenderYear(_taxData4.years[year]);
+}
+
+function _taxKonvexRenderYear(d) {
+    var t = d.tax || {}, z = d.zeile || {}, tp = d.toepfe || {},
+        ak = tp.aktien || {}, al = tp.allg || {}, ki = tp.kap_inv || {},
+        inc = d.income || {}, kap = d.kap_inv || {}, fx = d.fx || {}, fl = d.flags || {};
+    var eur = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'); };
+    var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+    var card = function(label, val, accent) {
+        return '<div class="tax-card"><div class="tc-label">' + label + '</div>'
+             + '<div class="tc-val" style="color:' + (accent || 'var(--text)') + '">' + eur(val) + '</div></div>';
+    };
+
+    // ── Warnungen / Hinweise ────────────────────────────────────────────────
+    var warn = document.getElementById('tax4-warn');
+    if (warn) {
+        var w = '';
+        var box = function(color, label, text) {
+            return '<div style="background:rgba(0,0,0,.04);border-left:3px solid ' + color
+                 + ';border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:11px;color:var(--muted);line-height:1.5;">'
+                 + '<b style="color:' + color + '">' + label + '</b> ' + text + '</div>';
+        };
+        if (fl.has_trade_price === false)
+            w += box('#fbbf24', 'Hinweis:', 'Flex Query ohne <code>tradePrice</code> — Stillhalterprämien über Tagesschlusskurs genähert. Für genauere Werte: Trade-Confirmation-Felder in der Flex Query aktivieren.');
+        if ((fl.stillhalter_unmatched || []).length)
+            w += box('#fb923c', 'Stillhalter:', (fl.stillhalter_unmatched || []).length + ' Assignment(s) ohne gefundenen Eröffnungsverkauf — Vorjahres-XML hochladen, sonst landet die Prämie in Topf 1 statt Topf 2.');
+        if ((fl.zufluss_unmatched || []).length)
+            w += box('#fb923c', 'Zufluss:', (fl.zufluss_unmatched || []).length + ' Glattstellung(en) ohne Eröffnungs-SELL — ohne Vorjahres-XML droht Doppelbesteuerung der Prämie.');
+        if (fx.has_negative_balance)
+            w += box('#a855f7', 'Devisen:', 'Zeitweise negativer Fremdwährungssaldo (Margin) erkannt — FX-Margin-Korrektur ' + (fl.fx_margin_correction ? 'aktiv' : 'inaktiv') + '.');
+        warn.innerHTML = w;
+    }
+
+    // ── Kennzahl-Karten ─────────────────────────────────────────────────────
+    var cardsEl = document.getElementById('tax4-cards');
+    if (cardsEl) cardsEl.innerHTML =
+          card('Bemessungsgrundlage', t.bemessungsgrundlage, 'var(--accent)')
+        + card('Abgeltungst. + Soli', t.steuer_brutto, 'var(--red)')
+        + card('Anrechenb. ausl. QSt', t.qst_anrechenbar, 'var(--green)')
+        + card('Verbleibende Steuer', t.steuer_netto, 'var(--red)');
+
+    var sec = function(label, note) {
+        return '<tr class="pr-section"><td colspan="2">' + label
+             + (note ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0">— ' + note + '</span>' : '') + '</td></tr>';
+    };
+    var row = function(label, val, indent, strong, color) {
+        return '<tr class="pr-row"' + (strong ? ' style="font-weight:700"' : '') + '>'
+             + '<td style="' + (indent ? 'padding-left:18px;color:var(--muted)' : '') + '">' + label + '</td>'
+             + '<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    };
+
+    // ── Offizielle Anlage-KAP-Zeilen (autoritativ aus der Engine) ────────────
+    var zeilen = document.getElementById('tax4-zeilen');
+    var zrow = function(line, label, val, color) {
+        return '<tr class="pr-row"><td style="width:60px;color:var(--muted)">Zeile ' + line + '</td>'
+             + '<td>' + label + '</td>'
+             + '<td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;' + (color ? 'color:' + color : '') + '">' + eur(val) + '</td></tr>';
+    };
+    if (zeilen) zeilen.innerHTML =
+          '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 4px;">Anlage KAP / KAP-INV — Eintragungshilfe</div>'
+        + '<table class="pr-table"><colgroup><col style="width:60px"><col><col style="width:140px"></colgroup><tbody>'
+        + zrow('7',  'Inländische Kapitalerträge mit Steuerabzug', z.z7)
+        + zrow('19', 'Ausländische Kapitalerträge (Netto-Saldo)', z.z19, R(z.z19))
+        + zrow('20', 'darin: Gewinne aus Aktienveräußerungen', z.z20, 'var(--green)')
+        + zrow('22', 'Verluste ohne Aktien (Termingeschäfte etc.)', z.z22, 'var(--red)')
+        + zrow('23', 'Verluste aus Aktienveräußerungen', z.z23, 'var(--red)')
+        + zrow('37', 'Kapitalertragsteuer (inländisch)', z.z37)
+        + zrow('38', 'Solidaritätszuschlag (inländisch)', z.z38)
+        + zrow('41', 'Anrechenbare ausländische Quellensteuer', z.z41, 'var(--green)')
+        + (z.kap_inv_net != null ? '<tr class="pr-row"><td style="width:60px;color:var(--muted)">KAP-INV</td>'
+            + '<td>Investmenterträge netto (nach Teilfreistellung)</td>'
+            + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + R(z.kap_inv_net) + '">' + eur(z.kap_inv_net) + '</td></tr>' : '')
+        + '</tbody></table>';
+
+    // ── Zwei Töpfe (§20 Abs. 6) ─────────────────────────────────────────────
+    var sp = t._spillover != null ? t._spillover : (tp.spillover || 0);
+    var toepfe = document.getElementById('tax4-toepfe');
+    if (toepfe) toepfe.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Aktien-Topf', '§20 Abs. 6 S.4 — nur untereinander verrechenbar · BVerfG 2 BvL 3/21')
+        + row('Aktiengewinne · Z.20', ak.gewinn, true, false, 'var(--green)')
+        + row('Aktienverluste · Z.23', -(ak.verlust || 0), true, false, 'var(--red)')
+        + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
+        + (ak.verlustvortrag > 0
+              ? row('→ Verlustvortrag (nur ggü. Aktiengewinnen)', ak.verlustvortrag, true, false, 'var(--red)')
+              : (sp > 0
+                    ? row('abzgl. allgemeine Verluste (Überlauf)', -sp, true, false, 'var(--red)')
+                      + row('→ steuerpflichtig', ak.steuerbar, true, true)
+                    : row('→ steuerpflichtig', ak.steuerbar, true, false)))
+        + sec('Allgemeiner Topf', 'Anlage KAP — Z.19 / Verluste Z.22 · ohne Investmentfonds')
+        + row('Termingeschäfte (netto)', al.termingeschaefte, true, false, R(al.termingeschaefte))
+        + row('Ausländische Dividenden', al.dividenden, true)
+        + row('Zinsen', al.zinsen, true)
+        + row('Devisen (Regel F)', al.waehrung, true, false, R(al.waehrung))
+        + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
+        + (sp > 0 ? row('davon gegen Aktiengewinn verrechnet', sp, true, false, 'var(--green)') : '')
+        + (al.verlustvortrag > 0 ? row('→ Verlustvortrag (frei verrechenbar)', al.verlustvortrag, true, false, 'var(--red)')
+           : (al.steuerbar > 0 ? row('→ steuerpflichtig', al.steuerbar, true, false)
+                               : (sp > 0 ? row('→ vollständig verrechnet', 0, true, false) : '')))
+        + sec('Anlage KAP-INV', 'Investmentfonds — eigener Verrechnungskreis (§20 InvStG)')
+        + row('Netto KAP-INV (nach Teilfreistellung)', ki.netto, true, false, R(ki.netto))
+        + (ki.verlustvortrag > 0 ? row('→ Verlustvortrag KAP-INV', ki.verlustvortrag, true, false, 'var(--red)')
+                                 : row('→ steuerpflichtig', ki.steuerbar, true, false))
+        + '</tbody></table>';
+
+    // ── Abgeltungsteuer ─────────────────────────────────────────────────────
+    var steuer = document.getElementById('tax4-steuer');
+    if (steuer) steuer.innerHTML =
+          '<table class="pr-table" style="margin-top:14px"><colgroup><col><col style="width:140px"></colgroup><tbody>'
+        + sec('Steuerberechnung', 'ohne Sparer-Pauschbetrag · ohne KiSt')
+        + row('Bemessungsgrundlage (Aktien + Allg. + KAP-INV)', t.bemessungsgrundlage, false, true)
+        + row('Abgeltungsteuer 25 %', t.abgeltungsteuer, true)
+        + row('Solidaritätszuschlag 5,5 %', t.soli, true)
+        + row('Steuer brutto', t.steuer_brutto, false, true, 'var(--red)')
+        + row('abzgl. anrechenbare ausl. Quellensteuer · Z.41', t.qst_anrechenbar, true, false, 'var(--green)')
+        + row('Verbleibende Steuer', t.steuer_netto, false, true, 'var(--red)')
+        + '</tbody></table>';
+
+    _taxKonvexRenderKapInv(kap);
+    _taxKonvexRenderFx(fx);
+    _taxKonvexRenderIncome(inc, fl);
+}
+
+/** Anlage KAP-INV: je Fonds mit InvStG-Teilfreistellung. */
+function _taxKonvexRenderKapInv(kap) {
+    var el = document.getElementById('tax4-kapinv');
+    if (!el) return;
+    var rows = kap.by_isin || [];
+    if (!rows.length) { el.innerHTML = ''; return; }
+    var n2 = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
+    var cls = { aktienfonds: 'Aktienfonds (30 %)', mischfonds: 'Mischfonds (15 %)',
+                immobilienfonds: 'Immobilienfonds (60/80 %)', sonstiger_fonds: 'Sonstiger Fonds (0 %)',
+                ausland_immobilienfonds: 'Auslands-Immo. (80 %)' };
+    var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+    var body = rows.map(function(f) {
+        var net = (f.gain || 0) + (f.loss || 0) + (f.div || 0);
+        var netTax = (f.gain_taxable || 0) + (f.loss_taxable || 0) + (f.div_taxable || 0);
+        return '<tr><td style="font-family:monospace;font-size:9px">' + f.isin + '</td>'
+            + '<td style="color:var(--muted)">' + (cls[f.classification] || f.classification || '—') + '</td>'
+            + '<td style="text-align:right">' + (f.tfs_rate != null ? (f.tfs_rate * 100).toFixed(0) + ' %' : '—') + '</td>'
+            + '<td style="text-align:right;color:' + R(net) + '">' + n2(net) + '</td>'
+            + '<td style="text-align:right;font-weight:600;color:' + R(netTax) + '">' + n2(netTax) + '</td></tr>';
+    }).join('');
+    var unknown = (kap.unknown_isins || []).length
+        ? '<div style="font-size:10px;color:#fb923c;margin-top:6px">⚠️ ' + kap.unknown_isins.length
+          + ' ISIN(s) ohne hinterlegte Klassifizierung → als „sonstiger Fonds" (0 % Teilfreistellung) behandelt: '
+          + kap.unknown_isins.join(', ') + '. Bei einem Aktien-/Mischfonds wird zu viel besteuert.</div>'
+        : '';
+    el.innerHTML =
+        '<details style="margin-top:16px" open><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+        + 'Anlage KAP-INV — ' + rows.length + ' Investmentfonds, netto (n. Teilfreistellung) ' + n2(kap.net_taxable) + ' €</summary>'
+        + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:560px;font-size:10px">'
+        + '<thead><tr><th style="text-align:left">ISIN</th><th style="text-align:left">Klasse (Teilfreist.)</th>'
+        + '<th style="text-align:right">TFS</th><th style="text-align:right">G/V brutto €</th>'
+        + '<th style="text-align:right" title="nach Teilfreistellung">steuerpflichtig €</th></tr></thead>'
+        + '<tbody>' + body + '</tbody></table></div>' + unknown + '</details>';
+}
+
+/** Devisen (Regel F) je Währung — IBKR-realisiert, FIFO über die Historie. */
+function _taxKonvexRenderFx(fx) {
+    var el = document.getElementById('tax4-fx');
+    if (!el) return;
+    var res = fx.results || {};
+    var ccys = Object.keys(res);
+    if (!ccys.length) { el.innerHTML = ''; return; }
+    var n2 = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
+    var R = function(v) { return (v || 0) >= 0 ? 'var(--green)' : 'var(--red)'; };
+    var body = ccys.sort().map(function(c) {
+        var r = res[c];
+        return '<tr><td><b>' + c + '</b></td>'
+            + '<td style="text-align:right;color:var(--green)">' + n2(r.gain) + '</td>'
+            + '<td style="text-align:right;color:var(--red)">' + n2(r.loss) + '</td>'
+            + '<td style="text-align:right;font-weight:600;color:' + R(r.net) + '">' + n2(r.net) + '</td>'
+            + '<td style="text-align:right;color:var(--muted)">' + (r.disposals || 0) + '</td>'
+            + '<td style="text-align:right;color:var(--muted)">' + (r.days_negative || 0) + '</td></tr>';
+    }).join('');
+    el.innerHTML =
+        '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+        + 'Devisen (Regel F) je Währung — Netto ' + n2(fx.net) + ' € <span style="font-style:italic">(§20 Abs. 2 Nr. 7, FIFO)</span></summary>'
+        + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:480px;font-size:10px">'
+        + '<thead><tr><th style="text-align:left">Währung</th><th style="text-align:right">Gewinn €</th>'
+        + '<th style="text-align:right">Verlust €</th><th style="text-align:right">Netto €</th>'
+        + '<th style="text-align:right" title="Veräußerungen">Verk.</th>'
+        + '<th style="text-align:right" title="Tage mit negativem Saldo">Tage neg.</th></tr></thead>'
+        + '<tbody>' + body + '</tbody></table></div></details>';
+}
+
+/** Erträge / Quellensteuer — DE vs. Ausland. */
+function _taxKonvexRenderIncome(inc, fl) {
+    var el = document.getElementById('tax4-income');
+    if (!el) return;
+    var n2 = function(v) { return (v == null ? '—' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })); };
+    var line = function(label, val, color) {
+        return '<tr><td>' + label + '</td><td style="text-align:right;font-variant-numeric:tabular-nums;'
+             + (color ? 'color:' + color : '') + '">' + n2(val) + ' €</td></tr>';
+    };
+    el.innerHTML =
+        '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">'
+        + 'Erträge & Quellensteuer im Überblick</summary>'
+        + '<div style="overflow-x:auto;margin-top:6px"><table class="perf-table" style="min-width:360px;font-size:10px"><tbody>'
+        + line('Dividenden gesamt', inc.dividends)
+        + line('— davon inländisch (Z.7)', inc.dividends_de, 'var(--muted)')
+        + line('— davon ausländisch (Z.19)', inc.dividends_foreign, 'var(--muted)')
+        + line('Zinsen', inc.interest)
+        + line('gezahlte Zinsen (nicht abzugsfähig §20 Abs. 9)', inc.interest_paid, 'var(--muted)')
+        + line('Ausländische Quellensteuer (anrechenbar)', inc.wht_foreign, 'var(--green)')
+        + line('Inländische Quellensteuer', inc.wht_domestic, 'var(--muted)')
+        + '</tbody></table></div>'
+        + (fl && fl.funds_processed ? '<div style="font-size:9px;color:var(--muted);margin-top:4px">Plausibilität: '
+            + fl.funds_processed + ' Cash-Transaktionen verarbeitet.</div>' : '')
+        + '</details>';
+}
+
 /** Rendert ein Steuerjahr im PwC-Report-Stil (Klammern = negativ). */
 function _taxRenderYear(d, filesYears) {
     // Beträge mit Minuszeichen (de-DE setzt das Minus automatisch)
