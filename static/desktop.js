@@ -2549,6 +2549,12 @@ function _taxKonvexRenderYear(d) {
         + sec('Aktien-Topf', '§20 Abs. 6 S.4 — nur untereinander verrechenbar · BVerfG 2 BvL 3/21')
         + row('Aktiengewinne · Z.20', ak.gewinn, true, false, 'var(--green)')
         + row('Aktienverluste · Z.23', -(ak.verlust || 0), true, false, 'var(--red)')
+        + (ak.tageskurs_korrektur
+            ? '<tr class="pr-row"><td style="padding-left:18px;color:var(--muted);font-size:10px;font-style:italic">'
+              + 'inkl. Tageskurs-Korrektur §20 Abs. 4 (Erlös/Kosten je zum eigenen FX-Kurs; '
+              + 'IBKR-Roh-Saldo ' + eur((ak.netto || 0) - (ak.tageskurs_korrektur || 0)) + ')</td>'
+              + '<td style="text-align:right;color:var(--muted);font-size:10px">' + eur(ak.tageskurs_korrektur) + '</td></tr>'
+            : '')
         + row('Netto Aktien-Topf', ak.netto, false, true, R(ak.netto))
         + (ak.verlustvortrag > 0
               ? row('→ Verlustvortrag (nur ggü. Aktiengewinnen)', ak.verlustvortrag, true, false, 'var(--red)')
@@ -2563,6 +2569,7 @@ function _taxKonvexRenderYear(d) {
         + row('Ausländische Dividenden · Z.19', al.dividenden, true)
         + (al.dividenden_de ? row('Inländische Dividenden (auch Z.7)', al.dividenden_de, true, false, 'var(--muted)') : '')
         + row('Zinsen', al.zinsen, true)
+        + (al.korrektur ? row('Tageskurs-/Zufluss-Korrektur', al.korrektur, true, false, 'var(--muted)') : '')
         + row('Netto allg. Topf', al.netto, false, true, R(al.netto))
         + (sp > 0 ? row('davon gegen Aktiengewinn verrechnet', sp, true, false, 'var(--green)') : '')
         + (al.verlustvortrag > 0 ? row('→ Verlustvortrag (frei verrechenbar)', al.verlustvortrag, true, false, 'var(--red)')

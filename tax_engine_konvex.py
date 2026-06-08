@@ -77,13 +77,14 @@ def _shape_year(d: dict) -> dict:
     """Konvex-Ergebnis-Dict → kompakte Frontend-Struktur + §20-Abs.-6-Steuer."""
     eur = d.get  # alias
 
-    # ── Roh-Bausteine ────────────────────────────────────────────────────────
-    ak_gewinn = float(eur('zeile_20_stock_gains_eur', 0) or 0)          # = stocks_gain
-    ak_verlust = float(eur('zeile_23_stock_losses_eur', 0) or 0)        # positiv
-    ak_net = float(eur('topf_1_aktien_netto', 0) or 0)
-    allg_net = float(eur('topf_2_sonstiges_netto', 0) or 0)
+    # ── Roh-Bausteine (vor Korrekturen) ──────────────────────────────────────
+    ak_gewinn_raw = float(eur('zeile_20_stock_gains_eur', 0) or 0)      # = stocks_gain
+    ak_verlust_raw = float(eur('zeile_23_stock_losses_eur', 0) or 0)    # positiv
+    ak_net_raw = float(eur('topf_1_aktien_netto', 0) or 0)
+    allg_net_raw = float(eur('topf_2_sonstiges_netto', 0) or 0)
+    options_gain_raw = float(eur('options_gain_eur', 0) or 0)
+    options_loss_raw = float(eur('options_loss_eur', 0) or 0)          # negativ
 
-    options_net = float(eur('options_net_eur', 0) or 0)                 # Termingeschäfte
     fx_gain = float(eur('fx_total_gain', 0) or 0)
     fx_loss = float(eur('fx_total_loss', 0) or 0)
     fx_net = fx_gain + fx_loss
@@ -96,8 +97,42 @@ def _shape_year(d: dict) -> dict:
     wht_domestic = float(eur('domestic_withholding_tax_eur', 0) or 0)
 
     kap_inv = eur('kap_inv', {}) or {}
-    kap_inv_net = float(kap_inv.get('etf_net_taxable_eur', 0) or 0)
+    kap_inv_net_raw = float(kap_inv.get('etf_net_taxable_eur', 0) or 0)
     kap_inv_wht = float(calculate_tax_report.get_kap_inv_wht_for_reporting(kap_inv) or 0)
+
+    # ── Korrekturen wie im offiziellen Konvex-Report (GUI-Defaults) ──────────
+    # Der Konvex-Textreport ist die „Single Source of Truth". Seine Default-
+    # Schalter: Tageskurs-Methode AN, InvStG AN, Zuflussprinzip (falls Cross-Year),
+    # Variante B AUS. Wir spiegeln das, damit Steuer +++ exakt diese Werte zeigt.
+    #
+    # Tageskurs-Methode (§20 Abs. 4 S. 1 EStG): Erlös zum Verkaufs-, Kosten zum
+    # Kauf-FX-Kurs (statt IBKRs Netto-PnL zum Schlusskurs) — pro Lot. Futures sind
+    # ausgeschlossen (Kostenbasis = voller Kontraktwert). Engine liefert die Deltas.
+    fx_corr_by_topf = eur('fx_correction_by_topf', {}) or {}
+    tk_gain_adj = eur('fx_corr_gain_adj', {}) or {}
+    tk_loss_adj = eur('fx_corr_loss_adj', {}) or {}
+    corr_topf1 = float(fx_corr_by_topf.get('Topf1', 0) or 0)
+    corr_topf2 = float(fx_corr_by_topf.get('Topf2', 0) or 0)
+    g1 = float(tk_gain_adj.get('Topf1', 0) or 0)
+    l1 = float(tk_loss_adj.get('Topf1', 0) or 0)     # negativ → erhöht Verluste
+    g2 = float(tk_gain_adj.get('Topf2', 0) or 0)
+    l2 = float(tk_loss_adj.get('Topf2', 0) or 0)
+    kap_inv_tk = float(eur('fx_correction_kap_inv_taxable', 0) or 0)
+
+    # Zuflussprinzip (BMF Rn. 25/33): Assignment-Prämien aus Vorjahren raus.
+    audit = eur('audit', {}) or {}
+    cross_year_premium = float(audit.get('cross_year_premium_eur', 0) or 0)
+
+    # Finale Werte (= Konvex-Report)
+    ak_gewinn = ak_gewinn_raw + g1                       # Zeile 20
+    ak_verlust = ak_verlust_raw - l1                     # Zeile 23 (positiv)
+    ak_net = ak_net_raw + corr_topf1                     # Topf 1 / Saldo Aktien
+    options_gain = options_gain_raw - cross_year_premium + g2
+    options_loss = options_loss_raw + l2
+    allg_net = allg_net_raw - cross_year_premium + corr_topf2   # Topf 2
+    kap_inv_net = kap_inv_net_raw + kap_inv_tk
+    allg_korrektur = corr_topf2 - cross_year_premium     # für transparente Anzeige
+    tageskurs_corr = corr_topf1 + corr_topf2             # gesamte Tageskurs-Korrektur
 
     # ── Saubere Aufschlüsselung des allgemeinen Topfs (Topf 2) ───────────────
     # WICHTIG: die Engine bündelt in options_loss/options_gain SOWOHL Termin-
@@ -122,9 +157,10 @@ def _shape_year(d: dict) -> dict:
     other_g, other_l = _cat_gl(_other_names)
 
     # Zeile-22-Zerlegung: positive Verlustbeträge je Gruppe (Summe = Zeile 22).
-    # Ein evtl. Restbetrag (Korrekturen, die nicht in den Kategorien stecken) wird
-    # transparent als „rest" ausgewiesen, damit die Summe immer auf Zeile 22 passt.
-    z22_total = abs(float(eur('options_loss_eur', 0) or 0))
+    # by_cat ist roh (vor Tageskurs-Topf2-Delta); ein evtl. Restbetrag (Tageskurs-
+    # Korrektur, Zuflussprinzip) wird transparent als „rest" ausgewiesen, damit die
+    # Summe immer auf die finale Zeile 22 passt.
+    z22_total = abs(options_loss)
     z22_termin = -termin_l
     z22_dev = -dev_l
     z22_other = -other_l
@@ -194,13 +230,13 @@ def _shape_year(d: dict) -> dict:
         'tax_year': eur('tax_year'),
         'base_currency': eur('base_currency', 'EUR'),
 
-        # offizielle Anlage-KAP / KAP-INV Zeilen (autoritativ aus der Engine)
+        # offizielle Anlage-KAP / KAP-INV Zeilen (final, = Konvex-Report)
         'zeile': {
             'z7': _g(eur('zeile_7_kapitalertraege_mit_inlaendischem_steuerabzug_eur')),
-            'z19': _g(eur('zeile_19_netto_eur')),
-            'z20': _g(eur('zeile_20_stock_gains_eur')),
-            'z22': _g(eur('zeile_22_other_losses_eur')),
-            'z23': _g(eur('zeile_23_stock_losses_eur')),
+            'z19': _g(ak_net + allg_net),     # = Topf 1 + Topf 2 (Korrekturen drin)
+            'z20': _g(ak_gewinn),
+            'z22': _g(z22_total),
+            'z23': _g(ak_verlust),
             'z37': _g(eur('zeile_37_kapitalertragsteuer_eur')),
             'z38': _g(eur('zeile_38_solidaritaetszuschlag_eur')),
             'z41': _g(eur('zeile_41_withholding_tax_eur')),
@@ -213,6 +249,8 @@ def _shape_year(d: dict) -> dict:
                 'gewinn': _g(ak_gewinn), 'verlust': _g(ak_verlust),
                 'netto': _g(ak_net), 'steuerbar': _g(ak_steuerbar),
                 'verlustvortrag': _g(ak_verlustvortrag),
+                'gewinn_raw': _g(ak_gewinn_raw), 'verlust_raw': _g(ak_verlust_raw),
+                'tageskurs_korrektur': _g(corr_topf1),   # §20 Abs.4 — IBKR→Tageskurs
             },
             'allg': {
                 # doppelfrei: Termingeschäfte = Optionen+Futures (OHNE Devisen),
@@ -229,6 +267,7 @@ def _shape_year(d: dict) -> dict:
                 'dividenden': _g(div_foreign),       # ausländisch (Z.19)
                 'dividenden_de': _g(div_de),         # inländisch (in topf_2 enthalten, auch Z.7)
                 'zinsen': _g(interest),
+                'korrektur': _g(allg_korrektur),     # Tageskurs-Topf2 + Zuflussprinzip
                 'netto': _g(allg_net), 'steuerbar': _g(allg_steuerbar),
                 'verlustvortrag': _g(allg_verlustvortrag),
                 'by_category': {
@@ -258,10 +297,8 @@ def _shape_year(d: dict) -> dict:
             'dividends_foreign': _g(div_foreign),
             'interest': _g(interest), 'interest_paid': _g(interest_paid),
             'wht_foreign': _g(wht_foreign), 'wht_domestic': _g(wht_domestic),
-            'stocks_gain': _g(eur('stocks_gain_eur')),
-            'stocks_loss': _g(eur('stocks_loss_eur')),
-            'options_gain': _g(eur('options_gain_eur')),
-            'options_loss': _g(eur('options_loss_eur')),
+            'stocks_gain': _g(ak_gewinn), 'stocks_loss': _g(-ak_verlust),
+            'options_gain': _g(options_gain), 'options_loss': _g(options_loss),
         },
 
         # InvStG / KAP-INV Detail
@@ -302,8 +339,9 @@ def _shape_year(d: dict) -> dict:
             'fx_margin_correction': bool(eur('fx_margin_correction_enabled', False)),
             'stillhalter_unmatched': audit.get('stillhalter_unmatched', []) or [],
             'zufluss_unmatched': audit.get('zufluss_unmatched', []) or [],
-            'cross_year_premium': _g(audit.get('cross_year_premium_eur')),
+            'cross_year_premium': _g(cross_year_premium),
             'funds_processed': int(audit.get('funds_processed', 0) or 0),
+            'tageskurs_korrektur': _g(tageskurs_corr),   # §20 Abs.4 gesamt (Topf1+Topf2)
         },
     }
 
