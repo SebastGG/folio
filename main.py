@@ -163,6 +163,88 @@ def get_user_files(user: str) -> dict:
         "data_dir": d,
     }
 
+# ── Steuer-Datei-Ablage (pro User) ──────────────────────────────────────────────
+# Hochgeladene IBKR-Statements werden serverseitig gespeichert, damit der User sie
+# nicht bei jedem Besuch neu hochladen muss. Zwei Sorten, die sich Seiten teilen:
+#   "xml" → Flex-XML (Steuer ++ und Steuer +++)
+#   "csv" → Activity-CSV (Steuer und Steuer +)
+# Liegt im User-Datenverzeichnis (pro User über OIDC isoliert), wie prices.db/fx_cache.
+_TAX_STORE_KINDS = ("xml", "csv")
+
+def _tax_safe_name(name: str, kind: str) -> str:
+    """Dateinamen auf Basename + erlaubte Zeichen reduzieren, Endung erzwingen."""
+    base = os.path.basename(name or "").replace("\\", "").strip()
+    base = "".join(c for c in base if c.isalnum() or c in "._- ").strip()
+    if not base:
+        base = "datei"
+    if not base.lower().endswith("." + kind):
+        base += "." + kind
+    return base
+
+def _tax_store_dir(user: str, kind: str) -> str:
+    d = os.path.join(get_user_dir(user), "tax_files", kind)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _tax_store_save(user: str, kind: str, items: list[tuple[str, bytes]]) -> list[str]:
+    """Ersetzt den Bestand der Sorte durch die übergebenen Dateien. Gibt Namen zurück."""
+    d = _tax_store_dir(user, kind)
+    for f in os.listdir(d):
+        try:
+            os.remove(os.path.join(d, f))
+        except OSError:
+            pass
+    saved, seen = [], set()
+    for name, raw in items:
+        sn = _tax_safe_name(name, kind)
+        # Doppelte Namen entschärfen
+        stem, n = sn, 1
+        while sn in seen:
+            root, ext = os.path.splitext(stem)
+            sn = f"{root}_{n}{ext}"; n += 1
+        seen.add(sn)
+        with open(os.path.join(d, sn), "wb") as fh:
+            fh.write(raw)
+        saved.append(sn)
+    return sorted(saved)
+
+def _tax_store_list(user: str, kind: str) -> list[str]:
+    d = _tax_store_dir(user, kind)
+    return sorted(f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f)))
+
+def _tax_store_load(user: str, kind: str) -> list[str]:
+    """Liest die gespeicherten Dateien als Text (utf-8-sig), sortiert nach Name."""
+    d = _tax_store_dir(user, kind)
+    out = []
+    for name in _tax_store_list(user, kind):
+        with open(os.path.join(d, name), "rb") as fh:
+            out.append(fh.read().decode("utf-8-sig", errors="replace"))
+    return out
+
+def _tax_store_clear(user: str, kind: str) -> None:
+    d = _tax_store_dir(user, kind)
+    for f in os.listdir(d):
+        try:
+            os.remove(os.path.join(d, f))
+        except OSError:
+            pass
+
+async def _tax_collect_texts(user: str, kind: str, files):
+    """
+    Liefert (texts, source) für einen Compute-Endpoint:
+      • Wurden Dateien hochgeladen → speichern (ersetzt den Bestand), source="upload".
+      • Sonst → gespeicherten Bestand laden, source="stored".
+    """
+    items = []
+    for f in (files or []):
+        raw = await f.read()
+        if raw:
+            items.append((f.filename or "datei", raw))
+    if items:
+        _tax_store_save(user, kind, items)
+        return [raw.decode("utf-8-sig", errors="replace") for _, raw in items], "upload"
+    return _tax_store_load(user, kind), "stored"
+
 # ── Auth-Middleware + OAuth-Routen ──────────────────────────────────────────────
 _AUTH_PUBLIC = ("/health", "/login", "/callback", "/logout", "/favicon.ico")
 
@@ -1178,12 +1260,14 @@ async def ibkr_isin_resolve(isin: str, request: Request):
 # Trade (ECB-Kurse), Split-Anpassung, getrennt nach Aktien / Termingeschäften.
 
 @app.post("/api/tax/report")
-async def tax_report(request: Request, files: list[UploadFile] = File(...), year: str = ""):
+async def tax_report(request: Request, files: list[UploadFile] = File(default=[]), year: str = ""):
     """
     Nimmt EIN ODER MEHRERE IBKR Activity Statements (CSV, alle Jahre seit Depot-
     eröffnung) entgegen und berechnet die Anlage-KAP-relevanten Werte für ein
     Steuerjahr: FIFO über die ganze Historie mit EUR-Umrechnung pro Bein (ECB-Kurse),
-    Split-Anpassung, getrennt nach Aktien / Termingeschäften. Stateless.
+    Split-Anpassung, getrennt nach Aktien / Termingeschäften.
+    Hochgeladene Dateien werden pro User gespeichert (Sorte "csv", geteilt mit
+    Steuer +); ohne Upload wird der gespeicherte Bestand verwendet (Auto-Laden).
     Der FX-Cache liegt pro User im Datenverzeichnis (historische Kurse sind fix).
     """
     import asyncio
@@ -1193,12 +1277,10 @@ async def tax_report(request: Request, files: list[UploadFile] = File(...), year
     fx_cache = os.path.join(files_u["data_dir"], "fx_cache")
     os.makedirs(fx_cache, exist_ok=True)
 
-    texts = []
-    for f in files:
-        raw = await f.read()
-        texts.append(raw.decode("utf-8-sig", errors="replace"))
+    texts, source = await _tax_collect_texts(user, "csv", files)
     if not texts:
-        return JSONResponse({"ok": False, "error": "Keine Datei erhalten"}, status_code=422)
+        return JSONResponse({"ok": False, "no_files": True,
+                             "error": "Keine gespeicherten Dateien — bitte CSV hochladen."})
 
     def _run():
         return tax_engine.compute_tax_report(texts, target_year=(year or None), cache_dir=fx_cache)
@@ -1210,7 +1292,8 @@ async def tax_report(request: Request, files: list[UploadFile] = File(...), year
             return JSONResponse(
                 {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Activity "
                                        "Statements (CSV)?"}, status_code=422)
-        return JSONResponse({"ok": True, **result})
+        return JSONResponse({"ok": True, "source": source,
+                             "stored_files": _tax_store_list(user, "csv"), **result})
     except Exception as e:
         print(f"tax_report error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -1223,7 +1306,7 @@ async def tax_report(request: Request, files: list[UploadFile] = File(...), year
 # Journal. Berechnung in tax_engine_xml.py. Stateless.
 
 @app.post("/api/tax/report-xml")
-async def tax_report_xml(request: Request, files: list[UploadFile] = File(...), year: str = ""):
+async def tax_report_xml(request: Request, files: list[UploadFile] = File(default=[]), year: str = ""):
     import asyncio
     import tax_engine_xml
     user  = get_user(request)
@@ -1231,12 +1314,11 @@ async def tax_report_xml(request: Request, files: list[UploadFile] = File(...), 
     fx_cache = os.path.join(files_u["data_dir"], "fx_cache")
     os.makedirs(fx_cache, exist_ok=True)
 
-    texts = []
-    for f in files:
-        raw = await f.read()
-        texts.append(raw.decode("utf-8-sig", errors="replace"))
+    # Sorte "xml" wird mit Steuer +++ geteilt; ohne Upload Auto-Laden des Bestands.
+    texts, source = await _tax_collect_texts(user, "xml", files)
     if not texts:
-        return JSONResponse({"ok": False, "error": "Keine Datei erhalten"}, status_code=422)
+        return JSONResponse({"ok": False, "no_files": True,
+                             "error": "Keine gespeicherten Dateien — bitte Flex-XML hochladen."})
 
     def _run():
         return tax_engine_xml.compute_tax_report_xml(
@@ -1250,7 +1332,8 @@ async def tax_report_xml(request: Request, files: list[UploadFile] = File(...), 
                 {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
                                        "Statements (XML) mit Detailgrad Closed Lots?"},
                 status_code=422)
-        return JSONResponse({"ok": True, **result})
+        return JSONResponse({"ok": True, "source": source,
+                             "stored_files": _tax_store_list(user, "xml"), **result})
     except Exception as e:
         print(f"tax_report_xml error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -1263,17 +1346,16 @@ async def tax_report_xml(request: Request, files: list[UploadFile] = File(...), 
 # Historie gerechnet. Stateless.
 
 @app.post("/api/tax/report-konvex")
-async def tax_report_konvex(request: Request, files: list[UploadFile] = File(...), year: str = ""):
+async def tax_report_konvex(request: Request, files: list[UploadFile] = File(default=[]), year: str = ""):
     import asyncio
     import tax_engine_konvex
-    get_user(request)   # Auth erzwingen (Berechnung ist stateless, kein User-State nötig)
+    user = get_user(request)
 
-    texts = []
-    for f in files:
-        raw = await f.read()
-        texts.append(raw.decode("utf-8-sig", errors="replace"))
+    # Sorte "xml" wird mit Steuer ++ geteilt; ohne Upload Auto-Laden des Bestands.
+    texts, source = await _tax_collect_texts(user, "xml", files)
     if not texts:
-        return JSONResponse({"ok": False, "error": "Keine Datei erhalten"}, status_code=422)
+        return JSONResponse({"ok": False, "no_files": True,
+                             "error": "Keine gespeicherten Dateien — bitte Flex-XML hochladen."})
 
     def _run():
         return tax_engine_konvex.compute_tax_report_konvex(texts, target_year=(year or None))
@@ -1288,8 +1370,29 @@ async def tax_report_konvex(request: Request, files: list[UploadFile] = File(...
                 {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
                                        "Statements (XML) seit Depoteröffnung?"},
                 status_code=422)
-        return JSONResponse({"ok": True, **result})
+        return JSONResponse({"ok": True, "source": source,
+                             "stored_files": _tax_store_list(user, "xml"), **result})
     except Exception as e:
         print(f"tax_report_konvex error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ── Verwaltung der gespeicherten Steuer-Dateien (pro User) ──────────────────────
+
+@app.get("/api/tax/files")
+async def tax_files_status(request: Request, kind: str = "xml"):
+    """Listet die serverseitig gespeicherten Steuer-Dateien einer Sorte (xml|csv)."""
+    user = get_user(request)
+    if kind not in _TAX_STORE_KINDS:
+        return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
+    return JSONResponse({"ok": True, "kind": kind, "files": _tax_store_list(user, kind)})
+
+@app.delete("/api/tax/files")
+async def tax_files_clear(request: Request, kind: str = "xml"):
+    """Löscht den gespeicherten Bestand einer Sorte (xml|csv) für den User."""
+    user = get_user(request)
+    if kind not in _TAX_STORE_KINDS:
+        return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
+    _tax_store_clear(user, kind)
+    return JSONResponse({"ok": True, "kind": kind, "files": []})
 

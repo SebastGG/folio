@@ -1938,25 +1938,9 @@ async function settingsSaveIbkr(btn) {
 // ╚══════════════════════════════════════════════════════════╝
 
 /** Lädt alle IBKR Activity CSVs hoch (Multi-File) und rendert das Ergebnis. Stateless. */
-async function taxUpload(fileList) {
-    var files = fileList ? Array.prototype.slice.call(fileList) : [];
-    if (!files.length) return;
-    var msg = document.getElementById('tax-msg');
-    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
-    setMsg('Verarbeite ' + files.length + ' Datei(en) … (FX-Kurse werden geladen, kann kurz dauern)', '');
-    try {
-        var fd = new FormData();
-        files.forEach(function(f) { fd.append('files', f); });
-        var res = await fetch('/api/tax/report', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
-        if (res && res.ok) {
-            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet', 'ok');
-            taxRender(res);
-        } else {
-            setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
-        }
-    } catch (e) {
-        setMsg('Fehler: ' + e.message, 'err');
-    }
+function taxUpload(fileList) {
+    if (!fileList || !fileList.length) return;
+    _taxRun('tax', fileList);
 }
 
 /** Speichert die Mehrjahres-Antwort, füllt das Jahres-Dropdown, rendert das Default-Jahr. */
@@ -2101,21 +2085,9 @@ function _taxRenderYearTable() {
 
 var _taxData2 = null;
 
-async function taxFullUpload(fileList) {
-    var files = fileList ? Array.prototype.slice.call(fileList) : [];
-    if (!files.length) return;
-    var msg = document.getElementById('tax2-msg');
-    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
-    setMsg('Verarbeite ' + files.length + ' Datei(en) … (FX-Kurse werden geladen)', '');
-    try {
-        var fd = new FormData();
-        files.forEach(function(f) { fd.append('files', f); });
-        var res = await fetch('/api/tax/report', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
-        if (res && res.ok) {
-            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet', 'ok');
-            taxFullRender(res);
-        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
-    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+function taxFullUpload(fileList) {
+    if (!fileList || !fileList.length) return;
+    _taxRun('steuer2', fileList);
 }
 
 function taxFullRender(data) {
@@ -2264,22 +2236,9 @@ function _taxFullRenderJournal(d) {
 
 var _taxData3 = null;
 
-async function taxXmlUpload(fileList) {
-    var files = fileList ? Array.prototype.slice.call(fileList) : [];
-    if (!files.length) return;
-    var msg = document.getElementById('tax3-msg');
-    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
-    setMsg('Verarbeite ' + files.length + ' XML-Datei(en) … (EZB-Kurse werden geladen)', '');
-    try {
-        var fd = new FormData();
-        files.forEach(function(f) { fd.append('files', f); });
-        var res = await fetch('/api/tax/report-xml', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
-        if (res && res.ok) {
-            setMsg('✓ ' + (res.files_years || []).filter(Boolean).join(', ') + ' ausgewertet · '
-                 + res.lot_count + ' Lots, ' + res.fx_lot_count + ' Devisen-Lots', 'ok');
-            taxXmlRender(res);
-        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
-    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+function taxXmlUpload(fileList) {
+    if (!fileList || !fileList.length) return;
+    _taxRun('steuer3', fileList);
 }
 
 function taxXmlRender(data) {
@@ -2476,22 +2435,9 @@ function _taxXmlRenderIncome(d) {
 
 var _taxData4 = null;
 
-async function taxKonvexUpload(fileList) {
-    var files = fileList ? Array.prototype.slice.call(fileList) : [];
-    if (!files.length) return;
-    var msg = document.getElementById('tax4-msg');
-    function setMsg(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } }
-    setMsg('Verarbeite ' + files.length + ' XML-Datei(en) … (Konvex-Engine, je Jahr mit voller Historie)', '');
-    try {
-        var fd = new FormData();
-        files.forEach(function(f) { fd.append('files', f); });
-        var res = await fetch('/api/tax/report-konvex', { method: 'POST', body: fd }).then(function(r) { return r.json(); });
-        if (res && res.ok) {
-            setMsg('✓ ' + (res.available_years || []).join(', ') + ' ausgewertet'
-                 + (res.account ? ' · Konto ' + res.account : ''), 'ok');
-            taxKonvexRender(res);
-        } else { setMsg('Fehler: ' + ((res && res.error) || 'unbekannt'), 'err'); }
-    } catch (e) { setMsg('Fehler: ' + e.message, 'err'); }
+function taxKonvexUpload(fileList) {
+    if (!fileList || !fileList.length) return;
+    _taxRun('steuer4', fileList);
 }
 
 function taxKonvexRender(data) {
@@ -2776,4 +2722,96 @@ function _taxRenderYear(d, filesYears) {
           '<p class="settings-hint" style="margin-top:12px">Hochgeladene Jahre: <b>'
         + (filesYears || []).filter(Boolean).join(', ') + '</b> · Zeile 18 wird (mangels '
         + 'Emittenten-Klassifikation) nicht zuverlässig berechnet.</p>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  Gespeicherte Steuer-Dateien — Auto-Laden beim Öffnen + Verwaltung
+ *  ----------------------------------------------------------------------------
+ *  Hochgeladene IBKR-Statements werden serverseitig pro User gespeichert (Sorte
+ *  "csv" für Steuer/Steuer +, "xml" für Steuer ++/Steuer +++). Beim Öffnen einer
+ *  Seite (onShow) wird der gespeicherte Bestand automatisch ausgewertet, sodass
+ *  kein erneuter Upload nötig ist. Upload und Auto-Laden teilen sich _taxRun().
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+var _TAX_CFG = {
+    tax:     { ep: '/api/tax/report',        kind: 'csv', msg: 'tax-msg',  ind: 'tax-stored',  render: taxRender,       loaded: false },
+    steuer2: { ep: '/api/tax/report',        kind: 'csv', msg: 'tax2-msg', ind: 'tax2-stored', render: taxFullRender,   loaded: false },
+    steuer3: { ep: '/api/tax/report-xml',    kind: 'xml', msg: 'tax3-msg', ind: 'tax3-stored', render: taxXmlRender,    loaded: false },
+    steuer4: { ep: '/api/tax/report-konvex', kind: 'xml', msg: 'tax4-msg', ind: 'tax4-stored', render: taxKonvexRender, loaded: false }
+};
+
+function _taxSetMsg(id, t, c) {
+    var m = document.getElementById(id);
+    if (m) { m.textContent = t; m.className = 'settings-msg ' + (c || ''); }
+}
+
+/** Zeigt „💾 N gespeicherte Datei(en) … · löschen" oder blendet aus. */
+function _taxIndicator(cfg, files) {
+    var el = document.getElementById(cfg.ind);
+    if (!el) return;
+    if (!files || !files.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = '';
+    el.innerHTML = '💾 ' + files.length + ' gespeicherte Datei(en) auf dem Server: '
+        + '<span style="color:var(--muted)">' + files.join(', ') + '</span> · '
+        + '<a href="#" onclick="_taxClearStored(\'' + cfg.kind + '\');return false;" '
+        + 'style="color:var(--red)">löschen</a>';
+}
+
+/** Sorten-Schwestern (gleiche Sorte) finden — für gemeinsame Indikator-/Status-Updates. */
+function _taxSiblings(kind) {
+    return Object.keys(_TAX_CFG).filter(function (k) { return _TAX_CFG[k].kind === kind; });
+}
+
+/**
+ * Wertet aus. fileList = FileList → Upload (speichert serverseitig);
+ * null → gespeicherten Bestand laden (Auto-Laden beim Öffnen).
+ */
+async function _taxRun(key, fileList) {
+    var cfg = _TAX_CFG[key];
+    if (!cfg) return;
+    var files = fileList ? Array.prototype.slice.call(fileList) : [];
+    var fd = new FormData();
+    files.forEach(function (f) { fd.append('files', f); });
+    _taxSetMsg(cfg.msg, files.length ? ('Verarbeite ' + files.length + ' Datei(en) …')
+                                     : 'Lade gespeicherte Dateien … (kann kurz dauern)', '');
+    try {
+        var res = await fetch(cfg.ep, { method: 'POST', body: fd }).then(function (r) { return r.json(); });
+        if (res && res.ok) {
+            var src = res.source === 'upload' ? 'hochgeladen' : 'Server-Speicher';
+            var years = (res.available_years || res.files_years || []).filter(Boolean).join(', ');
+            _taxSetMsg(cfg.msg, '✓ ' + years + ' ausgewertet (' + src + ')'
+                + (res.account ? ' · Konto ' + res.account : ''), 'ok');
+            cfg.loaded = true;
+            cfg.render(res);
+            // Indikator auf allen Schwester-Seiten der Sorte aktualisieren
+            _taxSiblings(cfg.kind).forEach(function (k) { _taxIndicator(_TAX_CFG[k], res.stored_files); });
+        } else if (res && res.no_files) {
+            _taxSetMsg(cfg.msg, '', '');
+            _taxSiblings(cfg.kind).forEach(function (k) { _taxIndicator(_TAX_CFG[k], []); });
+        } else {
+            _taxSetMsg(cfg.msg, 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        _taxSetMsg(cfg.msg, 'Fehler: ' + e.message, 'err');
+    }
+}
+
+/** onShow-Hook: lädt den gespeicherten Bestand einmal pro Session automatisch. */
+function taxAutoload(key) {
+    var cfg = _TAX_CFG[key];
+    if (!cfg || cfg.loaded) return;
+    _taxRun(key, null);
+}
+
+/** Löscht den gespeicherten Bestand einer Sorte (xml|csv) → betrifft beide Seiten. */
+async function _taxClearStored(kind) {
+    if (!window.confirm('Gespeicherte ' + kind.toUpperCase() + '-Dateien auf dem Server löschen?')) return;
+    try { await fetch('/api/tax/files?kind=' + encodeURIComponent(kind), { method: 'DELETE' }); }
+    catch (e) { /* still UI zurücksetzen */ }
+    _taxSiblings(kind).forEach(function (k) {
+        var c = _TAX_CFG[k];
+        c.loaded = false;
+        _taxIndicator(c, []);
+        _taxSetMsg(c.msg, 'Gespeicherte Dateien gelöscht.', '');
+    });
 }

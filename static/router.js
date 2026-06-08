@@ -29,19 +29,20 @@ var PAGES = [
     },
     {
         id: 'tax', label: 'Steuer', icon: '📑',
-        onShow: null   // Upload-gesteuert; nichts vorzuladen
+        // Gespeicherte CSVs beim Öffnen automatisch auswerten (einmal/Session)
+        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('tax'); }
     },
     {
         id: 'steuer2', label: 'Steuer +', icon: '🧮',
-        onShow: null   // Vollständige §20-Berechnung (Phase 1), Upload-gesteuert
+        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer2'); }
     },
     {
         id: 'steuer3', label: 'Steuer ++', icon: '🔎',
-        onShow: null   // Flex-XML (Closed Lots) + EZB pro Bein, Upload-gesteuert
+        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer3'); }
     },
     {
         id: 'steuer4', label: 'Steuer +++', icon: '🏛️',
-        onShow: null   // Konvex-Engine: Anlage KAP/KAP-INV, InvStG, Upload-gesteuert
+        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer4'); }
     },
     {
         id: 'screener', label: 'Screener', icon: '🔍',
