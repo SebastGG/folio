@@ -122,12 +122,33 @@ def _para(pdf: _PDF, text: str, indent=0.0):
     pdf.set_text_color(40, 40, 40)
 
 
-def _formula(pdf: _PDF, text: str):
-    pdf.set_font("Courier", "", 7.6)
-    pdf.set_text_color(20, 20, 20)
+def _formula_block(pdf: _PDF, lines):
+    """Hebt Formelzeilen als Box hervor (Akzentbalken + Hintergrund, große Schrift).
+    lines = str | list[str] | list[(text, bold?)]."""
+    if isinstance(lines, str):
+        lines = [lines]
+    norm = [(ln if isinstance(ln, tuple) else (ln, False)) for ln in lines]
     epw = pdf.w - pdf.l_margin - pdf.r_margin
-    pdf.set_x(pdf.l_margin + 4)
-    pdf.multi_cell(epw - 4, 4.1, _s(text))
+    lh, pad = 6.0, 2.6
+    h = len(norm) * lh + 2 * pad
+    if pdf.get_y() + h > pdf.h - pdf.b_margin:
+        pdf.add_page()
+    x0, y0 = pdf.l_margin + 3, pdf.get_y()
+    w = epw - 6
+    pdf.set_fill_color(243, 246, 251)
+    pdf.set_draw_color(205, 214, 232)
+    pdf.rect(x0, y0, w, h, style="DF")
+    pdf.set_fill_color(92, 112, 170)            # Akzentbalken links
+    pdf.rect(x0, y0, 1.6, h, style="F")
+    pdf.set_text_color(26, 32, 58)
+    pdf.set_y(y0 + pad)
+    for txt, bold in norm:
+        pdf.set_font("Courier", "B" if bold else "", 10.5)
+        pdf.set_x(x0 + 6)
+        pdf.cell(w - 9, lh, _s(txt))
+        pdf.ln(lh)
+    pdf.set_y(y0 + h)
+    pdf.ln(2.5)
     pdf.set_text_color(40, 40, 40)
 
 
@@ -138,9 +159,13 @@ def _methodik(pdf: _PDF, yd: dict):
     ak, al, ki = tp.get("aktien", {}), tp.get("allg", {}), tp.get("kap_inv", {})
 
     _sub(pdf, "Datengrundlage & Annahmen")
-    _para(pdf, "Quelle: IBKR Flex-XML, Detailgrad \"Closed Lots\" (IBKRs autoritatives Lot-Matching). "
-               "EUR-Umrechnung je Bein ueber EZB-Referenzkurse bzw. die in der XML enthaltenen "
-               "IBKR-ConversionRates zum jeweiligen Handels-/Zuflusstag.")
+    _para(pdf, "Quelle: IBKR Flex-XML, Detailgrad \"Closed Lots\". EUR-Umrechnung je Bein ueber "
+               "EZB-Referenzkurse bzw. die in der XML enthaltenen IBKR-ConversionRates zum jeweiligen "
+               "Handels-/Zuflusstag.")
+    _para(pdf, "Lot-Zuordnung (FIFO): Die Zuordnung von Verkaeufen zu Kaeufen erfolgt nach dem FIFO-Prinzip "
+               "(\"first in, first out\") und wird direkt IBKRs autoritativem Lot-Matching aus der Flex-XML "
+               "(\"Closed Lots\") entnommen - nicht eigenstaendig nachgerechnet. Damit entfallen eigene "
+               "FIFO-, Split- und Spinoff-Naeherungen; jede Veraeusserung ist im Trade-Journal nachvollziehbar.")
     _para(pdf, "Angewandte Standardannahmen (wie offizieller Konvex-Report): Tageskurs-Methode AN, "
                "InvStG-Teilfreistellung AN, Zuflussprinzip bei Vorjahres-Praemien, DE-KESt-Variante B AUS. "
                "Nicht beruecksichtigt (Sache des Finanzamts): Sparer-Pauschbetrag, Kirchensteuer, Guenstigerpruefung.")
@@ -148,25 +173,22 @@ def _methodik(pdf: _PDF, yd: dict):
     _sub(pdf, "1) Aktien-Veraeusserung (§20 Abs. 2 S. 1 Nr. 1 i.V.m. Abs. 4 S. 1 EStG)")
     _para(pdf, "Tageskurs-Methode: Veraeusserungserloes zum FX-Kurs des Verkaufstags, Anschaffungskosten "
                "zum FX-Kurs des Kauftags (§20 Abs. 4 S. 1: \"... im Zeitpunkt der Veraeusserung ... der Anschaffung ... umzurechnen\").")
-    _formula(pdf, "G/V(EUR) = Erloes_FW x FX(Verkauf) - Anschaffungskosten_FW x FX(Kauf)")
-    _formula(pdf, "Tageskurs-Korrektur je Lot = Anschaffungskosten_FW x ( FX(Verkauf) - FX(Kauf) )")
-    _para(pdf, "Umsetzung: IBKR-Methode (Netto-PnL x FX(Verkauf)) + Tageskurs-Korrektur je Lot. Die "
-               "Einzel-Korrekturen sind im Trade-Journal als eigene Zeilen ausgewiesen.")
+    _formula_block(pdf, "G/V (EUR)  =  Erloes_FW × FX_Verkaufstag  -  Anschaffungskosten_FW × FX_Kauftag")
 
     _sub(pdf, "2) Termingeschaefte / Futures (§20 Abs. 2 S. 1 Nr. 3 EStG; BMF 14.05.2025 Rn. 36, 247)")
     _para(pdf, "Ein Future ist ein Differenzgeschaeft. Besteuert wird der Differenzausgleich (Netto-Saldo der "
                "waehrend der Laufzeit geleisteten Zahlungen), NICHT der Nominalwert. Daher kein Tageskurs-FX auf den "
                "Kontraktwert (Rn. 36). Umrechnung des Netto-Ergebnisses zum FX-Kurs des Zuflusses/der Glattstellung (Rn. 247).")
-    _formula(pdf, "G/V(EUR) = Differenzausgleich_FW x FX(Glattstellung)")
+    _formula_block(pdf, "G/V (EUR)  =  Differenzausgleich_FW × FX_Glattstellung")
     _para(pdf, "Termingeschaeftsverluste sind seit JStG 2024 ohne die 20.000-EUR-Grenze frei verrechenbar.")
 
     _sub(pdf, "3) Devisen / Fremdwaehrung (Regel F, §20 Abs. 2 S. 1 Nr. 7 i.V.m. Abs. 4 S. 1 EStG)")
-    _para(pdf, "IBKRs realisiertes Fremdwaehrungsergebnis je FX-Lot (FIFO ueber die Historie) in EUR. "
+    _para(pdf, "IBKRs realisiertes Fremdwaehrungsergebnis je FX-Lot (ebenfalls FIFO aus der XML) in EUR. "
                "Jede Einzahlung gilt als Anschaffung, jede Ausgabe als Veraeusserung des Fremdwaehrungsbestands.")
 
     _sub(pdf, "4) Investmentfonds (§20 InvStG — Teilfreistellung, Anlage KAP-INV)")
     _para(pdf, "Fonds werden getrennt auf Anlage KAP-INV ausgewiesen. Steuerpflichtig ist der Bruttobetrag nach Teilfreistellung:")
-    _formula(pdf, "steuerpflichtig = Brutto x ( 1 - Teilfreistellungssatz )")
+    _formula_block(pdf, "steuerpflichtig  =  Brutto × (1 - Teilfreistellungssatz)")
     _para(pdf, "Saetze: Aktienfonds 30 %, Mischfonds 15 %, Immobilienfonds 60 % (Auslands-Immobilienfonds 80 %), sonstige Fonds 0 %.")
 
     _sub(pdf, "5) Verlustverrechnung (§20 Abs. 6 EStG)")
@@ -174,27 +196,29 @@ def _methodik(pdf: _PDF, yd: dict):
                "Verlustvortrag (nur ggue. kuenftigen Aktiengewinnen). Allgemeiner Topf: Termingeschaefte, Devisen, "
                "Dividenden, Zinsen. Ueberlauf: verbleibende allgemeine Verluste mindern zusaetzlich den Aktiengewinn "
                "(guenstigste, zwingende Reihenfolge); umgekehrt nicht. KAP-INV: eigener Verrechnungskreis.")
-    _formula(pdf, f"Saldo Aktien   = {_eur(ak.get('netto'))}")
-    _formula(pdf, f"Saldo Allg.    = {_eur(al.get('netto'))}")
+    vrows = [(f"Saldo Aktien-Topf   =  {_eur(ak.get('netto'))}", False),
+             (f"Saldo allg. Topf    =  {_eur(al.get('netto'))}", False)]
     if (tp.get("spillover") or 0) > 0:
-        _formula(pdf, f"Ueberlauf (allg. Verlust mindert Aktiengewinn) = {_eur(tp.get('spillover'))}")
-    _formula(pdf, f"Saldo KAP-INV  = {_eur(ki.get('netto'))}")
+        vrows.append((f"Ueberlauf (allg. -> Aktien)  =  {_eur(tp.get('spillover'))}", False))
+    vrows.append((f"Saldo KAP-INV       =  {_eur(ki.get('netto'))}", False))
+    _formula_block(pdf, vrows)
 
     _sub(pdf, "6) Steuerermittlung")
-    _formula(pdf, "Bemessungsgrundlage = Aktien_steuerbar + Allg_steuerbar + KAP-INV_steuerbar")
-    _formula(pdf, f"                    = {_eur(ak.get('steuerbar'))} + {_eur(al.get('steuerbar'))} "
-                  f"+ {_eur(ki.get('steuerbar'))}")
-    _formula(pdf, f"                    = {_eur(t.get('bemessungsgrundlage'))}")
-    _formula(pdf, f"Abgeltungsteuer 25 %      = BMG x 0,25            = {_eur(t.get('abgeltungsteuer'))}")
-    _formula(pdf, f"Solidaritaetszuschlag 5,5 % = Abgeltungsteuer x 0,055 = {_eur(t.get('soli'))}")
-    _formula(pdf, f"Steuer brutto                                      = {_eur(t.get('steuer_brutto'))}")
-    _formula(pdf, f"- anrechenbare ausl. QSt (Z.41, DBA-Hoechstsatz)   = {_eur(t.get('qst_anrechenbar'))}")
-    _formula(pdf, f"Verbleibende Steuer                                = {_eur(t.get('steuer_netto'))}")
+    _formula_block(pdf, [
+        ("Bemessungsgrundlage  =  Aktien_stpfl + Allg_stpfl + KAP-INV_stpfl", False),
+        (f"                     =  {_eur(ak.get('steuerbar'))}  +  {_eur(al.get('steuerbar'))}  +  {_eur(ki.get('steuerbar'))}", False),
+        (f"                     =  {_eur(t.get('bemessungsgrundlage'))}", True),
+        ("", False),
+        (f"Abgeltungsteuer       =  BMG × 25 %                 =  {_eur(t.get('abgeltungsteuer'))}", False),
+        (f"Solidaritaetszuschlag =  Abgeltungsteuer × 5,5 %    =  {_eur(t.get('soli'))}", False),
+        (f"Steuer brutto                                       =  {_eur(t.get('steuer_brutto'))}", True),
+        (f"-  anrechenbare ausl. Quellensteuer (Z.41)          =  {_eur(t.get('qst_anrechenbar'))}", False),
+        (f"=  Verbleibende Steuer                              =  {_eur(t.get('steuer_netto'))}", True),
+    ])
     _para(pdf, "Anrechnung der auslaendischen Quellensteuer hoechstens bis zum DBA-Satz (i.d.R. 15 % der "
                "Bruttodividende) und gedeckelt auf die festgesetzte Steuer.")
-    _formula(pdf, f"Zeile 19 = Saldo Aktien + Saldo Allg. = {_eur(ak.get('netto'))} + {_eur(al.get('netto'))} "
-                  f"= {_eur((ak.get('netto') or 0) + (al.get('netto') or 0))}")
-
+    _formula_block(pdf, f"Zeile 19  =  Saldo Aktien + Saldo Allg.  =  {_eur(ak.get('netto'))} + {_eur(al.get('netto'))}"
+                        f"  =  {_eur((ak.get('netto') or 0) + (al.get('netto') or 0))}")
     _para(pdf, "Hinweis: §20 Abs. 6 S. 4 (gesonderter Aktien-Verlusttopf) ist verfassungsrechtlich umstritten "
                "(BVerfG 2 BvL 3/21), wird hier aber nach geltendem Recht angewandt.")
 
@@ -298,7 +322,6 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
     sub = f"Anlage KAP / KAP-INV  ·  Konto {account or '-'}  ·  " \
           f"Basiswaehrung {year_data.get('base_currency', 'EUR')}  ·  erstellt {created}"
     pdf = _PDF(f"Steuerbericht {yr} — Steuer +++", sub)
-    pdf.add_page()
 
     t = year_data.get("tax", {})
     z = year_data.get("zeile", {})
@@ -310,6 +333,13 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
     inc = year_data.get("income", {})
     kap = year_data.get("kap_inv", {})
     fx = year_data.get("fx", {})
+
+    # ── Berechnungsgrundlagen & Formeln — am Anfang, eigene Seite ──
+    pdf.add_page()
+    _methodik(pdf, year_data)
+
+    # ── Ergebnisse — auf neuer Seite ──
+    pdf.add_page()
 
     # ── Kennzahlen ──
     _section(pdf, "Ergebnis (Abgeltungsteuer)")
@@ -445,12 +475,10 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
         ("Inlaendische Quellensteuer", _eur(inc.get("wht_domestic")), False, (110, 110, 110)),
     ])
 
-    # ── Berechnungsgrundlagen & Formeln ──
-    _methodik(pdf, year_data)
-
-    # ── Journal ──
+    # ── Journal — immer auf neuer Seite ──
     journal = year_data.get("journal", {})
     if journal:
+        pdf.add_page()
         _journal(pdf, journal)
 
     out = pdf.output()
