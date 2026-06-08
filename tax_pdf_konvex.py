@@ -105,6 +105,100 @@ def _signed(v):
     return _GREEN if (v or 0) >= 0 else _RED
 
 
+def _sub(pdf: _PDF, title: str):
+    pdf.ln(1.5)
+    pdf.set_font("Helvetica", "B", 8.2)
+    pdf.set_text_color(40, 50, 90)
+    pdf.cell(0, 4.6, _s(title), ln=1)
+    pdf.set_text_color(40, 40, 40)
+
+
+def _para(pdf: _PDF, text: str, indent=0.0):
+    pdf.set_font("Helvetica", "", 7.6)
+    pdf.set_text_color(55, 55, 55)
+    epw = pdf.w - pdf.l_margin - pdf.r_margin
+    pdf.set_x(pdf.l_margin + indent)
+    pdf.multi_cell(epw - indent, 3.9, _s(text))
+    pdf.set_text_color(40, 40, 40)
+
+
+def _formula(pdf: _PDF, text: str):
+    pdf.set_font("Courier", "", 7.6)
+    pdf.set_text_color(20, 20, 20)
+    epw = pdf.w - pdf.l_margin - pdf.r_margin
+    pdf.set_x(pdf.l_margin + 4)
+    pdf.multi_cell(epw - 4, 4.1, _s(text))
+    pdf.set_text_color(40, 40, 40)
+
+
+def _methodik(pdf: _PDF, yd: dict):
+    _section(pdf, "Berechnungsgrundlagen, Formeln & Rechtsgrundlagen")
+    t = yd.get("tax", {})
+    tp = yd.get("toepfe", {})
+    ak, al, ki = tp.get("aktien", {}), tp.get("allg", {}), tp.get("kap_inv", {})
+
+    _sub(pdf, "Datengrundlage & Annahmen")
+    _para(pdf, "Quelle: IBKR Flex-XML, Detailgrad \"Closed Lots\" (IBKRs autoritatives Lot-Matching). "
+               "EUR-Umrechnung je Bein ueber EZB-Referenzkurse bzw. die in der XML enthaltenen "
+               "IBKR-ConversionRates zum jeweiligen Handels-/Zuflusstag.")
+    _para(pdf, "Angewandte Standardannahmen (wie offizieller Konvex-Report): Tageskurs-Methode AN, "
+               "InvStG-Teilfreistellung AN, Zuflussprinzip bei Vorjahres-Praemien, DE-KESt-Variante B AUS. "
+               "Nicht beruecksichtigt (Sache des Finanzamts): Sparer-Pauschbetrag, Kirchensteuer, Guenstigerpruefung.")
+
+    _sub(pdf, "1) Aktien-Veraeusserung (§20 Abs. 2 S. 1 Nr. 1 i.V.m. Abs. 4 S. 1 EStG)")
+    _para(pdf, "Tageskurs-Methode: Veraeusserungserloes zum FX-Kurs des Verkaufstags, Anschaffungskosten "
+               "zum FX-Kurs des Kauftags (§20 Abs. 4 S. 1: \"... im Zeitpunkt der Veraeusserung ... der Anschaffung ... umzurechnen\").")
+    _formula(pdf, "G/V(EUR) = Erloes_FW x FX(Verkauf) - Anschaffungskosten_FW x FX(Kauf)")
+    _formula(pdf, "Tageskurs-Korrektur je Lot = Anschaffungskosten_FW x ( FX(Verkauf) - FX(Kauf) )")
+    _para(pdf, "Umsetzung: IBKR-Methode (Netto-PnL x FX(Verkauf)) + Tageskurs-Korrektur je Lot. Die "
+               "Einzel-Korrekturen sind im Trade-Journal als eigene Zeilen ausgewiesen.")
+
+    _sub(pdf, "2) Termingeschaefte / Futures (§20 Abs. 2 S. 1 Nr. 3 EStG; BMF 14.05.2025 Rn. 36, 247)")
+    _para(pdf, "Ein Future ist ein Differenzgeschaeft. Besteuert wird der Differenzausgleich (Netto-Saldo der "
+               "waehrend der Laufzeit geleisteten Zahlungen), NICHT der Nominalwert. Daher kein Tageskurs-FX auf den "
+               "Kontraktwert (Rn. 36). Umrechnung des Netto-Ergebnisses zum FX-Kurs des Zuflusses/der Glattstellung (Rn. 247).")
+    _formula(pdf, "G/V(EUR) = Differenzausgleich_FW x FX(Glattstellung)")
+    _para(pdf, "Termingeschaeftsverluste sind seit JStG 2024 ohne die 20.000-EUR-Grenze frei verrechenbar.")
+
+    _sub(pdf, "3) Devisen / Fremdwaehrung (Regel F, §20 Abs. 2 S. 1 Nr. 7 i.V.m. Abs. 4 S. 1 EStG)")
+    _para(pdf, "IBKRs realisiertes Fremdwaehrungsergebnis je FX-Lot (FIFO ueber die Historie) in EUR. "
+               "Jede Einzahlung gilt als Anschaffung, jede Ausgabe als Veraeusserung des Fremdwaehrungsbestands.")
+
+    _sub(pdf, "4) Investmentfonds (§20 InvStG — Teilfreistellung, Anlage KAP-INV)")
+    _para(pdf, "Fonds werden getrennt auf Anlage KAP-INV ausgewiesen. Steuerpflichtig ist der Bruttobetrag nach Teilfreistellung:")
+    _formula(pdf, "steuerpflichtig = Brutto x ( 1 - Teilfreistellungssatz )")
+    _para(pdf, "Saetze: Aktienfonds 30 %, Mischfonds 15 %, Immobilienfonds 60 % (Auslands-Immobilienfonds 80 %), sonstige Fonds 0 %.")
+
+    _sub(pdf, "5) Verlustverrechnung (§20 Abs. 6 EStG)")
+    _para(pdf, "Aktien-Topf (S. 4): Aktienverluste nur gegen Aktiengewinne; ein verbleibender Verlust ist gefangener "
+               "Verlustvortrag (nur ggue. kuenftigen Aktiengewinnen). Allgemeiner Topf: Termingeschaefte, Devisen, "
+               "Dividenden, Zinsen. Ueberlauf: verbleibende allgemeine Verluste mindern zusaetzlich den Aktiengewinn "
+               "(guenstigste, zwingende Reihenfolge); umgekehrt nicht. KAP-INV: eigener Verrechnungskreis.")
+    _formula(pdf, f"Saldo Aktien   = {_eur(ak.get('netto'))}")
+    _formula(pdf, f"Saldo Allg.    = {_eur(al.get('netto'))}")
+    if (tp.get("spillover") or 0) > 0:
+        _formula(pdf, f"Ueberlauf (allg. Verlust mindert Aktiengewinn) = {_eur(tp.get('spillover'))}")
+    _formula(pdf, f"Saldo KAP-INV  = {_eur(ki.get('netto'))}")
+
+    _sub(pdf, "6) Steuerermittlung")
+    _formula(pdf, "Bemessungsgrundlage = Aktien_steuerbar + Allg_steuerbar + KAP-INV_steuerbar")
+    _formula(pdf, f"                    = {_eur(ak.get('steuerbar'))} + {_eur(al.get('steuerbar'))} "
+                  f"+ {_eur(ki.get('steuerbar'))}")
+    _formula(pdf, f"                    = {_eur(t.get('bemessungsgrundlage'))}")
+    _formula(pdf, f"Abgeltungsteuer 25 %      = BMG x 0,25            = {_eur(t.get('abgeltungsteuer'))}")
+    _formula(pdf, f"Solidaritaetszuschlag 5,5 % = Abgeltungsteuer x 0,055 = {_eur(t.get('soli'))}")
+    _formula(pdf, f"Steuer brutto                                      = {_eur(t.get('steuer_brutto'))}")
+    _formula(pdf, f"- anrechenbare ausl. QSt (Z.41, DBA-Hoechstsatz)   = {_eur(t.get('qst_anrechenbar'))}")
+    _formula(pdf, f"Verbleibende Steuer                                = {_eur(t.get('steuer_netto'))}")
+    _para(pdf, "Anrechnung der auslaendischen Quellensteuer hoechstens bis zum DBA-Satz (i.d.R. 15 % der "
+               "Bruttodividende) und gedeckelt auf die festgesetzte Steuer.")
+    _formula(pdf, f"Zeile 19 = Saldo Aktien + Saldo Allg. = {_eur(ak.get('netto'))} + {_eur(al.get('netto'))} "
+                  f"= {_eur((ak.get('netto') or 0) + (al.get('netto') or 0))}")
+
+    _para(pdf, "Hinweis: §20 Abs. 6 S. 4 (gesonderter Aktien-Verlusttopf) ist verfassungsrechtlich umstritten "
+               "(BVerfG 2 BvL 3/21), wird hier aber nach geltendem Recht angewandt.")
+
+
 # ── Journal-Tabelle ──────────────────────────────────────────────────────────
 _JCOLS = [
     ("Datum", 20, "L"), ("K/V", 12, "C"), ("Stk.", 14, "R"), ("Kurs", 20, "R"),
@@ -350,6 +444,9 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
         ("Auslaendische Quellensteuer (anrechenbar)", _eur(inc.get("wht_foreign")), False, _GREEN),
         ("Inlaendische Quellensteuer", _eur(inc.get("wht_domestic")), False, (110, 110, 110)),
     ])
+
+    # ── Berechnungsgrundlagen & Formeln ──
+    _methodik(pdf, year_data)
 
     # ── Journal ──
     journal = year_data.get("journal", {})
