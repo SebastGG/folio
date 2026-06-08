@@ -2852,10 +2852,20 @@ function _taxIndicator(cfg, files) {
     if (!el) return;
     if (!files || !files.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
     el.style.display = '';
-    el.innerHTML = '💾 ' + files.length + ' gespeicherte Datei(en) auf dem Server: '
-        + '<span style="color:var(--muted)">' + files.join(', ') + '</span> · '
+    var esc = function (s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    var chips = files.map(function (f) {
+        return '<span class="tax-file-chip">📄 ' + esc(f)
+            + '<a href="#" title="Diese Datei vom Server löschen" '
+            + 'onclick="_taxDeleteFile(\'' + cfg.kind + '\',\'' + esc(f) + '\');return false;" '
+            + 'class="tax-file-x">✕</a></span>';
+    }).join('');
+    el.innerHTML = '<div style="margin-bottom:4px">💾 <b>' + files.length
+        + '</b> gespeicherte XML-Datei(en) auf dem Server '
         + '<a href="#" onclick="_taxClearStored(\'' + cfg.kind + '\');return false;" '
-        + 'style="color:var(--red)">löschen</a>';
+        + 'style="color:var(--red);font-size:10px;margin-left:6px">alle löschen</a></div>'
+        + '<div class="tax-file-list">' + chips + '</div>'
+        + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Einzelne Jahres-XML zum '
+        + 'Aktualisieren einfach neu hochladen (gleicher Name wird überschrieben, andere bleiben).</div>';
 }
 
 /** Sorten-Schwestern (gleiche Sorte) finden — für gemeinsame Indikator-/Status-Updates. */
@@ -2887,8 +2897,13 @@ async function _taxRun(key, fileList) {
             // Indikator auf allen Schwester-Seiten der Sorte aktualisieren
             _taxSiblings(cfg.kind).forEach(function (k) { _taxIndicator(_TAX_CFG[k], res.stored_files); });
         } else if (res && res.no_files) {
-            _taxSetMsg(cfg.msg, '', '');
-            _taxSiblings(cfg.kind).forEach(function (k) { _taxIndicator(_TAX_CFG[k], []); });
+            _taxSetMsg(cfg.msg, 'Keine gespeicherten Dateien — bitte XML hochladen.', '');
+            _taxSiblings(cfg.kind).forEach(function (k) {
+                _TAX_CFG[k].loaded = false;
+                _taxIndicator(_TAX_CFG[k], []);
+                var box = document.getElementById(_TAX_CFG[k].ind.replace('-stored', '-result'));
+                if (box) box.style.display = 'none';
+            });
         } else {
             _taxSetMsg(cfg.msg, 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
         }
@@ -2906,7 +2921,7 @@ function taxAutoload(key) {
 
 /** Löscht den gespeicherten Bestand einer Sorte (xml|csv) → betrifft beide Seiten. */
 async function _taxClearStored(kind) {
-    if (!window.confirm('Gespeicherte ' + kind.toUpperCase() + '-Dateien auf dem Server löschen?')) return;
+    if (!window.confirm('Alle gespeicherten ' + kind.toUpperCase() + '-Dateien auf dem Server löschen?')) return;
     try { await fetch('/api/tax/files?kind=' + encodeURIComponent(kind), { method: 'DELETE' }); }
     catch (e) { /* still UI zurücksetzen */ }
     _taxSiblings(kind).forEach(function (k) {
@@ -2914,5 +2929,20 @@ async function _taxClearStored(kind) {
         c.loaded = false;
         _taxIndicator(c, []);
         _taxSetMsg(c.msg, 'Gespeicherte Dateien gelöscht.', '');
+        var box = document.getElementById(c.ind.replace('-stored', '-result'));
+        if (box) box.style.display = 'none';
     });
+}
+
+/** Löscht eine einzelne gespeicherte Datei und rechnet aus dem Rest neu. */
+async function _taxDeleteFile(kind, name) {
+    if (!window.confirm('Datei „' + name + '" vom Server löschen?')) return;
+    try {
+        await fetch('/api/tax/files?kind=' + encodeURIComponent(kind) + '&name=' + encodeURIComponent(name),
+                    { method: 'DELETE' });
+    } catch (e) { /* weiter, UI aktualisiert über _taxRun */ }
+    var keys = _taxSiblings(kind);
+    keys.forEach(function (k) { _TAX_CFG[k].loaded = false; });
+    // Neu auswerten aus dem verbleibenden Bestand (aktualisiert Liste + Ergebnisse)
+    _taxRun(keys[0] || 'steuer4', null);
 }

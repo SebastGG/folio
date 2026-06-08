@@ -186,27 +186,15 @@ def _tax_store_dir(user: str, kind: str) -> str:
     os.makedirs(d, exist_ok=True)
     return d
 
-def _tax_store_save(user: str, kind: str, items: list[tuple[str, bytes]]) -> list[str]:
-    """Ersetzt den Bestand der Sorte durch die übergebenen Dateien. Gibt Namen zurück."""
+def _tax_store_add(user: str, kind: str, items: list[tuple[str, bytes]]) -> list[str]:
+    """Fügt Dateien zum Bestand hinzu (gleicher Name wird überschrieben, andere bleiben).
+    So lassen sich einzelne Jahres-XMLs nachladen, ohne die übrigen zu verlieren."""
     d = _tax_store_dir(user, kind)
-    for f in os.listdir(d):
-        try:
-            os.remove(os.path.join(d, f))
-        except OSError:
-            pass
-    saved, seen = [], set()
     for name, raw in items:
         sn = _tax_safe_name(name, kind)
-        # Doppelte Namen entschärfen
-        stem, n = sn, 1
-        while sn in seen:
-            root, ext = os.path.splitext(stem)
-            sn = f"{root}_{n}{ext}"; n += 1
-        seen.add(sn)
         with open(os.path.join(d, sn), "wb") as fh:
             fh.write(raw)
-        saved.append(sn)
-    return sorted(saved)
+    return _tax_store_list(user, kind)
 
 def _tax_store_list(user: str, kind: str) -> list[str]:
     d = _tax_store_dir(user, kind)
@@ -221,6 +209,18 @@ def _tax_store_load(user: str, kind: str) -> list[str]:
             out.append(fh.read().decode("utf-8-sig", errors="replace"))
     return out
 
+def _tax_store_delete_one(user: str, kind: str, name: str) -> bool:
+    """Löscht eine einzelne gespeicherte Datei (per Name). True bei Erfolg."""
+    sn = _tax_safe_name(name, kind)
+    p = os.path.join(_tax_store_dir(user, kind), sn)
+    if os.path.isfile(p):
+        try:
+            os.remove(p)
+            return True
+        except OSError:
+            return False
+    return False
+
 def _tax_store_clear(user: str, kind: str) -> None:
     d = _tax_store_dir(user, kind)
     for f in os.listdir(d):
@@ -232,7 +232,8 @@ def _tax_store_clear(user: str, kind: str) -> None:
 async def _tax_collect_texts(user: str, kind: str, files):
     """
     Liefert (texts, source) für einen Compute-Endpoint:
-      • Wurden Dateien hochgeladen → speichern (ersetzt den Bestand), source="upload".
+      • Wurden Dateien hochgeladen → in den Bestand mergen, dann den GESAMTEN
+        Bestand laden (damit Einzel-Nachladen die Historie behält), source="upload".
       • Sonst → gespeicherten Bestand laden, source="stored".
     """
     items = []
@@ -241,8 +242,8 @@ async def _tax_collect_texts(user: str, kind: str, files):
         if raw:
             items.append((f.filename or "datei", raw))
     if items:
-        _tax_store_save(user, kind, items)
-        return [raw.decode("utf-8-sig", errors="replace") for _, raw in items], "upload"
+        _tax_store_add(user, kind, items)
+        return _tax_store_load(user, kind), "upload"
     return _tax_store_load(user, kind), "stored"
 
 # ── Auth-Middleware + OAuth-Routen ──────────────────────────────────────────────
@@ -1388,13 +1389,16 @@ async def tax_files_status(request: Request, kind: str = "xml"):
     return JSONResponse({"ok": True, "kind": kind, "files": _tax_store_list(user, kind)})
 
 @app.delete("/api/tax/files")
-async def tax_files_clear(request: Request, kind: str = "xml"):
-    """Löscht den gespeicherten Bestand einer Sorte (xml|csv) für den User."""
+async def tax_files_clear(request: Request, kind: str = "xml", name: str = ""):
+    """Löscht eine einzelne Datei (name=…) oder — ohne name — den ganzen Bestand der Sorte."""
     user = get_user(request)
     if kind not in _TAX_STORE_KINDS:
         return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
-    _tax_store_clear(user, kind)
-    return JSONResponse({"ok": True, "kind": kind, "files": []})
+    if name:
+        _tax_store_delete_one(user, kind, name)
+    else:
+        _tax_store_clear(user, kind)
+    return JSONResponse({"ok": True, "kind": kind, "files": _tax_store_list(user, kind)})
 
 
 # ── Steuer +++ : PDF-Steuerbericht je Jahr ──────────────────────────────────────
