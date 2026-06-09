@@ -1799,14 +1799,28 @@ async function ibkrCreateBasket() {
         return (p.asset_class || '').toUpperCase() === 'STK' && (p.quantity || 0) > 0;
     });
     if (stk.length === 0) { alert('Keine Long-Aktien-Positionen gefunden.'); return; }
-    var name = prompt('Name des neuen Baskets:', 'IBKR Positionen');
-    if (!name) return;
-    var id = 'basket_' + Date.now();
+
     var weights = {};
     stk.forEach(function(p) {
         var sym = ibkrPosYahoo(p);   // ISIN-Mapping → korrekte Notierung (z.B. ASML.AS)
         if (sym) weights[sym] = Math.abs(p.quantity);
     });
+
+    // Existiert schon ein IBKR-Basket? → überschreiben oder neu anlegen lassen
+    var managed = Object.keys(baskets).filter(function(id) { return baskets[id] && baskets[id].ibkrManaged; });
+    if (managed.length) {
+        var ov = confirm('Es gibt bereits einen IBKR-Basket ("' + baskets[managed[0]].name + '").\n\n'
+            + 'OK = überschreiben\nAbbrechen = neuen Basket anlegen');
+        if (ov) {
+            baskets[managed[0]].weights = weights;
+            await saveBasketsToServer();
+            await switchBasket(managed[0]);
+            return;
+        }
+    }
+    var name = prompt('Name des neuen Baskets:', 'IBKR Positionen');
+    if (!name) return;
+    var id = 'basket_' + Date.now();
     baskets[id] = {
         name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: true,
         perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
