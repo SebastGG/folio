@@ -1566,7 +1566,6 @@ function renderPortfolioReport() {
         if ((p.asset_class || '').toUpperCase() === 'FUT') futGross += Math.abs(e);
     });
     var netExp   = longExp + shortExp;    // shortExp ist negativ
-    var grossExp = longExp - shortExp;
 
     var sumV = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.value; }, 0); };
     var sumP = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.pnl;   }, 0); };
@@ -1631,8 +1630,6 @@ function renderPortfolioReport() {
     }
     h += '<tr class="pr-subtotal"><td>Netto Exposure</td>'
         + '<td style="color:' + gc(netExp) + '">' + fmt(netExp) + '</td><td></td></tr>';
-    h += '<tr class="pr-subtotal"><td>Brutto Exposure</td>'
-        + '<td>' + fmt(grossExp) + '</td><td></td></tr>';
 
     if ((ibkrPositions || []).some(function(p) { return p.provisional; })) {
         h += '<tr><td colspan="3" style="color:var(--accent);font-size:9px;padding:5px 6px 0">'
