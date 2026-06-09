@@ -20,6 +20,8 @@ mock_oidc.py
 # Persönliche IBKR-Exporte — NIEMALS committen (Kontonr., Adresse, Geburtsdatum)
 *Steuer_xml.xml
 U[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
+Folio_Handel.*
+folio_Status.*
 
 # Test-Screenshots + generierte Steuer-PDFs (echte Depot-/Steuerdaten) — NIEMALS committen
 *_screenshot.png
