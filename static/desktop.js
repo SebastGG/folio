@@ -1619,27 +1619,20 @@ function renderPortfolioReport() {
         + '<td style="color:' + gc(netTotal) + '">' + fmt(netTotal) + '</td>'
         + '<td style="color:' + gc(netPnl) + '">' + pf(netPnl) + '</td></tr>';
 
-    // EXPOSURE — Marktwirkung inkl. Futures-Notional, % vom Kontowert (NET Gesamt)
-    var base = Math.abs(netTotal) > 1 ? netTotal : 0;
-    var pct  = function(v) { return base ? (v / base * 100).toFixed(0) + ' %' : '—'; };
+    // EXPOSURE — Marktwirkung inkl. Futures-Notional (€-Beträge, ohne Prozente)
     h += '<tr class="pr-section"><td colspan="3">EXPOSURE (inkl. Futures)</td></tr>';
-    h += '<tr class="pr-row"><td>Long</td><td>' + fmt(longExp) + '</td>'
-        + '<td style="color:var(--muted)">' + pct(longExp) + '</td></tr>';
+    h += '<tr class="pr-row"><td>Long</td><td>' + fmt(longExp) + '</td><td></td></tr>';
     if (shortExp !== 0) {
-        h += '<tr class="pr-row"><td>Short</td><td style="color:var(--red)">' + fmt(shortExp) + '</td>'
-            + '<td style="color:var(--muted)">' + pct(shortExp) + '</td></tr>';
+        h += '<tr class="pr-row"><td>Short</td><td style="color:var(--red)">' + fmt(shortExp) + '</td><td></td></tr>';
     }
     if (futGross !== 0) {
         h += '<tr class="pr-row"><td style="padding-left:14px;color:var(--muted)">davon Futures</td>'
-            + '<td style="color:var(--muted)">' + fmt(futGross) + '</td>'
-            + '<td style="color:var(--muted)">' + pct(futGross) + '</td></tr>';
+            + '<td style="color:var(--muted)">' + fmt(futGross) + '</td><td></td></tr>';
     }
     h += '<tr class="pr-subtotal"><td>Netto Exposure</td>'
-        + '<td style="color:' + gc(netExp) + '">' + fmt(netExp) + '</td>'
-        + '<td style="color:var(--muted)">' + pct(netExp) + '</td></tr>';
+        + '<td style="color:' + gc(netExp) + '">' + fmt(netExp) + '</td><td></td></tr>';
     h += '<tr class="pr-subtotal"><td>Brutto Exposure</td>'
-        + '<td>' + fmt(grossExp) + '</td>'
-        + '<td style="color:var(--muted)">' + pct(grossExp) + '</td></tr>';
+        + '<td>' + fmt(grossExp) + '</td><td></td></tr>';
 
     if ((ibkrPositions || []).some(function(p) { return p.provisional; })) {
         h += '<tr><td colspan="3" style="color:var(--accent);font-size:9px;padding:5px 6px 0">'
