@@ -1516,6 +1516,20 @@ function ibkrLiveValue(p, ccyFx) {
     return (yrate !== null) ? qty * liveP.price * yrate : (p.position_value || 0) * fx;
 }
 
+/**
+ * Markt-Exposure einer Position in Base (signiert: long > 0, short < 0).
+ * Futures: Notional = Menge × MarkPrice × Multiplier × FX (gehebelt, nicht der Kontowert).
+ * Aktien & Rest: Marktwert (Live-Yahoo, sonst IBKR-Wert).
+ */
+function ibkrExposure(p, ccyFx) {
+    if ((p.asset_class || '').toUpperCase() === 'FUT') {
+        var fx   = p.fx_rate_to_base || 1.0;
+        var mult = p.multiplier || 1.0;
+        return (p.quantity || 0) * (p.mark_price || 0) * mult * fx;
+    }
+    return ibkrLiveValue(p, ccyFx);
+}
+
 function renderPortfolioReport() {
     var el = document.getElementById('portfolioReport');
     if (!el) return;
@@ -1534,13 +1548,26 @@ function renderPortfolioReport() {
         var cls = (p.asset_class || 'OTHER').toUpperCase();
         // Aktueller Wert mit Live-Yahoo-Kurs (sonst IBKR-Wert) — siehe ibkrLiveValue.
         var pv  = ibkrLiveValue(p, ccyFx);
+        // Futures tragen nur ihren Mark-to-Market-G/V zum Kontowert bei (kein Notional);
+        // das Notional erscheint separat unter EXPOSURE. Aktien: Marktwert.
+        var equityVal = (cls === 'FUT') ? (pv - cb) : pv;
         var grp = qty >= 0 ? longG : shortG;
         if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };
-        grp[cls].value += pv;
+        grp[cls].value += equityVal;
         grp[cls].cost  += cb;
         grp[cls].pnl   += pv - cb;
         grp[cls].count++;
     });
+
+    // Markt-Exposure (inkl. Futures-Notional, signiert: long > 0 / short < 0)
+    var longExp = 0, shortExp = 0, futGross = 0;
+    (ibkrPositions || []).forEach(function(p) {
+        var e = ibkrExposure(p, ccyFx);
+        if (e >= 0) longExp += e; else shortExp += e;
+        if ((p.asset_class || '').toUpperCase() === 'FUT') futGross += Math.abs(e);
+    });
+    var netExp   = longExp + shortExp;    // shortExp ist negativ
+    var grossExp = longExp - shortExp;
 
     var sumV = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.value; }, 0); };
     var sumP = function(g) { return Object.values(g).reduce(function(s, x) { return s + x.pnl;   }, 0); };
@@ -1593,6 +1620,28 @@ function renderPortfolioReport() {
         + '<td style="color:' + gc(netTotal) + '">' + fmt(netTotal) + '</td>'
         + '<td style="color:' + gc(netPnl) + '">' + pf(netPnl) + '</td></tr>';
 
+    // EXPOSURE — Marktwirkung inkl. Futures-Notional, % vom Kontowert (NET Gesamt)
+    var base = Math.abs(netTotal) > 1 ? netTotal : 0;
+    var pct  = function(v) { return base ? (v / base * 100).toFixed(0) + ' %' : '—'; };
+    h += '<tr class="pr-section"><td colspan="3">EXPOSURE (inkl. Futures)</td></tr>';
+    h += '<tr class="pr-row"><td>Long</td><td>' + fmt(longExp) + '</td>'
+        + '<td style="color:var(--muted)">' + pct(longExp) + '</td></tr>';
+    if (shortExp !== 0) {
+        h += '<tr class="pr-row"><td>Short</td><td style="color:var(--red)">' + fmt(shortExp) + '</td>'
+            + '<td style="color:var(--muted)">' + pct(shortExp) + '</td></tr>';
+    }
+    if (futGross !== 0) {
+        h += '<tr class="pr-row"><td style="padding-left:14px;color:var(--muted)">davon Futures</td>'
+            + '<td style="color:var(--muted)">' + fmt(futGross) + '</td>'
+            + '<td style="color:var(--muted)">' + pct(futGross) + '</td></tr>';
+    }
+    h += '<tr class="pr-subtotal"><td>Netto Exposure</td>'
+        + '<td style="color:' + gc(netExp) + '">' + fmt(netExp) + '</td>'
+        + '<td style="color:var(--muted)">' + pct(netExp) + '</td></tr>';
+    h += '<tr class="pr-subtotal"><td>Brutto Exposure</td>'
+        + '<td>' + fmt(grossExp) + '</td>'
+        + '<td style="color:var(--muted)">' + pct(grossExp) + '</td></tr>';
+
     h += '</tbody></table>';
     el.innerHTML = h;
 }
@@ -1627,12 +1676,15 @@ function ibkrRenderTable() {
         var ccyFx = ibkrCcyFx();
         ibkrPositions.forEach(function(p) {
             var fx       = p.fx_rate_to_base || 1.0;
+            var isFut    = (p.asset_class || '').toUpperCase() === 'FUT';
             var cbmEur   = (p.cost_basis_money || 0) * fx;   // Einstand aus IBKR
-            var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert mit Live-Kurs
-            var pnlEur   = pvEur - cbmEur;
-            var pnlPct   = cbmEur ? pnlEur / Math.abs(cbmEur) * 100 : 0;
-            totalValueEur += pvEur;
-            totalCostEur  += cbmEur;
+            var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert / Notional
+            var pnlEur   = pvEur - cbmEur;                   // Futures: = Mark-to-Market-G/V
+            // Futures tragen nur ihren MTM-G/V zum Kontowert bei — Notional steht im EXPOSURE-Block.
+            var equityEur = isFut ? pnlEur : pvEur;
+            var pnlPct   = isFut ? null : (cbmEur ? pnlEur / Math.abs(cbmEur) * 100 : 0);
+            totalValueEur += equityEur;
+            totalCostEur  += isFut ? 0 : cbmEur;
             totalPnlEur   += pnlEur;
             var pColor = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
@@ -1642,12 +1694,12 @@ function ibkrRenderTable() {
                 + '</span>';
             html += '<tr>'
                 + '<td>' + symHtml + '</td>'
-                + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
+                + '<td style="color:var(--muted)">' + (p.asset_class || '-') + (isFut ? ' <span title="Notional ' + Math.round(pvEur).toLocaleString('de-DE') + ' €" style="font-size:9px">⚡</span>' : '') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
-                + '<td>' + cbmEur.toFixed(0) + '</td>'
-                + '<td>' + pvEur.toFixed(0) + '</td>'
+                + '<td>' + (isFut ? '—' : cbmEur.toFixed(0)) + '</td>'
+                + '<td>' + equityEur.toFixed(0) + '</td>'
                 + '<td style="color:' + pColor + '">' + (pnlEur >= 0 ? '+' : '') + pnlEur.toFixed(0) + '</td>'
-                + '<td style="color:' + pColor + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
+                + '<td style="color:' + pColor + '">' + (pnlPct === null ? '—' : (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%') + '</td>'
                 + '</tr>';
         });
     }

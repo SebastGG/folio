@@ -773,10 +773,15 @@ def _init_ibkr_tables(db_file: str):
         last_sync        TEXT,
         fx_rate_to_base  REAL DEFAULT 1.0,
         isin             TEXT,
-        currency         TEXT
+        currency         TEXT,
+        multiplier       REAL DEFAULT 1.0
     )''')
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN multiplier REAL DEFAULT 1.0")
     except Exception:
         pass
     try:
@@ -1139,6 +1144,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         i_fx  = cols.get("FXRateToBase", -1)
         i_isin = cols.get("ISIN", -1)
         i_cur  = cols.get("CurrencyPrimary", cols.get("Currency", -1))
+        i_mul  = cols.get("Multiplier", -1)
 
         if i_sym < 0 or i_qty < 0 or i_mkp < 0:
             continue
@@ -1153,12 +1159,15 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             cbp    = float(parts[i_cbp].strip() or "0") if 0 <= i_cbp < len(parts) else 0.0
             cbm    = float(parts[i_cbm].strip() or "0") if 0 <= i_cbm < len(parts) else 0.0
             fx     = float(parts[i_fx ].strip() or "1") if 0 <= i_fx  < len(parts) else 1.0
+            mult   = float(parts[i_mul].strip() or "1") if 0 <= i_mul < len(parts) else 1.0
         except ValueError:
             continue
+        if mult == 0:
+            mult = 1.0
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
         isin        = parts[i_isin].strip() if 0 <= i_isin < len(parts) else ""
         currency    = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
-        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin, currency))
+        positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin, currency, mult))
 
     print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
     if not positions and not cash_rows and not trade_rows:
@@ -1169,8 +1178,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if positions:
         conn.executemany(
             "INSERT OR REPLACE INTO positions "
-            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,isin,currency) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)", positions)
+            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,asset_class,last_sync,fx_rate_to_base,isin,currency,multiplier) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", positions)
     conn.execute("DELETE FROM cash_balances")
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
