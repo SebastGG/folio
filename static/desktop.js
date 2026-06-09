@@ -1642,6 +1642,11 @@ function renderPortfolioReport() {
         + '<td>' + fmt(grossExp) + '</td>'
         + '<td style="color:var(--muted)">' + pct(grossExp) + '</td></tr>';
 
+    if ((ibkrPositions || []).some(function(p) { return p.provisional; })) {
+        h += '<tr><td colspan="3" style="color:var(--accent);font-size:9px;padding:5px 6px 0">'
+            + '• Positionen enthalten heutige Trades (vorläufig, bis IBKR-Abrechnung T+1)</td></tr>';
+    }
+
     h += '</tbody></table>';
     el.innerHTML = h;
 }
@@ -1692,8 +1697,9 @@ function ibkrRenderTable() {
             var symHtml = '<span style="font-weight:500;cursor:pointer" title="Yahoo-Symbol setzen" onclick="ibkrEditSymbol(\'' + p.symbol + '\',this)">'
                 + p.symbol + (yahooSym && yahooSym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + yahooSym + '</span>' : ' <span style="color:var(--muted);font-size:10px">✎</span>')
                 + '</span>';
+            var provBadge = p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig, bis T+1-Abrechnung)" style="font-size:9px;color:var(--accent);font-weight:700">•heute</span>' : '';
             html += '<tr>'
-                + '<td>' + symHtml + '</td>'
+                + '<td>' + symHtml + provBadge + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + (isFut ? ' <span title="Notional ' + Math.round(pvEur).toLocaleString('de-DE') + ' €" style="font-size:9px">⚡</span>' : '') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
                 + '<td>' + (isFut ? '—' : cbmEur.toFixed(0)) + '</td>'

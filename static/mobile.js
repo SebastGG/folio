@@ -768,7 +768,7 @@ function mIbkrRenderTable() {
         var pc = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         var qty = p.quantity || 0;
         html += '<tr>'
-            + '<td style="font-weight:500">' + p.symbol + '</td>'
+            + '<td style="font-weight:500">' + p.symbol + (p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig)" style="font-size:8px;color:var(--accent);font-weight:700">•heute</span>' : '') + '</td>'
             + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
             + '<td>' + cbmEur.toFixed(0) + '</td>'
             + '<td>' + pvEur.toFixed(0) + '</td>'

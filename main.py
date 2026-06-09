@@ -774,7 +774,8 @@ def _init_ibkr_tables(db_file: str):
         fx_rate_to_base  REAL DEFAULT 1.0,
         isin             TEXT,
         currency         TEXT,
-        multiplier       REAL DEFAULT 1.0
+        multiplier       REAL DEFAULT 1.0,
+        provisional      INTEGER DEFAULT 0
     )''')
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN fx_rate_to_base REAL DEFAULT 1.0")
@@ -782,6 +783,10 @@ def _init_ibkr_tables(db_file: str):
         pass
     try:
         conn.execute("ALTER TABLE positions ADD COLUMN multiplier REAL DEFAULT 1.0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE positions ADD COLUMN provisional INTEGER DEFAULT 0")
     except Exception:
         pass
     try:
@@ -1100,6 +1105,74 @@ def _parse_confirmations_xml(xml_text: str, now: str, fx_by_ccy: dict) -> list:
             now, (el.get("isin") or "").strip()))
     return rows
 
+def _confirmation_position_deltas(conf_text: str, activity_tids: set, fx_by_ccy: dict) -> dict:
+    """Aggregiert die noch-nicht-abgerechneten Confirmation-Trades (TradeID NICHT in der
+    Activity) je Symbol → Mengen-/Kostenbasis-Änderung für taggleiche Positionen.
+
+    Die Activity-OpenPositions sind EOD/gestern; heutige Trades (in der Confirmation,
+    aber noch nicht in der Activity) werden so auf den gestrigen Stand angerechnet.
+    Morgen stehen sie in der Activity → TradeID dann bekannt → nicht mehr addiert.
+    """
+    recs = {}
+    def add(tid, sym, action, qty, price, mult, ccy, isin, cls):
+        if not sym or not tid or tid in activity_tids:
+            return
+        mult = mult or 1.0
+        fx   = fx_by_ccy.get((ccy or "").upper(), 1.0) if ccy else 1.0
+        signed = abs(qty) if "BUY" in (action or "").upper() else -abs(qty)
+        d = recs.setdefault(sym, {"signed_qty": 0.0, "last_price": price, "multiplier": mult,
+                                  "currency": ccy, "fx": fx, "isin": isin, "asset_class": cls,
+                                  "cost_delta_base": 0.0})
+        d["signed_qty"]     += signed
+        d["last_price"]      = price or d["last_price"]
+        d["multiplier"]      = mult
+        d["fx"]              = fx
+        # Kostenbasis-Effekt in Basiswährung: BUY +Wert, SELL -Wert
+        val_base = abs(price * abs(qty) * mult) * fx
+        d["cost_delta_base"] += val_base if signed > 0 else -val_base
+
+    if conf_text.lstrip()[:1] == "<":
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(conf_text)
+        except Exception:
+            return recs
+        for el in root.iter("TradeConfirm"):
+            lod = (el.get("levelOfDetail") or "").upper()
+            if lod and lod != "EXECUTION":
+                continue
+            add((el.get("tradeID") or "").strip(), (el.get("symbol") or "").strip(),
+                el.get("buySell"), _xml_float(el, "quantity"), _xml_float(el, "price"),
+                _xml_float(el, "multiplier", 1.0), (el.get("currency") or "").strip(),
+                (el.get("isin") or "").strip(), (el.get("assetCategory") or "").strip())
+    else:
+        import csv as _csv
+        cols = None
+        for raw in conf_text.splitlines():
+            if not raw.strip():
+                continue
+            try:
+                p = next(_csv.reader([raw]))
+            except Exception:
+                continue
+            if cols is None:
+                cols = {n: i for i, n in enumerate(p)}
+                continue
+            def g(n, d=""):
+                i = cols.get(n, -1)
+                return p[i].strip() if 0 <= i < len(p) else d
+            if g("LevelOfDetail").upper() not in ("", "EXECUTION"):
+                continue
+            try:
+                qty  = float(g("Quantity", "0").replace(",", "") or "0")
+                prc  = float(g("Price",    "0").replace(",", "") or "0")
+                mult = float(g("Multiplier", "1").replace(",", "") or "1")
+            except ValueError:
+                continue
+            add(g("TradeID"), g("Symbol"), g("Buy/Sell"), qty, prc, mult,
+                g("CurrencyPrimary"), g("ISIN"), g("AssetClass"))
+    return recs
+
 def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
     import csv as csv_mod
@@ -1332,6 +1405,44 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                     conn.commit()
                     conf_count = len(conf_rows)
                 print(f"[IBKR] Trade-Confirmations: {conf_count} Rows")
+
+                # ── Taggleiche Positionen: heutige Confirmation-Trades (TradeID noch nicht
+                # in der Activity) auf den EOD-Stand anrechnen. Self-healing: morgen stehen
+                # sie in der Activity → werden nicht mehr addiert. Provisorische Rows = provisional=1.
+                activity_tids = {t[0] for t in trade_rows}
+                deltas = _confirmation_position_deltas(conf_csv, activity_tids, fx_by_ccy)
+                prov_n = 0
+                for sym, a in deltas.items():
+                    row = conn.execute(
+                        "SELECT quantity, mark_price, multiplier, fx_rate_to_base, cost_basis_money "
+                        "FROM positions WHERE symbol=?", (sym,)).fetchone()
+                    if row:
+                        new_qty = (row["quantity"] or 0) + a["signed_qty"]
+                        if abs(new_qty) < 1e-9:
+                            conn.execute("DELETE FROM positions WHERE symbol=?", (sym,))
+                        else:
+                            mult = row["multiplier"] or a["multiplier"] or 1.0
+                            mark = row["mark_price"] or a["last_price"]
+                            fx   = row["fx_rate_to_base"] or a["fx"]
+                            conn.execute(
+                                "UPDATE positions SET quantity=?, position_value=?, cost_basis_money=?, "
+                                "provisional=1, last_sync=? WHERE symbol=?",
+                                (new_qty, new_qty * mark * mult * fx,
+                                 (row["cost_basis_money"] or 0) + a["cost_delta_base"], now, sym))
+                        prov_n += 1
+                    elif abs(a["signed_qty"]) > 1e-9:
+                        qty, price, mult, fx = a["signed_qty"], a["last_price"], a["multiplier"] or 1.0, a["fx"]
+                        conn.execute(
+                            "INSERT OR REPLACE INTO positions "
+                            "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,"
+                            "asset_class,last_sync,fx_rate_to_base,isin,currency,multiplier,provisional) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                            (sym, qty, price, a["cost_delta_base"], price, qty * price * mult * fx,
+                             a["asset_class"], now, fx, a["isin"], a["currency"], mult))
+                        prov_n += 1
+                if prov_n:
+                    conn.commit()
+                    print(f"[IBKR] Taggleiche Positionen angepasst: {prov_n}")
         except Exception as e:
             print(f"[IBKR] Trade-Confirmations Fehler: {e}")
 
