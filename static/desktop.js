@@ -1547,13 +1547,12 @@ function renderPortfolioReport() {
         var cb  = (p.cost_basis_money || 0) * fx;
         var cls = (p.asset_class || 'OTHER').toUpperCase();
         // Aktueller Wert mit Live-Yahoo-Kurs (sonst IBKR-Wert) — siehe ibkrLiveValue.
+        // Futures: voller Kontraktwert (Notional) zählt mit ins Depot (Steuer = Differenzausgleich,
+        // das ist die andere Sichtweise, separat im Steuer-Report).
         var pv  = ibkrLiveValue(p, ccyFx);
-        // Futures tragen nur ihren Mark-to-Market-G/V zum Kontowert bei (kein Notional);
-        // das Notional erscheint separat unter EXPOSURE. Aktien: Marktwert.
-        var equityVal = (cls === 'FUT') ? (pv - cb) : pv;
         var grp = qty >= 0 ? longG : shortG;
         if (!grp[cls]) grp[cls] = { value: 0, cost: 0, pnl: 0, count: 0 };
-        grp[cls].value += equityVal;
+        grp[cls].value += pv;
         grp[cls].cost  += cb;
         grp[cls].pnl   += pv - cb;
         grp[cls].count++;
@@ -1681,15 +1680,12 @@ function ibkrRenderTable() {
         var ccyFx = ibkrCcyFx();
         ibkrPositions.forEach(function(p) {
             var fx       = p.fx_rate_to_base || 1.0;
-            var isFut    = (p.asset_class || '').toUpperCase() === 'FUT';
             var cbmEur   = (p.cost_basis_money || 0) * fx;   // Einstand aus IBKR
-            var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert / Notional
-            var pnlEur   = pvEur - cbmEur;                   // Futures: = Mark-to-Market-G/V
-            // Futures tragen nur ihren MTM-G/V zum Kontowert bei — Notional steht im EXPOSURE-Block.
-            var equityEur = isFut ? pnlEur : pvEur;
-            var pnlPct   = isFut ? null : (cbmEur ? pnlEur / Math.abs(cbmEur) * 100 : 0);
-            totalValueEur += equityEur;
-            totalCostEur  += isFut ? 0 : cbmEur;
+            var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert / Notional (Futures: voller Kontraktwert)
+            var pnlEur   = pvEur - cbmEur;
+            var pnlPct   = cbmEur ? pnlEur / Math.abs(cbmEur) * 100 : 0;
+            totalValueEur += pvEur;
+            totalCostEur  += cbmEur;
             totalPnlEur   += pnlEur;
             var pColor = pnlEur >= 0 ? '#2d8a4e' : '#c0392b';
             var qty    = p.quantity || 0;
@@ -1700,12 +1696,12 @@ function ibkrRenderTable() {
             var provBadge = p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig, bis T+1-Abrechnung)" style="font-size:9px;color:var(--accent);font-weight:700">•heute</span>' : '';
             html += '<tr>'
                 + '<td>' + symHtml + provBadge + '</td>'
-                + '<td style="color:var(--muted)">' + (p.asset_class || '-') + (isFut ? ' <span title="Notional ' + Math.round(pvEur).toLocaleString('de-DE') + ' €" style="font-size:9px">⚡</span>' : '') + '</td>'
+                + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
-                + '<td>' + (isFut ? '—' : cbmEur.toFixed(0)) + '</td>'
-                + '<td>' + equityEur.toFixed(0) + '</td>'
+                + '<td>' + cbmEur.toFixed(0) + '</td>'
+                + '<td>' + pvEur.toFixed(0) + '</td>'
                 + '<td style="color:' + pColor + '">' + (pnlEur >= 0 ? '+' : '') + pnlEur.toFixed(0) + '</td>'
-                + '<td style="color:' + pColor + '">' + (pnlPct === null ? '—' : (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%') + '</td>'
+                + '<td style="color:' + pColor + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)  + '%</td>'
                 + '</tr>';
         });
     }

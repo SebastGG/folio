@@ -1122,14 +1122,15 @@ def _confirmation_position_deltas(conf_text: str, activity_tids: set, fx_by_ccy:
         signed = abs(qty) if "BUY" in (action or "").upper() else -abs(qty)
         d = recs.setdefault(sym, {"signed_qty": 0.0, "last_price": price, "multiplier": mult,
                                   "currency": ccy, "fx": fx, "isin": isin, "asset_class": cls,
-                                  "cost_delta_base": 0.0})
-        d["signed_qty"]     += signed
-        d["last_price"]      = price or d["last_price"]
-        d["multiplier"]      = mult
-        d["fx"]              = fx
-        # Kostenbasis-Effekt in Basiswährung: BUY +Wert, SELL -Wert
-        val_base = abs(price * abs(qty) * mult) * fx
-        d["cost_delta_base"] += val_base if signed > 0 else -val_base
+                                  "cost_delta_ccy": 0.0})
+        d["signed_qty"]    += signed
+        d["last_price"]     = price or d["last_price"]
+        d["multiplier"]     = mult
+        d["fx"]             = fx
+        # Kostenbasis-Effekt in HANDELSwährung (positions speichert roh, FX erst bei Anzeige):
+        # BUY +Wert, SELL -Wert
+        val_ccy = abs(price * abs(qty) * mult)
+        d["cost_delta_ccy"] += val_ccy if signed > 0 else -val_ccy
 
     if conf_text.lstrip()[:1] == "<":
         import xml.etree.ElementTree as ET
@@ -1424,11 +1425,12 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                             mult = row["multiplier"] or a["multiplier"] or 1.0
                             mark = row["mark_price"] or a["last_price"]
                             fx   = row["fx_rate_to_base"] or a["fx"]
+                            # position_value/cost_basis_money in HANDELSwährung (roh, ohne fx)
                             conn.execute(
                                 "UPDATE positions SET quantity=?, position_value=?, cost_basis_money=?, "
                                 "provisional=1, last_sync=? WHERE symbol=?",
-                                (new_qty, new_qty * mark * mult * fx,
-                                 (row["cost_basis_money"] or 0) + a["cost_delta_base"], now, sym))
+                                (new_qty, new_qty * mark * mult,
+                                 (row["cost_basis_money"] or 0) + a["cost_delta_ccy"], now, sym))
                         prov_n += 1
                     elif abs(a["signed_qty"]) > 1e-9:
                         qty, price, mult, fx = a["signed_qty"], a["last_price"], a["multiplier"] or 1.0, a["fx"]
@@ -1437,7 +1439,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                             "(symbol,quantity,cost_basis_price,cost_basis_money,mark_price,position_value,"
                             "asset_class,last_sync,fx_rate_to_base,isin,currency,multiplier,provisional) "
                             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
-                            (sym, qty, price, a["cost_delta_base"], price, qty * price * mult * fx,
+                            (sym, qty, price, a["cost_delta_ccy"], price, qty * price * mult,
                              a["asset_class"], now, fx, a["isin"], a["currency"], mult))
                         prov_n += 1
                 if prov_n:
