@@ -796,7 +796,7 @@ function renderManageList() {
         var row = document.createElement('div');
         row.className = 'manage-item';
         row.innerHTML = '<span class="sym-label">' + sym + '</span>'
-            + '<input type="number" min="0" value="' + (WEIGHTS[sym] || 0) + '" data-sym="' + sym + '">'
+            + '<input type="number" value="' + (WEIGHTS[sym] || 0) + '" data-sym="' + sym + '" title="negativ = Short">'
             + '<button class="manage-del" onclick="removeTicker(\'' + sym + '\')" title="Entfernen">×</button>';
         var input = row.querySelector('input');
         input.oninput = function() {
@@ -1795,16 +1795,21 @@ async function ibkrSync() {
 }
 
 async function ibkrCreateBasket() {
-    var stk = (ibkrPositions || []).filter(function(p) {
-        return (p.asset_class || '').toUpperCase() === 'STK' && (p.quantity || 0) > 0;
-    });
-    if (stk.length === 0) { alert('Keine Long-Aktien-Positionen gefunden.'); return; }
-
     var weights = {};
-    stk.forEach(function(p) {
-        var sym = ibkrPosYahoo(p);   // ISIN-Mapping → korrekte Notierung (z.B. ASML.AS)
-        if (sym) weights[sym] = Math.abs(p.quantity);
+    (ibkrPositions || []).forEach(function(p) {
+        var cls = (p.asset_class || '').toUpperCase();
+        var qty = p.quantity || 0;
+        if (cls === 'STK' && qty > 0) {
+            var sym = ibkrPosYahoo(p);   // ISIN-Mapping → korrekte Notierung (z.B. ASML.AS)
+            if (sym) weights[sym] = Math.abs(qty);
+        } else if (cls === 'FUT' && qty !== 0) {
+            // Future → fortlaufender Yahoo-Kontrakt (Underlying + "=F", z.B. MNQU6 → MNQ=F).
+            // Gewicht = Kontrakte × Multiplier, Vorzeichen = Richtung (short → negativ = Hedge).
+            var fsym = p.yahoo_symbol || ((p.symbol || '').replace(/[FGHJKMNQUVXZ]\d{1,2}$/, '') + '=F');
+            if (fsym && fsym !== '=F') weights[fsym] = qty * (p.multiplier || 1);
+        }
     });
+    if (Object.keys(weights).length === 0) { alert('Keine geeigneten Positionen (Long-Aktien / Futures) gefunden.'); return; }
 
     // Existiert schon ein IBKR-Basket? → überschreiben oder neu anlegen lassen
     var managed = Object.keys(baskets).filter(function(id) { return baskets[id] && baskets[id].ibkrManaged; });
@@ -1837,9 +1842,15 @@ function ibkrRebuildManagedBaskets() {
         if (!baskets[id] || !baskets[id].ibkrManaged) return;
         var w = {};
         (ibkrPositions || []).forEach(function(p) {
-            if ((p.asset_class || '').toUpperCase() !== 'STK' || (p.quantity || 0) <= 0) return;
-            var sym = ibkrPosYahoo(p);
-            if (sym) w[sym] = Math.abs(p.quantity);
+            var cls = (p.asset_class || '').toUpperCase();
+            var qty = p.quantity || 0;
+            if (cls === 'STK' && qty > 0) {
+                var sym = ibkrPosYahoo(p);
+                if (sym) w[sym] = Math.abs(qty);
+            } else if (cls === 'FUT' && qty !== 0) {
+                var fsym = p.yahoo_symbol || ((p.symbol || '').replace(/[FGHJKMNQUVXZ]\d{1,2}$/, '') + '=F');
+                if (fsym && fsym !== '=F') w[fsym] = qty * (p.multiplier || 1);
+            }
         });
         baskets[id].weights = w;
         changed = true;

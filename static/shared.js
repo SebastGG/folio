@@ -333,8 +333,11 @@ function buildIndex(dataMap, currencies, baseCurrency, fxDataMap) {
     Object.keys(WEIGHTS).forEach(function(sym) { _ptrs[sym] = 0; _last[sym] = null; });
     Object.keys(_fxSorted).forEach(function(pair) { _fxPtrs[pair] = 0; _fxLast[pair] = null; });
 
+    // Brutto-Summe der Gewichte (|w|) als Normierung — bleibt positiv/stabil auch wenn
+    // Short-Gewichte (negativ, z.B. Future-Hedge) dabei sind. portVal subtrahiert Shorts
+    // ohnehin korrekt (Σ Kurs×w×fx), div skaliert nur die absolute Höhe.
     var totalShares = Object.keys(WEIGHTS).reduce(function(sum, sym) {
-        return sum + (WEIGHTS[sym] || 0);
+        return sum + Math.abs(WEIGHTS[sym] || 0);
     }, 0);
     var div = totalShares || 1;
 
@@ -795,7 +798,7 @@ async function loadDbTickers() {
 async function updateAllPrices() {
     var _allT = new Set();
     Object.values(baskets).forEach(function(b) {
-        Object.keys(b.weights || {}).forEach(function(s) { if ((b.weights[s] || 0) > 0) _allT.add(s); });
+        Object.keys(b.weights || {}).forEach(function(s) { if ((b.weights[s] || 0) !== 0) _allT.add(s); });
     });
     var tickers = Array.from(_allT);
     if (tickers.length === 0) return;
@@ -874,7 +877,7 @@ async function fetchTicker(sym) {
 async function loadIndexData() {
     if (typeof showLoading === 'function') showLoading('Lade Index...');
     try {
-        var syms = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) > 0; });
+        var syms = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) !== 0; });
         if (syms.length === 0) {
             allCandles = []; _lastCandles = []; _dataMap = {}; _fxDataMap = {}; tickerCurrencies = {};
             if (typeof renderDesktopChart === 'function') renderDesktopChart([], [], [], null);
@@ -1208,7 +1211,7 @@ function parseTxt(text) {
         var parts = line.split(/[\s,]+/);
         var sym = (parts[0] || '').toUpperCase();
         var w   = parseInt(parts[1] || '1', 10);
-        if (sym && !isNaN(w) && w >= 0) weights[sym] = w;
+        if (sym && !isNaN(w)) weights[sym] = w;   // negativ = Short erlaubt
     });
     return weights;
 }
@@ -1248,7 +1251,7 @@ function markUnsaved() {
  * Wird von Keyboard-Navigation (Desktop) aufgerufen.
  */
 function navigateWatchlist(dir) {
-    var syms = ['index'].concat(Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s]||0) >= 0; }));
+    var syms = ['index'].concat(Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s]||0) !== 0; }));
     var cur  = currentView === 'index' ? 'index' : currentView;
     var idx  = syms.indexOf(cur);
     if (idx < 0) idx = 0;
