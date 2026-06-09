@@ -1904,21 +1904,27 @@ async function settingsLoad() {
             badge.textContent = s.configured ? '✓ konfiguriert' : '✗ nicht konfiguriert';
             badge.className   = 'settings-badge ' + (s.configured ? 'ok' : 'no');
         }
+        // Query-IDs vorbefüllen (nicht geheim) — Token bleibt leer
+        var qf = document.getElementById('set-query-id');
+        if (qf) qf.value = s.query_id || '';
+        var tf = document.getElementById('set-query-id-trades');
+        if (tf) tf.value = s.query_id_trades || '';
     } catch (e) { /* ignore */ }
 }
 
 /** Speichert Flex Token + Query ID (verschlüsselt, pro User) und aktualisiert den Status. */
 async function settingsSaveIbkr(btn) {
-    var token = (document.getElementById('set-flex-token').value || '').trim();
-    var qid   = (document.getElementById('set-query-id').value   || '').trim();
-    var msg   = document.getElementById('set-ibkr-msg');
+    var token  = (document.getElementById('set-flex-token').value     || '').trim();
+    var qid    = (document.getElementById('set-query-id').value       || '').trim();
+    var qidTr  = (document.getElementById('set-query-id-trades').value || '').trim();
+    var msg    = document.getElementById('set-ibkr-msg');
     function setMsg(text, cls) { if (msg) { msg.textContent = text; msg.className = 'settings-msg ' + (cls || ''); } }
 
-    if (!token || !qid) { setMsg('Token und Query-ID erforderlich', 'err'); return; }
+    if (!qid) { setMsg('Query-ID (Activity) erforderlich', 'err'); return; }
     if (btn) btn.disabled = true;
     setMsg('Speichere…', '');
     try {
-        var res = await ibkrSaveConfig(token, qid);
+        var res = await ibkrSaveConfig(token, qid, qidTr);
         if (res && res.ok) {
             setMsg('✓ Gespeichert', 'ok');
             document.getElementById('set-flex-token').value = '';  // Token nicht im Klartext stehen lassen

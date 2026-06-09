@@ -1348,11 +1348,11 @@ async function ibkrSaveIsinMap(isin, yahooSymbol, displayName) {
     return await r.json();
 }
 
-async function ibkrSaveConfig(token, queryId) {
+async function ibkrSaveConfig(token, queryId, queryIdTrades) {
     var r = await fetch('/api/ibkr/config', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({flex_token: token, query_id: queryId})
+        body: JSON.stringify({flex_token: token, query_id: queryId, query_id_trades: queryIdTrades || ''})
     });
     return await r.json();
 }

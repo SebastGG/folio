@@ -523,8 +523,12 @@
         <input type="password" id="set-flex-token" placeholder="Neuen Token eingeben…" autocomplete="off">
       </label>
       <label class="settings-field">
-        <span>Query ID</span>
+        <span>Query ID (Activity)</span>
         <input type="text" id="set-query-id" placeholder="z.B. 987654" autocomplete="off">
+      </label>
+      <label class="settings-field">
+        <span>Query ID (Handelsbestätigungen, optional)</span>
+        <input type="text" id="set-query-id-trades" placeholder="z.B. 123456 — taggleiche Trades" autocomplete="off">
       </label>
       <div class="settings-actions">
         <button class="refresh-btn" onclick="settingsSaveIbkr(this)">Speichern</button>
@@ -533,6 +537,8 @@
       <p class="settings-hint" style="margin-top:12px;">
         Anlegen in IBKR: <b>Account Management → Settings → Flex Web Service</b> aktivieren (ergibt den Token),
         dann unter <b>Flex Queries</b> eine <i>Activity</i>-Query mit Positionen, Cash und Trades erstellen (ergibt die Query-ID).
+        Für taggleiche Trades zusätzlich eine <i>Trade Confirmation</i>-Flex-Query anlegen (gleicher Token) und deren ID
+        ins zweite Feld eintragen — diese Trades erscheinen sofort und werden T+1 vom Activity-Sync mit korrektem Kurs ersetzt.
         Aus Sicherheitsgründen wird ein gespeicherter Token hier nie wieder angezeigt — zum Ändern einfach neu eingeben.
       </p>
     </div>

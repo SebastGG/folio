@@ -836,57 +836,73 @@ def _init_ibkr_tables(db_file: str):
 
 @app.get("/api/ibkr/config/status")
 async def ibkr_config_status(request: Request):
-    """Gibt zurück ob IBKR konfiguriert ist (ohne Credentials zu senden)."""
+    """Gibt Konfig-Status + Query-IDs zurück (Token bleibt geheim)."""
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
     conn  = get_db(files["db"])
-    keys  = {r["key"] for r in conn.execute("SELECT key FROM ibkr_config").fetchall()}
+    cfg   = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
     conn.close()
-    return JSONResponse(content={"configured": "flex_token" in keys and "query_id" in keys})
+    def _dec(k):
+        try:
+            return _ibkr_decrypt(cfg[k], files["data_dir"]) if k in cfg else ""
+        except Exception:
+            return ""
+    return JSONResponse(content={
+        "configured":        "flex_token" in cfg and "query_id" in cfg,
+        "trades_configured": "query_id_trades" in cfg,
+        "query_id":          _dec("query_id"),          # Query-IDs sind nicht geheim
+        "query_id_trades":   _dec("query_id_trades"),
+    })
 
 @app.post("/api/ibkr/config")
 async def set_ibkr_config(request: Request):
-    """Speichert Flex Token + Query ID AES-verschlüsselt."""
+    """Speichert Flex Token + Query-ID(s) AES-verschlüsselt.
+
+    Token ist optional, sofern bereits einer gespeichert ist (wird nie im Klartext
+    zurückgegeben). `query_id_trades` (Handelsbestätigungen) ist optional — leer = entfernen.
+    """
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
     body  = await request.json()
-    token = (body.get("flex_token") or "").strip()
-    qid   = (body.get("query_id")   or "").strip()
-    if not token or not qid:
-        return JSONResponse({"ok": False, "error": "flex_token und query_id erforderlich"}, status_code=400)
-    enc_token = _ibkr_encrypt(token, files["data_dir"])
-    enc_qid   = _ibkr_encrypt(qid,   files["data_dir"])
-    conn = get_db(files["db"])
-    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('flex_token', ?)", (enc_token,))
-    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id',   ?)", (enc_qid,))
+    token      = (body.get("flex_token")      or "").strip()
+    qid        = (body.get("query_id")        or "").strip()
+    qid_trades = (body.get("query_id_trades") or "").strip()
+
+    conn     = get_db(files["db"])
+    existing = {r["key"] for r in conn.execute("SELECT key FROM ibkr_config").fetchall()}
+    if not token and "flex_token" not in existing:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "flex_token erforderlich"}, status_code=400)
+    if not qid:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "query_id erforderlich"}, status_code=400)
+
+    if token:
+        conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('flex_token', ?)",
+                     (_ibkr_encrypt(token, files["data_dir"]),))
+    conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id', ?)",
+                 (_ibkr_encrypt(qid, files["data_dir"]),))
+    if qid_trades:
+        conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id_trades', ?)",
+                     (_ibkr_encrypt(qid_trades, files["data_dir"]),))
+    else:
+        conn.execute("DELETE FROM ibkr_config WHERE key='query_id_trades'")
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
 
-def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
-    """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
-    import csv as csv_mod
-    import datetime as dt_
+def _flex_fetch_csv(flex_token: str, query_id: str) -> tuple:
+    """Holt eine Flex-Query als CSV-Text. Gibt (csv_text, error) zurück (eins ist None)."""
     import time as time_
     import urllib.request as urlreq
     import urllib.error
 
-    conn = get_db(db_file)
-    cfg  = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
-    conn.close()
-
-    if "flex_token" not in cfg or "query_id" not in cfg:
-        return {"ok": False, "error": "IBKR nicht konfiguriert"}
-
-    flex_token = _ibkr_decrypt(cfg["flex_token"], data_dir)
-    query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
-
     # Step 1: SendRequest → ReferenceCode (bis zu 3 Versuche, 10s Pause)
     url1 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/SendRequest?v=3&t={flex_token}&q={query_id}"
     ref_code = None
-    last_err  = ""
+    last_err = ""
     for attempt1 in range(3):
         try:
             req1 = urlreq.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
@@ -897,7 +913,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             if attempt1 < 2:
                 time_.sleep(10)
                 continue
-            return {"ok": False, "error": last_err}
+            return None, last_err
 
         print(f"[IBKR] SendRequest Antwort (Versuch {attempt1+1}): {xml1[:500]}")
         m = re.search(r"<ReferenceCode>(\w+)</ReferenceCode>", xml1)
@@ -911,10 +927,9 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             time_.sleep(10)
 
     if not ref_code:
-        return {"ok": False, "error": f"Kein ReferenceCode: {last_err}"}
+        return None, f"Kein ReferenceCode: {last_err}"
 
     # Step 2: GetStatement — retry bis zu 5× bei "Processing"
-    csv_text = None
     for attempt in range(5):
         url2 = f"https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement?v=3&t={flex_token}&q={ref_code}"
         try:
@@ -922,18 +937,86 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             with urlreq.urlopen(req2, timeout=30) as resp:
                 content = resp.read().decode("utf-8")
         except urllib.error.URLError as e:
-            return {"ok": False, "error": f"GetStatement fehlgeschlagen: {e}"}
+            return None, f"GetStatement fehlgeschlagen: {e}"
 
         if "<ErrorCode>1019</ErrorCode>" in content or "<Status>Processing</Status>" in content:
             if attempt < 4:
                 time_.sleep(5)
                 continue
-            return {"ok": False, "error": "IBKR verarbeitet noch — bitte in 30s erneut versuchen"}
-        csv_text = content
-        break
+            return None, "IBKR verarbeitet noch — bitte in 30s erneut versuchen"
+        return content, None
 
-    if not csv_text:
-        return {"ok": False, "error": "Leere Antwort von IBKR"}
+    return None, "Leere Antwort von IBKR"
+
+def _parse_trade_confirmations(csv_text: str, now: str, fx_by_ccy: dict) -> list:
+    """Parst das *flache* Trade-Confirmation-CSV (eine Header-Zeile, keine Sektionen).
+
+    Liefert dieselben trade_rows-Tupel wie der Activity-Parser, gekeyt auf TradeID,
+    sodass der T+1-Activity-Sync sie per INSERT OR REPLACE ersetzt. FXRateToBase fehlt
+    im Confirmation-CSV → Kurs aus den Positionen ableiten (fx_by_ccy), sonst 1.0.
+    """
+    import csv as csv_mod
+    rows = []
+    cols = None
+    for raw_line in csv_text.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            parts = next(csv_mod.reader([raw_line]))
+        except Exception:
+            continue
+        if cols is None:                       # erste nicht-leere Zeile = Header
+            cols = {name: i for i, name in enumerate(parts)}
+            continue
+        def g(name, default=""):
+            i = cols.get(name, -1)
+            return parts[i].strip() if 0 <= i < len(parts) else default
+        # Nur Ausführungen (keine Order-Aggregate), nur echte Trades
+        if g("LevelOfDetail").upper() not in ("", "EXECUTION"):
+            continue
+        symbol = g("Symbol")
+        tid    = g("TradeID")
+        if not symbol or not tid:
+            continue
+        try:
+            qty = float(g("Quantity", "0").replace(",", "") or "0")
+            prc = float(g("Price",    "0").replace(",", "") or "0")
+            val = float(g("Proceeds", "0").replace(",", "") or "0")
+            com = float(g("Commission", "0").replace(",", "") or "0")
+        except ValueError:
+            continue
+        action   = g("Buy/Sell")
+        currency = g("CurrencyPrimary")
+        fx       = fx_by_ccy.get(currency.upper(), 1.0) if currency else 1.0
+        raw_date = g("TradeDate")
+        if len(raw_date) == 8 and raw_date.isdigit():
+            trade_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+        else:
+            trade_date = raw_date[:10]
+        rows.append((tid, symbol, action, abs(qty), prc, abs(val), com,
+                     currency, fx, trade_date, g("AssetClass"), now, g("ISIN")))
+    return rows
+
+def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
+    """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
+    import csv as csv_mod
+    import datetime as dt_
+    import urllib.request as urlreq
+    import urllib.error
+
+    conn = get_db(db_file)
+    cfg  = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
+    conn.close()
+
+    if "flex_token" not in cfg or "query_id" not in cfg:
+        return {"ok": False, "error": "IBKR nicht konfiguriert"}
+
+    flex_token = _ibkr_decrypt(cfg["flex_token"], data_dir)
+    query_id   = _ibkr_decrypt(cfg["query_id"],   data_dir)
+
+    csv_text, err = _flex_fetch_csv(flex_token, query_id)
+    if err:
+        return {"ok": False, "error": err}
 
     # Spalten-Indizes dynamisch aus HEADER-Zeilen ermitteln
     section_headers: dict = {}
@@ -994,7 +1077,9 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
 
         # ── TRNT / Trade: Trades ───────────────────────────────────────
         if section in ("TRNT", "Trade", "Trades"):
-            i_tid  = cols.get("TransactionID", -1)
+            # TradeID als Dedup-Key (deckt sich mit der Trade-Confirmation-Query),
+            # Fallback TransactionID, dann synthetisch.
+            i_tid  = cols.get("TradeID", cols.get("TransactionID", -1))
             i_sym  = cols.get("Symbol", -1)
             i_act  = cols.get("Buy/Sell", cols.get("Action", -1))
             i_qty  = cols.get("Quantity", -1)
@@ -1090,11 +1175,42 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if cash_rows:
         conn.executemany("INSERT OR REPLACE INTO cash_balances VALUES (?,?,?)", cash_rows)
     if trade_rows:
+        # Migration/Cleanup: alte (per TransactionID gekeyte) Duplikate im Activity-Fenster
+        # entfernen, bevor die per TradeID gekeyten Rows neu eingespielt werden. Trades
+        # ausserhalb des Fensters (aelter) bleiben unangetastet.
+        min_date = min(t[9] for t in trade_rows if t[9])
+        if min_date:
+            conn.execute("DELETE FROM trades WHERE trade_date >= ?", (min_date,))
         conn.executemany(
             "INSERT OR REPLACE INTO trades "
             "(transaction_id,symbol,action,quantity,price,value,commission,currency,fx_rate,trade_date,asset_class,last_sync,isin) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", trade_rows)
     conn.commit()
+
+    # ── Trade-Confirmations (2. Flex-Query): taggleiche Trades ──────────────────────
+    # Separate Query (gleicher Token) im flachen CSV-Format. Per TradeID gekeyt → die
+    # T+1-Activity-Trades ersetzen sie spaeter mit korrektem FXRateToBase. INSERT OR
+    # IGNORE, damit bereits vorhandene (authoritative) Activity-Rows nicht ueberschrieben werden.
+    conf_count = 0
+    if "query_id_trades" in cfg:
+        try:
+            qid_trades = _ibkr_decrypt(cfg["query_id_trades"], data_dir)
+            conf_csv, conf_err = _flex_fetch_csv(flex_token, qid_trades)
+            if conf_err:
+                print(f"[IBKR] Trade-Confirmations uebersprungen: {conf_err}")
+            else:
+                fx_by_ccy = {(p[10] or "").upper(): p[8] for p in positions if p[10] and p[8]}
+                conf_rows = _parse_trade_confirmations(conf_csv, now, fx_by_ccy)
+                if conf_rows:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO trades "
+                        "(transaction_id,symbol,action,quantity,price,value,commission,currency,fx_rate,trade_date,asset_class,last_sync,isin) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", conf_rows)
+                    conn.commit()
+                    conf_count = len(conf_rows)
+                print(f"[IBKR] Trade-Confirmations: {conf_count} Rows")
+        except Exception as e:
+            print(f"[IBKR] Trade-Confirmations Fehler: {e}")
 
     # ISIN → Yahoo-Symbol automatisch auflösen (Mapping aus der CSV ableiten).
     # Nur fehlende oder auto-aufgelöste Einträge — manuelle (auto=0) bleiben fix.
@@ -1136,7 +1252,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         print(f"[IBKR] ISIN auto-resolve übersprungen: {e}")
 
     conn.close()
-    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows), "trade_count": len(trade_rows), "last_sync": now}
+    return {"ok": True, "count": len(positions), "cash_count": len(cash_rows),
+            "trade_count": len(trade_rows), "confirm_count": conf_count, "last_sync": now}
 
 
 @app.get("/api/ibkr/sync")
