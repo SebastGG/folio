@@ -1002,6 +1002,104 @@ def _parse_trade_confirmations(csv_text: str, now: str, fx_by_ccy: dict) -> list
                      currency, fx, trade_date, g("AssetClass"), now, g("ISIN")))
     return rows
 
+def _xml_float(el, name, default=0.0):
+    v = el.get(name, "")
+    try:
+        return float(v) if v not in ("", None) else default
+    except (ValueError, TypeError):
+        return default
+
+def _xml_date(raw):
+    raw = (raw or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return raw[:10]
+
+def _parse_activity_xml(xml_text: str, now: str):
+    """Parst die Activity-Flex-*XML* (OpenPositions / CashReport / Trades).
+
+    Liefert (positions, cash_rows, trade_rows) im selben Tupel-Format wie der CSV-Parser.
+    """
+    import xml.etree.ElementTree as ET
+    positions, cash_rows, trade_rows = [], [], []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception as e:
+        print(f"[IBKR] XML-Parse-Fehler (Activity): {e}")
+        return positions, cash_rows, trade_rows
+
+    for el in root.iter("OpenPosition"):
+        sym = (el.get("symbol") or "").strip()
+        if not sym:
+            continue
+        positions.append((
+            sym, _xml_float(el, "position"), _xml_float(el, "costBasisPrice"),
+            _xml_float(el, "costBasisMoney"), _xml_float(el, "markPrice"),
+            _xml_float(el, "positionValue"), (el.get("assetCategory") or "").strip(),
+            now, _xml_float(el, "fxRateToBase", 1.0) or 1.0, (el.get("isin") or "").strip(),
+            (el.get("currency") or "").strip(), _xml_float(el, "multiplier", 1.0) or 1.0))
+
+    for el in root.iter("CashReportCurrency"):
+        cur = (el.get("currency") or "").strip()
+        if not cur:
+            continue
+        key = "BASE" if cur == "BASE_SUMMARY" else cur
+        cash_rows.append((key, _xml_float(el, "endingCash"), now))
+
+    for el in root.iter("Trade"):
+        sym = (el.get("symbol") or "").strip()
+        action = (el.get("buySell") or "").strip()
+        if not sym or not action:
+            continue
+        lod = (el.get("levelOfDetail") or "").upper()
+        if lod and lod != "EXECUTION":          # Order-/Lot-Aggregate überspringen
+            continue
+        td  = _xml_date(el.get("tradeDate"))
+        tid = (el.get("tradeID") or "").strip() or f"{sym}_{td}_{action}_{el.get('quantity')}_{el.get('tradePrice')}"
+        val = el.get("tradeMoney")
+        if val in ("", None):
+            val = el.get("proceeds")
+        try:
+            valf = abs(float(val)) if val not in ("", None) else 0.0
+        except (ValueError, TypeError):
+            valf = 0.0
+        trade_rows.append((
+            tid, sym, action, abs(_xml_float(el, "quantity")), _xml_float(el, "tradePrice"),
+            valf, _xml_float(el, "ibCommission"), (el.get("currency") or "").strip(),
+            _xml_float(el, "fxRateToBase", 1.0) or 1.0, td,
+            (el.get("assetCategory") or "").strip(), now, (el.get("isin") or "").strip()))
+
+    return positions, cash_rows, trade_rows
+
+def _parse_confirmations_xml(xml_text: str, now: str, fx_by_ccy: dict) -> list:
+    """Parst die Trade-Confirmation-Flex-*XML* (<TradeConfirm levelOfDetail=EXECUTION>).
+
+    <Order>-Aggregate werden ignoriert (anderer Tag). Format wie _parse_trade_confirmations.
+    """
+    import xml.etree.ElementTree as ET
+    rows = []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception as e:
+        print(f"[IBKR] XML-Parse-Fehler (Confirmations): {e}")
+        return rows
+    for el in root.iter("TradeConfirm"):
+        lod = (el.get("levelOfDetail") or "").upper()
+        if lod and lod != "EXECUTION":
+            continue
+        sym = (el.get("symbol") or "").strip()
+        tid = (el.get("tradeID") or "").strip()
+        if not sym or not tid:
+            continue
+        ccy = (el.get("currency") or "").strip()
+        fx  = fx_by_ccy.get(ccy.upper(), 1.0) if ccy else 1.0
+        rows.append((
+            tid, sym, (el.get("buySell") or "").strip(), abs(_xml_float(el, "quantity")),
+            _xml_float(el, "price"), abs(_xml_float(el, "proceeds")), _xml_float(el, "commission"),
+            ccy, fx, _xml_date(el.get("tradeDate")), (el.get("assetCategory") or "").strip(),
+            now, (el.get("isin") or "").strip()))
+    return rows
+
 def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
     import csv as csv_mod
@@ -1023,15 +1121,18 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     if err:
         return {"ok": False, "error": err}
 
-    # Spalten-Indizes dynamisch aus HEADER-Zeilen ermitteln
-    section_headers: dict = {}
-
+    now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     positions  = []
     cash_rows  = []
     trade_rows = []
-    now = dt_.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    is_xml = csv_text.lstrip()[:1] == "<"
 
-    for raw_line in csv_text.splitlines():
+    if is_xml:
+        positions, cash_rows, trade_rows = _parse_activity_xml(csv_text, now)
+
+    # CSV-Fallback (HEADER/DATA-Sektionsformat) — bei XML übersprungen
+    section_headers: dict = {}
+    for raw_line in (csv_text.splitlines() if not is_xml else []):
         if not raw_line.strip():
             continue
         try:
@@ -1171,7 +1272,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
 
     print(f"[IBKR] Positionen: {len(positions)}, Cash: {len(cash_rows)}, Trades: {len(trade_rows)}")
     if not positions and not cash_rows and not trade_rows:
-        return {"ok": False, "error": "Keine DATA-Zeilen im CSV gefunden — prüfe Flex-Query-Konfiguration"}
+        return {"ok": False, "error": "Keine Daten gefunden — prüfe Flex-Query-Konfiguration"}
 
     conn = get_db(db_file)
     conn.execute("DELETE FROM positions")
@@ -1197,7 +1298,7 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     conn.commit()
 
     # ── Trade-Confirmations (2. Flex-Query): taggleiche Trades ──────────────────────
-    # Separate Query (gleicher Token) im flachen CSV-Format. Per TradeID gekeyt → die
+    # Separate Query (gleicher Token), XML oder flaches CSV. Per TradeID gekeyt → die
     # T+1-Activity-Trades ersetzen sie spaeter mit korrektem FXRateToBase. INSERT OR
     # IGNORE, damit bereits vorhandene (authoritative) Activity-Rows nicht ueberschrieben werden.
     conf_count = 0
@@ -1219,7 +1320,10 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
                 for p in positions:
                     if p[10] and p[8]:
                         fx_by_ccy[(p[10] or "").upper()] = p[8]
-                conf_rows = _parse_trade_confirmations(conf_csv, now, fx_by_ccy)
+                if conf_csv.lstrip()[:1] == "<":
+                    conf_rows = _parse_confirmations_xml(conf_csv, now, fx_by_ccy)
+                else:
+                    conf_rows = _parse_trade_confirmations(conf_csv, now, fx_by_ccy)
                 if conf_rows:
                     conn.executemany(
                         "INSERT OR IGNORE INTO trades "
