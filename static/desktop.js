@@ -1826,21 +1826,25 @@ function ibkrRenderTrades() {
         return;
     }
     var html = '';
-    var stkTrades = ibkrTrades.filter(function(t) { return (t.asset_class || '').toUpperCase() === 'STK'; });
-    if (stkTrades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center;">Keine Aktien-Trades — Sync durchführen</td></tr>';
+    var shownTrades = ibkrTrades.filter(function(t) {
+        var c = (t.asset_class || '').toUpperCase();
+        return c === 'STK' || c === 'FUT';
+    });
+    if (shownTrades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="padding:10px;color:var(--muted);text-align:center;">Keine Trades — Sync durchführen</td></tr>';
         return;
     }
-    stkTrades.forEach(function(t) {
+    shownTrades.forEach(function(t) {
         var fx      = t.fx_rate || 1;
         var valEur  = Math.abs(t.value || 0) * fx;
         var comEur  = Math.abs(t.commission || 0) * fx;
         var isBuy   = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
         var actColor = isBuy ? '#2d8a4e' : '#c0392b';
         var actLabel = isBuy ? 'K' : 'V';
+        var isFut    = (t.asset_class || '').toUpperCase() === 'FUT';
         html += '<tr>'
             + '<td style="color:var(--muted)">' + (t.trade_date || '').slice(0, 10) + '</td>'
-            + '<td style="font-weight:500">' + (t.symbol || '') + '</td>'
+            + '<td style="font-weight:500">' + (t.symbol || '') + (isFut ? ' <span style="font-size:9px;color:var(--muted);font-weight:600">FUT</span>' : '') + '</td>'
             + '<td style="color:' + actColor + ';font-weight:700;text-align:center">' + actLabel + '</td>'
             + '<td style="text-align:right">' + Math.abs(t.quantity || 0) + '</td>'
             + '<td style="text-align:right">' + (t.price || 0).toFixed(2) + '</td>'

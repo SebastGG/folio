@@ -1199,7 +1199,17 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             if conf_err:
                 print(f"[IBKR] Trade-Confirmations uebersprungen: {conf_err}")
             else:
-                fx_by_ccy = {(p[10] or "").upper(): p[8] for p in positions if p[10] and p[8]}
+                # FX je Waehrung: zuletzt gesyncte Trades (deckt z.B. USD-Futures ohne
+                # offene USD-Position ab), Positionen ueberschreiben (aktuellster Kurs).
+                fx_by_ccy = {}
+                for r in conn.execute("SELECT currency, fx_rate FROM trades "
+                                      "WHERE fx_rate IS NOT NULL ORDER BY trade_date").fetchall():
+                    c = (r["currency"] or "").upper()
+                    if c and r["fx_rate"]:
+                        fx_by_ccy[c] = r["fx_rate"]
+                for p in positions:
+                    if p[10] and p[8]:
+                        fx_by_ccy[(p[10] or "").upper()] = p[8]
                 conf_rows = _parse_trade_confirmations(conf_csv, now, fx_by_ccy)
                 if conf_rows:
                     conn.executemany(
