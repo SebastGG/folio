@@ -3036,6 +3036,7 @@ var _SCR = {
     pollTimer: null,
     indexes:   [],   // alle verfügbaren Indizes
     defaults:  ['Russell 2000'],
+    results:   {},   // letztes fertiges Ergebnis  { sector: [tickers] }
 };
 
 async function screenerInit() {
@@ -3125,6 +3126,7 @@ async function screenerStart() {
     _scrMsg('');
     document.getElementById('scr-btn-run').disabled = true;
     document.getElementById('scr-btn-export').disabled = true;
+    document.getElementById('scr-btn-baskets').disabled = true;
     document.getElementById('scr-log-card').style.display = '';
     document.getElementById('scr-results-card').style.display = 'none';
     document.getElementById('scr-log').textContent = '';
@@ -3197,9 +3199,11 @@ async function _scrPoll() {
         // done
         _scrSetState('fertig', 'ok');
         _scrMsg('Screening abgeschlossen', 'ok');
+        _SCR.results = s.results || {};
         document.getElementById('scr-btn-run').disabled = false;
         document.getElementById('scr-btn-export').disabled = false;
-        _scrRenderResults(s.results || {});
+        document.getElementById('scr-btn-baskets').disabled = false;
+        _scrRenderResults(_SCR.results);
     } catch (e) {
         _SCR.pollTimer = setTimeout(_scrPoll, 3000);
     }
@@ -3242,4 +3246,66 @@ function _scrRenderResults(results) {
 function screenerExport() {
     if (!_SCR.jobId) return;
     window.location.href = '/api/screener/export/' + _SCR.jobId;
+}
+
+/* Legt pro Sektor einen Basket an (equal weight, qty=1 je Ticker).
+   Name: "Screener {Sektor} {YYYY-MM-DD}". Existiert ein Basket mit
+   identischem Namen, werden dessen Gewichte überschrieben. */
+async function screenerToBaskets() {
+    var results = _SCR.results || {};
+    var sectors = Object.keys(results).filter(function (s) {
+        return (results[s] || []).length > 0;
+    });
+    if (!sectors.length) {
+        _scrMsg('Kein Ergebnis zum Übernehmen', 'err');
+        return;
+    }
+
+    var d = new Date();
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    var datum = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+
+    // Bestehende Baskets nach Name indexieren (für Overwrite)
+    var byName = {};
+    Object.keys(baskets).forEach(function (id) {
+        if (baskets[id] && baskets[id].name) byName[baskets[id].name] = id;
+    });
+
+    var created = 0, updated = 0, firstId = null;
+    sectors.forEach(function (sector, i) {
+        var tickers = results[sector];
+        var weights = {};
+        tickers.forEach(function (t) { weights[t] = 1; });
+
+        var name = 'Screener ' + sector + ' ' + datum;
+        var existingId = byName[name];
+        if (existingId) {
+            baskets[existingId].weights = weights;
+            updated++;
+            if (!firstId) firstId = existingId;
+        } else {
+            var id = 'basket_' + (Date.now() + i);  // +i = Kollisionen vermeiden
+            baskets[id] = {
+                name: name,
+                weights: weights,
+                period: 180, tf: '1D',
+                perfSinceDate: '',
+                indicators: { ma50: false, ma200: false, reg: false },
+                logScale: false,
+            };
+            created++;
+            if (!firstId) firstId = id;
+        }
+    });
+
+    try {
+        await saveBasketsToServer();
+        if (typeof renderBasketSelect === 'function') renderBasketSelect();
+        var summary = [];
+        if (created) summary.push(created + ' neu');
+        if (updated) summary.push(updated + ' aktualisiert');
+        _scrMsg('Baskets: ' + summary.join(', '), 'ok');
+    } catch (e) {
+        _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
+    }
 }
