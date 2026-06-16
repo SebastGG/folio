@@ -32,9 +32,11 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+
+import screener
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # ── Konfiguration ──────────────────────────────────────────────────────────────
@@ -1791,4 +1793,67 @@ async def tax_report_konvex_pdf(request: Request, year: str = ""):
     except Exception as e:
         print(f"tax_report_konvex_pdf error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ── Screener ──────────────────────────────────────────────────────────────────
+# Logik in screener.py. Jobs laufen im Background-Thread; Frontend pollt /status.
+
+@app.get("/api/screener/config")
+async def screener_config(request: Request):
+    get_user(request)
+    return {"indexes": list(screener.INDEXES.keys()),
+            "sectors": list(screener.SECTORS.keys())}
+
+
+@app.post("/api/screener/run")
+async def screener_run(request: Request):
+    get_user(request)
+    body = await request.json()
+    index_names = body.get("indexes") or []
+    if not isinstance(index_names, list) or not index_names:
+        return JSONResponse({"ok": False, "error": "Mindestens einen Index auswählen"},
+                            status_code=400)
+
+    unit = body.get("unit", "Mrd $")
+    multiplier = 1_000_000_000 if unit == "Mrd $" else 1_000_000
+    try:
+        mn = float(body.get("cap_min", 0) or 0)
+        mx = float(body.get("cap_max", 0) or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Ungültiger MarktCap-Wert"},
+                            status_code=400)
+    if mn > 0 and mx > 0 and mn >= mx:
+        return JSONResponse({"ok": False, "error": "Min muss kleiner sein als Max"},
+                            status_code=400)
+
+    cap_min = int(mn * multiplier) if mn > 0 else None
+    cap_max = int(mx * multiplier) if mx > 0 else None
+
+    job_id = screener.start_job(index_names, cap_min, cap_max, unit)
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/api/screener/status/{job_id}")
+async def screener_status(job_id: str, request: Request):
+    get_user(request)
+    s = screener.get_status(job_id)
+    if s is None:
+        return JSONResponse({"ok": False, "error": "Job nicht gefunden"}, status_code=404)
+    return {"ok": True, **s}
+
+
+@app.get("/api/screener/export/{job_id}")
+async def screener_export(job_id: str, request: Request):
+    get_user(request)
+    s = screener.get_status(job_id)
+    if s is None:
+        return JSONResponse({"ok": False, "error": "Job nicht gefunden"}, status_code=404)
+    if s["status"] != "done":
+        return JSONResponse({"ok": False, "error": "Screening läuft noch"}, status_code=409)
+    text = screener.format_tradingview(s["results"])
+    return PlainTextResponse(
+        text,
+        headers={"Content-Disposition":
+                 'attachment; filename="Screening_Ergebnis.txt"'},
+    )
 

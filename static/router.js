@@ -34,7 +34,7 @@ var PAGES = [
     },
     {
         id: 'screener', label: 'Screener', icon: '🔍',
-        onShow: null   // Platzhalter — wird später befüllt
+        onShow: function () { if (typeof screenerInit === 'function') screenerInit(); }
     },
     {
         id: 'settings', label: 'Einstellungen', icon: '⚙',

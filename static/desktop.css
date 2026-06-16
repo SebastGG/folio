@@ -515,3 +515,85 @@ footer {
 /* ── IBKR Modal ────────────────────────────────────────────────────────────── */
 #ibkrModal { display: none; }
 #ibkrModal.open { display: flex; }
+
+/* ── Screener-Seite ───────────────────────────────────────────────────────── */
+#view-screener .settings-wrap { align-items: stretch; }
+.scr-card { max-width: none; }
+.scr-row {
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.scr-row:last-of-type { border-bottom: none; }
+.scr-label {
+  width: 90px; flex-shrink: 0; padding-top: 4px;
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.scr-checks { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.scr-checks label {
+  display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer; user-select: none;
+}
+.scr-checks input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.scr-cap { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.scr-cap label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.scr-cap input[type="number"], .scr-cap select {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 6px 8px; border-radius: 4px; outline: none; width: 90px;
+}
+.scr-cap select { width: 90px; cursor: pointer; }
+.scr-cap input[type="number"]:focus, .scr-cap select:focus { border-color: var(--accent); }
+.scr-cap .settings-hint { margin-left: 6px; }
+
+.scr-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  padding: 8px 16px; cursor: pointer; border-radius: 4px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+}
+.scr-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.scr-btn:disabled { opacity: .5; cursor: not-allowed; }
+.scr-btn-run { background: var(--accent); color: white; border-color: var(--accent); }
+.scr-btn-run:hover:not(:disabled) { opacity: .9; color: white; }
+.scr-btn-run:disabled { background: var(--muted); border-color: var(--muted); color: white; }
+
+.scr-progress-wrap {
+  margin-top: 14px; height: 6px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 3px; overflow: hidden;
+}
+.scr-progress-bar {
+  height: 100%; width: 0%; background: var(--accent);
+  transition: width .3s ease;
+}
+
+.scr-log {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  padding: 12px 14px; max-height: 280px; overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.scr-results { display: flex; flex-direction: column; gap: 10px; }
+.scr-sector {
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); padding: 10px 12px;
+}
+.scr-sector-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 6px;
+}
+.scr-sector-name { font-weight: 700; font-size: 12px; }
+.scr-sector-count {
+  font-size: 10px; color: var(--muted);
+  background: var(--surface); padding: 1px 8px; border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.scr-ticker-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.scr-ticker {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; padding: 2px 7px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+}
+
+.settings-badge.run { background: rgba(45,107,62,.12); color: var(--accent); }
+.settings-badge.err { background: rgba(192,57,43,.10); color: var(--red); }

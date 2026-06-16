@@ -3025,3 +3025,221 @@ async function _taxDeleteFile(kind, name) {
     // Neu auswerten aus dem verbleibenden Bestand (aktualisiert Liste + Ergebnisse)
     _taxRun(keys[0] || 'steuer4', null);
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ *  SCREENER — Sektor-Screening (Finviz + yfinance), Background-Job + Polling
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+var _SCR = {
+    inited:    false,
+    jobId:     null,
+    pollTimer: null,
+    indexes:   [],   // alle verfügbaren Indizes
+    defaults:  ['Russell 2000'],
+};
+
+async function screenerInit() {
+    if (_SCR.inited) return;
+    _SCR.inited = true;
+    try {
+        var cfg = await fetch('/api/screener/config').then(function (r) { return r.json(); });
+        _SCR.indexes = cfg.indexes || [];
+    } catch (e) {
+        _SCR.indexes = ['S&P 500', 'NASDAQ 100', 'DJIA', 'Russell 2000'];
+    }
+    var box = document.getElementById('scr-indexes');
+    if (!box) return;
+    box.innerHTML = '';
+    _SCR.indexes.forEach(function (name) {
+        var id = 'scr-idx-' + name.replace(/[^a-zA-Z0-9]/g, '');
+        var lbl = document.createElement('label');
+        lbl.innerHTML = '<input type="checkbox" id="' + id + '" data-idx="' + name + '"'
+            + (_SCR.defaults.indexOf(name) >= 0 ? ' checked' : '') + '> '
+            + name;
+        box.appendChild(lbl);
+    });
+
+    // Live-Hint für MarktCap
+    function updateHint() {
+        var mn = parseFloat(document.getElementById('scr-cap-min').value) || 0;
+        var mx = parseFloat(document.getElementById('scr-cap-max').value) || 0;
+        var unit = document.getElementById('scr-cap-unit').value;
+        var hint = document.getElementById('scr-cap-hint');
+        if (mn === 0 && mx === 0) {
+            hint.textContent = '↳ 0 = keine Grenze → alle MarktCaps';
+            hint.style.color = '';
+        } else if (mn > 0 && mx > 0 && mn >= mx) {
+            hint.textContent = '⚠ Min muss kleiner sein als Max';
+            hint.style.color = 'var(--red)';
+        } else {
+            var parts = [];
+            if (mn > 0) parts.push('≥ ' + mn + ' ' + unit);
+            if (mx > 0) parts.push('≤ ' + mx + ' ' + unit);
+            hint.textContent = '↳ Filter: ' + parts.join('  &  ');
+            hint.style.color = '';
+        }
+    }
+    ['scr-cap-min', 'scr-cap-max', 'scr-cap-unit'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('input', updateHint);
+        if (el) el.addEventListener('change', updateHint);
+    });
+    updateHint();
+}
+
+function _scrSetState(label, cls) {
+    var el = document.getElementById('scr-state');
+    if (!el) return;
+    el.textContent = label;
+    el.className = 'settings-badge ' + (cls || '');
+}
+
+function _scrMsg(text, cls) {
+    var el = document.getElementById('scr-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'settings-msg' + (cls ? ' ' + cls : '');
+}
+
+function _scrSelectedIndexes() {
+    var out = [];
+    document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
+        if (cb.checked) out.push(cb.dataset.idx);
+    });
+    return out;
+}
+
+async function screenerStart() {
+    var indexes = _scrSelectedIndexes();
+    if (!indexes.length) {
+        _scrMsg('Mindestens einen Index auswählen', 'err');
+        return;
+    }
+    var mn = parseFloat(document.getElementById('scr-cap-min').value) || 0;
+    var mx = parseFloat(document.getElementById('scr-cap-max').value) || 0;
+    if (mn > 0 && mx > 0 && mn >= mx) {
+        _scrMsg('Min muss kleiner sein als Max', 'err');
+        return;
+    }
+
+    _scrMsg('');
+    document.getElementById('scr-btn-run').disabled = true;
+    document.getElementById('scr-btn-export').disabled = true;
+    document.getElementById('scr-log-card').style.display = '';
+    document.getElementById('scr-results-card').style.display = 'none';
+    document.getElementById('scr-log').textContent = '';
+    document.getElementById('scr-progress-wrap').style.display = '';
+    document.getElementById('scr-progress-bar').style.width = '0%';
+    _scrSetState('läuft …', 'run');
+
+    var body = {
+        indexes:  indexes,
+        cap_min:  mn,
+        cap_max:  mx,
+        unit:     document.getElementById('scr-cap-unit').value,
+    };
+
+    try {
+        var res = await fetch('/api/screener/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(function (r) { return r.json(); });
+
+        if (!res.ok) {
+            _scrSetState('Fehler', 'err');
+            _scrMsg(res.error || 'Start fehlgeschlagen', 'err');
+            document.getElementById('scr-btn-run').disabled = false;
+            return;
+        }
+        _SCR.jobId = res.job_id;
+        _scrPoll();
+    } catch (e) {
+        _scrSetState('Fehler', 'err');
+        _scrMsg('Netzwerkfehler: ' + e, 'err');
+        document.getElementById('scr-btn-run').disabled = false;
+    }
+}
+
+async function _scrPoll() {
+    if (!_SCR.jobId) return;
+    try {
+        var s = await fetch('/api/screener/status/' + _SCR.jobId)
+            .then(function (r) { return r.json(); });
+        if (!s.ok) {
+            _scrSetState('Fehler', 'err');
+            _scrMsg(s.error || 'Job verloren', 'err');
+            document.getElementById('scr-btn-run').disabled = false;
+            return;
+        }
+
+        // Log
+        document.getElementById('scr-log').textContent = (s.log || []).join('\n');
+        var log = document.getElementById('scr-log');
+        log.scrollTop = log.scrollHeight;
+
+        // Progress
+        var pct = Math.round((s.progress || 0) * 100);
+        document.getElementById('scr-progress-bar').style.width = pct + '%';
+
+        if (s.status === 'running') {
+            _SCR.pollTimer = setTimeout(_scrPoll, 1500);
+            return;
+        }
+
+        if (s.status === 'error') {
+            _scrSetState('Fehler', 'err');
+            _scrMsg(s.error || 'Screening fehlgeschlagen', 'err');
+            document.getElementById('scr-btn-run').disabled = false;
+            return;
+        }
+
+        // done
+        _scrSetState('fertig', 'ok');
+        _scrMsg('Screening abgeschlossen', 'ok');
+        document.getElementById('scr-btn-run').disabled = false;
+        document.getElementById('scr-btn-export').disabled = false;
+        _scrRenderResults(s.results || {});
+    } catch (e) {
+        _SCR.pollTimer = setTimeout(_scrPoll, 3000);
+    }
+}
+
+function _scrRenderResults(results) {
+    var card = document.getElementById('scr-results-card');
+    var wrap = document.getElementById('scr-results');
+    var badge = document.getElementById('scr-result-count');
+    wrap.innerHTML = '';
+    var sectors = Object.keys(results);
+    var total = 0;
+    sectors.forEach(function (name) {
+        var tickers = results[name] || [];
+        if (!tickers.length) return;
+        total += tickers.length;
+        var sec = document.createElement('div');
+        sec.className = 'scr-sector';
+        var head = document.createElement('div');
+        head.className = 'scr-sector-head';
+        head.innerHTML =
+            '<span class="scr-sector-name">' + name + '</span>' +
+            '<span class="scr-sector-count">' + tickers.length + '</span>';
+        var list = document.createElement('div');
+        list.className = 'scr-ticker-list';
+        tickers.forEach(function (t) {
+            var chip = document.createElement('span');
+            chip.className = 'scr-ticker';
+            chip.textContent = t;
+            list.appendChild(chip);
+        });
+        sec.appendChild(head);
+        sec.appendChild(list);
+        wrap.appendChild(sec);
+    });
+    badge.textContent = total + ' Ticker';
+    card.style.display = total ? '' : 'none';
+}
+
+function screenerExport() {
+    if (!_SCR.jobId) return;
+    window.location.href = '/api/screener/export/' + _SCR.jobId;
+}

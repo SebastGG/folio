@@ -490,10 +490,58 @@
 
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
-  <div class="page-placeholder">
-    <div class="pp-icon">🔍</div>
-    <div class="pp-title">Screener</div>
-    <div>Wird hier eingebaut — Logik aus dem Jupyter-Notebook.</div>
+  <div class="settings-wrap">
+
+    <div class="settings-card scr-card">
+      <h2 class="settings-h">Sektor-Screener
+        <span id="scr-state" class="settings-badge">bereit</span>
+      </h2>
+      <p class="settings-hint">
+        Finviz-Screening (52-W-High, SMA20/50/200) je Index × Sektor, optional gefiltert nach MarktCap.
+        Ergebnis als TradingView-Watchliste exportierbar.
+      </p>
+
+      <div class="scr-row">
+        <span class="scr-label">Indizes</span>
+        <div id="scr-indexes" class="scr-checks"></div>
+      </div>
+
+      <div class="scr-row">
+        <span class="scr-label">MarktCap</span>
+        <div class="scr-cap">
+          <label>von <input type="number" id="scr-cap-min" min="0" step="0.1" value="0"></label>
+          <label>bis <input type="number" id="scr-cap-max" min="0" step="0.1" value="0"></label>
+          <select id="scr-cap-unit">
+            <option value="Mrd $" selected>Mrd $</option>
+            <option value="Mio $">Mio $</option>
+          </select>
+          <span id="scr-cap-hint" class="settings-hint">↳ 0 = keine Grenze</span>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button id="scr-btn-run"    class="scr-btn scr-btn-run"    onclick="screenerStart()">▶ Screening starten</button>
+        <button id="scr-btn-export" class="scr-btn scr-btn-export" onclick="screenerExport()" disabled>⬇ TradingView-Export</button>
+        <span id="scr-msg" class="settings-msg"></span>
+      </div>
+
+      <div id="scr-progress-wrap" class="scr-progress-wrap" style="display:none;">
+        <div id="scr-progress-bar" class="scr-progress-bar"></div>
+      </div>
+    </div>
+
+    <div class="settings-card scr-card" id="scr-log-card" style="display:none;">
+      <h2 class="settings-h">Log</h2>
+      <pre id="scr-log" class="scr-log"></pre>
+    </div>
+
+    <div class="settings-card scr-card" id="scr-results-card" style="display:none;">
+      <h2 class="settings-h">Ergebnisse
+        <span id="scr-result-count" class="settings-badge">—</span>
+      </h2>
+      <div id="scr-results" class="scr-results"></div>
+    </div>
+
   </div>
 </section><!-- end #view-screener -->
 
