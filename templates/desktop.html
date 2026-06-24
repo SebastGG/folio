@@ -438,6 +438,11 @@
         <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl)</div>
         <input type="file" id="tax4File" accept=".xml" multiple style="display:none" onchange="taxKonvexUpload(this.files)">
       </div>
+      <div class="settings-actions" style="margin-top:10px;">
+        <button id="tax4-fetch-btn" class="refresh-btn" onclick="taxKonvexFetchFlex(this)"
+          title="Aktuelle Flex-XML direkt von IBKR holen und das laufende Jahr berechnen">📥 Aktuelles Jahr von IBKR holen</button>
+        <span style="font-size:10px;color:var(--muted);">nutzt die konfigurierte Steuer-Flex-Query · kann ~30 s dauern</span>
+      </div>
       <div id="tax4-msg" class="settings-msg" style="margin-top:8px;"></div>
       <div id="tax4-stored" class="settings-hint" style="margin-top:6px;display:none;"></div>
     </div>
@@ -579,6 +584,10 @@
         <span>Query ID (Handelsbestätigungen, optional)</span>
         <input type="text" id="set-query-id-trades" placeholder="z.B. 123456 — taggleiche Trades" autocomplete="off">
       </label>
+      <label class="settings-field">
+        <span>Query ID (Steuer, optional)</span>
+        <input type="text" id="set-query-id-tax" placeholder="z.B. 555444 — Activity-XML für den Steuer-Report" autocomplete="off">
+      </label>
       <div class="settings-actions">
         <button class="refresh-btn" onclick="settingsSaveIbkr(this)">Speichern</button>
         <span id="set-ibkr-msg" class="settings-msg"></span>
@@ -588,6 +597,8 @@
         dann unter <b>Flex Queries</b> eine <i>Activity</i>-Query mit Positionen, Cash und Trades erstellen (ergibt die Query-ID).
         Für taggleiche Trades zusätzlich eine <i>Trade Confirmation</i>-Flex-Query anlegen (gleicher Token) und deren ID
         ins zweite Feld eintragen — diese Trades erscheinen sofort und werden T+1 vom Activity-Sync mit korrektem Kurs ersetzt.
+        Für den <b>Steuer-Report</b> eine <i>Activity</i>-Flex-Query im <b>XML-Format</b> (mit Trades, Closed Lots, Cash) anlegen und
+        deren ID ins dritte Feld eintragen — damit holt der „IBKR Steuer Report" das laufende Jahr per Knopfdruck.
         Aus Sicherheitsgründen wird ein gespeicherter Token hier nie wieder angezeigt — zum Ändern einfach neu eingeben.
       </p>
     </div>

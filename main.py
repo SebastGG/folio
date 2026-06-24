@@ -863,8 +863,10 @@ async def ibkr_config_status(request: Request):
     return JSONResponse(content={
         "configured":        "flex_token" in cfg and "query_id" in cfg,
         "trades_configured": "query_id_trades" in cfg,
+        "tax_configured":    "flex_token" in cfg and "query_id_tax" in cfg,
         "query_id":          _dec("query_id"),          # Query-IDs sind nicht geheim
         "query_id_trades":   _dec("query_id_trades"),
+        "query_id_tax":      _dec("query_id_tax"),
     })
 
 @app.post("/api/ibkr/config")
@@ -881,6 +883,7 @@ async def set_ibkr_config(request: Request):
     token      = (body.get("flex_token")      or "").strip()
     qid        = (body.get("query_id")        or "").strip()
     qid_trades = (body.get("query_id_trades") or "").strip()
+    qid_tax    = (body.get("query_id_tax")    or "").strip()
 
     conn     = get_db(files["db"])
     existing = {r["key"] for r in conn.execute("SELECT key FROM ibkr_config").fetchall()}
@@ -901,6 +904,11 @@ async def set_ibkr_config(request: Request):
                      (_ibkr_encrypt(qid_trades, files["data_dir"]),))
     else:
         conn.execute("DELETE FROM ibkr_config WHERE key='query_id_trades'")
+    if qid_tax:
+        conn.execute("INSERT OR REPLACE INTO ibkr_config VALUES ('query_id_tax', ?)",
+                     (_ibkr_encrypt(qid_tax, files["data_dir"]),))
+    else:
+        conn.execute("DELETE FROM ibkr_config WHERE key='query_id_tax'")
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
@@ -1730,6 +1738,77 @@ async def tax_report_konvex(request: Request, files: list[UploadFile] = File(def
                              "stored_files": _tax_store_list(user, "xml"), **result})
     except Exception as e:
         print(f"tax_report_konvex error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ── Steuer +++ : Flex-XML automatisch von IBKR holen ────────────────────────────
+# Holt die als "query_id_tax" konfigurierte Flex Query (Activity-XML), legt sie als
+# Jahres-XML im Bestand ab (Dateiname je Jahr → erneutes Holen überschreibt) und
+# rechnet sofort den Konvex-Report für das laufende Jahr.
+
+def _flex_stmt_year(xml_text: str) -> str | None:
+    """Ermittelt das (jüngste) Statement-Jahr aus den FlexStatement-Datumsattributen."""
+    years = re.findall(r'(?:from|to)Date="?(\d{4})\d{4}"?', xml_text)
+    if not years:
+        years = re.findall(r'period="?(\d{4})', xml_text)
+    return max(years) if years else None
+
+
+@app.post("/api/tax/fetch-flex")
+async def tax_fetch_flex(request: Request, year: str = ""):
+    import asyncio
+    import tax_engine_konvex
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_ibkr_tables(files["db"])
+
+    conn = get_db(files["db"])
+    cfg  = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ibkr_config").fetchall()}
+    conn.close()
+    if "flex_token" not in cfg or "query_id_tax" not in cfg:
+        return JSONResponse(
+            {"ok": False, "error": "Keine Steuer-Flex-Query konfiguriert — bitte unter "
+                                   "Einstellungen Token und Query-ID (Steuer) hinterlegen."},
+            status_code=422)
+
+    flex_token = _ibkr_decrypt(cfg["flex_token"],   files["data_dir"])
+    query_id   = _ibkr_decrypt(cfg["query_id_tax"], files["data_dir"])
+
+    loop = asyncio.get_running_loop()
+
+    # IBKR-Abruf ist blockierend (SendRequest → Poll GetStatement, bis ~45s) → Threadpool
+    xml_text, err = await loop.run_in_executor(None, _flex_fetch_csv, flex_token, query_id)
+    if err:
+        return JSONResponse({"ok": False, "error": f"IBKR-Abruf fehlgeschlagen: {err}"},
+                            status_code=502)
+    if not xml_text or "FlexStatement" not in xml_text:
+        return JSONResponse(
+            {"ok": False, "error": "Antwort enthält kein Flex-XML — ist die Steuer-Query als "
+                                   "XML-Format (Activity) angelegt?"},
+            status_code=422)
+
+    # Als Jahres-XML ablegen (gleicher Name je Jahr → erneutes Holen überschreibt)
+    stmt_year = _flex_stmt_year(xml_text) or str(time.localtime().tm_year)
+    _tax_store_add(user, "xml", [(f"IBKR_Flex_{stmt_year}.xml", xml_text.encode("utf-8"))])
+
+    texts = _tax_store_load(user, "xml")
+    target = (year or stmt_year)
+
+    def _run():
+        return tax_engine_konvex.compute_tax_report_konvex(texts, target_year=target)
+
+    try:
+        result = await loop.run_in_executor(None, _run)
+        if result.get("error"):
+            return JSONResponse({"ok": False, "error": result["error"]}, status_code=422)
+        if not result.get("year"):
+            return JSONResponse(
+                {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
+                                       "Statements (XML)?"}, status_code=422)
+        return JSONResponse({"ok": True, "source": "ibkr", "fetched_year": stmt_year,
+                             "stored_files": _tax_store_list(user, "xml"), **result})
+    except Exception as e:
+        print(f"tax_fetch_flex error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 

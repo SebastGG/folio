@@ -1982,6 +1982,8 @@ async function settingsLoad() {
         if (qf) qf.value = s.query_id || '';
         var tf = document.getElementById('set-query-id-trades');
         if (tf) tf.value = s.query_id_trades || '';
+        var xf = document.getElementById('set-query-id-tax');
+        if (xf) xf.value = s.query_id_tax || '';
     } catch (e) { /* ignore */ }
 }
 
@@ -1990,6 +1992,7 @@ async function settingsSaveIbkr(btn) {
     var token  = (document.getElementById('set-flex-token').value     || '').trim();
     var qid    = (document.getElementById('set-query-id').value       || '').trim();
     var qidTr  = (document.getElementById('set-query-id-trades').value || '').trim();
+    var qidTax = (document.getElementById('set-query-id-tax').value    || '').trim();
     var msg    = document.getElementById('set-ibkr-msg');
     function setMsg(text, cls) { if (msg) { msg.textContent = text; msg.className = 'settings-msg ' + (cls || ''); } }
 
@@ -1997,7 +2000,7 @@ async function settingsSaveIbkr(btn) {
     if (btn) btn.disabled = true;
     setMsg('Speichere…', '');
     try {
-        var res = await ibkrSaveConfig(token, qid, qidTr);
+        var res = await ibkrSaveConfig(token, qid, qidTr, qidTax);
         if (res && res.ok) {
             setMsg('✓ Gespeichert', 'ok');
             document.getElementById('set-flex-token').value = '';  // Token nicht im Klartext stehen lassen
@@ -2517,6 +2520,34 @@ var _taxData4 = null;
 function taxKonvexUpload(fileList) {
     if (!fileList || !fileList.length) return;
     _taxRun('steuer4', fileList);
+}
+
+/**
+ * Holt die aktuelle Steuer-Flex-XML direkt von IBKR (konfigurierte query_id_tax),
+ * legt sie im Bestand ab und rendert den Konvex-Report fürs laufende Jahr.
+ * Der IBKR-Abruf kann ~30 s dauern (SendRequest → Statement-Polling).
+ */
+async function taxKonvexFetchFlex(btn) {
+    var old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ hole von IBKR …'; }
+    _taxSetMsg('tax4-msg', 'Hole aktuelle Flex-XML von IBKR … (kann ~30 s dauern)', '');
+    try {
+        var res = await fetch('/api/tax/fetch-flex', { method: 'POST' }).then(function (r) { return r.json(); });
+        if (res && res.ok) {
+            var years = (res.available_years || []).filter(Boolean).join(', ');
+            _taxSetMsg('tax4-msg', '✓ IBKR-Abruf · Jahr ' + (res.fetched_year || '') + ' aktualisiert · '
+                + years + ' ausgewertet' + (res.account ? ' · Konto ' + res.account : ''), 'ok');
+            _TAX_CFG.steuer4.loaded = true;
+            taxKonvexRender(res);
+            _taxIndicator(_TAX_CFG.steuer4, res.stored_files);
+        } else {
+            _taxSetMsg('tax4-msg', 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Fehler: ' + e.message, 'err');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    }
 }
 
 function taxKonvexRender(data) {
