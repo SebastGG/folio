@@ -508,6 +508,8 @@
 <!-- ══ SEITE: SCREENER ════════════════════════════════════════════════════════ -->
 <section id="view-screener" class="page">
   <div class="settings-wrap">
+   <div class="scr-layout">
+    <div class="scr-main">
 
     <div class="settings-card scr-card">
       <h2 class="settings-h">Sektor-Screener
@@ -572,6 +574,22 @@
       </h2>
       <div id="scr-results" class="scr-results"></div>
     </div>
+
+    </div><!-- end .scr-main -->
+
+    <aside class="scr-legend-col">
+      <div class="settings-card scr-card">
+        <h2 class="settings-h">Finviz-Codes
+          <a href="https://finviz.com/screener.ashx" target="_blank" rel="noopener"
+             class="settings-badge" style="text-decoration:none;text-transform:none;letter-spacing:0;">alle ↗</a>
+        </h2>
+        <p class="settings-hint" style="margin-bottom:8px;">
+          Für das Eigenfilter-Feld. Suffixe: <code>_uN</code> = unter N, <code>_oN</code> = über N.
+        </p>
+        <div id="scr-legend" class="scr-legend"></div>
+      </div>
+    </aside>
+   </div><!-- end .scr-layout -->
 
   </div>
 </section><!-- end #view-screener -->

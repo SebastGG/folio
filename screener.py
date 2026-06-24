@@ -103,10 +103,10 @@ DEFAULT_FILTERS = [
 ]
 
 import re as _re
-_FILTER_CODE_RE = _re.compile(r"^[a-z0-9_]+$")
+_FILTER_CODE_RE = _re.compile(r"^[a-z0-9_.]+$")   # Punkt für Codes wie sh_relvol_o1.5
 
 def sanitize_filters(codes) -> list[str]:
-    """Lässt nur gültige Finviz-Filter-Codes durch (a-z0-9_), dedupliziert, Reihenfolge erhalten."""
+    """Lässt nur gültige Finviz-Filter-Codes durch (a-z0-9_.), dedupliziert, Reihenfolge erhalten."""
     out, seen = [], set()
     for c in (codes or []):
         c = str(c).strip().lower()
@@ -114,6 +114,97 @@ def sanitize_filters(codes) -> list[str]:
             seen.add(c)
             out.append(c)
     return out
+
+
+# Referenz häufig genutzter Finviz-Screener-Codes (für die Legende im Frontend / das
+# Eigenfilter-Feld). Suffixe sind mechanisch: _uN = unter N, _oN = über N. Keine
+# vollständige Liste — die komplette Auswahl steht im Finviz-Screener (Link in der UI).
+FILTER_LEGEND = [
+    {"group": "Index", "items": [
+        {"code": "idx_sp500", "desc": "S&P 500"},
+        {"code": "idx_ndx",   "desc": "Nasdaq 100"},
+        {"code": "idx_djia",  "desc": "Dow Jones"},
+        {"code": "idx_rut",   "desc": "Russell 2000"},
+    ]},
+    {"group": "Sektor (sec_…)", "items": [
+        {"code": "sec_technology",            "desc": "Technologie"},
+        {"code": "sec_healthcare",            "desc": "Gesundheit"},
+        {"code": "sec_financial",             "desc": "Finanzen"},
+        {"code": "sec_energy",                "desc": "Energie"},
+        {"code": "sec_industrials",           "desc": "Industrie"},
+        {"code": "sec_consumercyclical",      "desc": "Zykl. Konsum"},
+        {"code": "sec_consumerdefensive",     "desc": "Defensiver Konsum"},
+        {"code": "sec_communicationservices", "desc": "Kommunikation"},
+        {"code": "sec_basicmaterials",        "desc": "Rohstoffe"},
+        {"code": "sec_realestate",            "desc": "Immobilien"},
+        {"code": "sec_utilities",             "desc": "Versorger"},
+    ]},
+    {"group": "MarktCap (cap_…)", "items": [
+        {"code": "cap_mega",       "desc": "Mega (> 200 Mrd $)"},
+        {"code": "cap_large",      "desc": "Large (10–200 Mrd)"},
+        {"code": "cap_mid",        "desc": "Mid (2–10 Mrd)"},
+        {"code": "cap_small",      "desc": "Small (300 Mio–2 Mrd)"},
+        {"code": "cap_micro",      "desc": "Micro (50–300 Mio)"},
+        {"code": "cap_smallover",  "desc": "Small und größer"},
+        {"code": "cap_midover",    "desc": "Mid und größer"},
+    ]},
+    {"group": "Kurs & Volumen", "items": [
+        {"code": "sh_price_u5",     "desc": "Kurs < 5 $ (o10/o20/o50 = über N)"},
+        {"code": "sh_price_o10",    "desc": "Kurs > 10 $"},
+        {"code": "sh_avgvol_o100",  "desc": "Ø-Vol > 100K (o500, o1000=1 Mio)"},
+        {"code": "sh_relvol_o1.5",  "desc": "Rel. Volumen > 1,5× (o2, o5)"},
+        {"code": "sh_short_high",   "desc": "Hohe Short-Quote (short_low)"},
+    ]},
+    {"group": "Hochs/Tiefs (ta_highlow…)", "items": [
+        {"code": "ta_highlow52w_nh",   "desc": "neues 52-Wochen-Hoch"},
+        {"code": "ta_highlow52w_nl",   "desc": "neues 52-Wochen-Tief"},
+        {"code": "ta_highlow52w_b0to10h", "desc": "max. 10 % unter 52W-Hoch"},
+        {"code": "ta_highlow20d_nh",   "desc": "neues 20-Tage-Hoch"},
+        {"code": "ta_highlow50d_nh",   "desc": "neues 50-Tage-Hoch"},
+    ]},
+    {"group": "SMA (ta_sma20/50/200_…)", "items": [
+        {"code": "ta_sma50_pa",        "desc": "Kurs über SMA50 (_pb = unter)"},
+        {"code": "ta_sma200_pa",       "desc": "Kurs über SMA200"},
+        {"code": "ta_sma20_pca",       "desc": "Kurs kreuzt SMA20 von unten (_pcb = von oben)"},
+        {"code": "ta_sma50_cross200a", "desc": "Golden Cross (50×200 ↑)"},
+        {"code": "ta_sma50_cross200b", "desc": "Death Cross (50×200 ↓)"},
+    ]},
+    {"group": "RSI / Performance / Volatilität", "items": [
+        {"code": "ta_rsi_os30",      "desc": "RSI < 30 überverkauft (os20/os40)"},
+        {"code": "ta_rsi_ob70",      "desc": "RSI > 70 überkauft (ob60/ob80)"},
+        {"code": "ta_perf_4wup",     "desc": "Monat positiv (1w/13w/26w/52w/ytd up)"},
+        {"code": "ta_perf_52wdown",  "desc": "Jahr negativ (…down)"},
+        {"code": "ta_volatility_wo3", "desc": "Woche-Volatilität > 3 % (mo3 = Monat)"},
+    ]},
+    {"group": "Chartmuster (ta_pattern_…)", "items": [
+        {"code": "ta_pattern_channelup",   "desc": "Aufwärtskanal (channeldown)"},
+        {"code": "ta_pattern_wedgeup",     "desc": "steigender Keil (wedgedown)"},
+        {"code": "ta_pattern_triangleascending",  "desc": "aufst. Dreieck (…descending)"},
+        {"code": "ta_pattern_doublebottom", "desc": "Doppelboden (doubletop)"},
+        {"code": "ta_pattern_tlsupport",   "desc": "an Unterstützung (tlresistance)"},
+    ]},
+    {"group": "Bewertung (fa_…)", "items": [
+        {"code": "fa_pe_profitable", "desc": "profitabel (KGV > 0)"},
+        {"code": "fa_pe_u20",        "desc": "KGV < 20 (u15/u25/…)"},
+        {"code": "fa_peg_u1",        "desc": "PEG < 1"},
+        {"code": "fa_pb_u1",         "desc": "Kurs/Buch < 1"},
+        {"code": "fa_ps_u1",         "desc": "Kurs/Umsatz < 1"},
+    ]},
+    {"group": "Dividende & Wachstum (fa_…)", "items": [
+        {"code": "fa_div_pos",       "desc": "Dividende > 0 (div_none = keine)"},
+        {"code": "fa_div_o2",        "desc": "Div.-Rendite > 2 % (o5, high>5%)"},
+        {"code": "fa_epsyoy_pos",    "desc": "EPS-Wachstum lfd. Jahr > 0 (o10=>10%)"},
+        {"code": "fa_eps5years_pos", "desc": "EPS-Wachstum 5J > 0"},
+        {"code": "fa_salesqoq_pos",  "desc": "Umsatzwachstum Q/Q > 0"},
+    ]},
+    {"group": "Profitabilität & Bilanz (fa_…)", "items": [
+        {"code": "fa_roe_o15",     "desc": "Eigenkapitalrendite > 15 %"},
+        {"code": "fa_roa_pos",     "desc": "Gesamtkapitalrendite > 0"},
+        {"code": "fa_netmargin_pos", "desc": "Nettomarge > 0 (_o10 = > 10 %)"},
+        {"code": "fa_debteq_u0.5", "desc": "Verschuldung (D/E) < 0,5"},
+        {"code": "fa_curratio_o1", "desc": "Liquidität 3. Grades > 1"},
+    ]},
+]
 
 
 # ── Job-Verwaltung ──────────────────────────────────────────

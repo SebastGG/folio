@@ -2000,7 +2000,8 @@ async def screener_config(request: Request):
     return {"indexes": list(screener.INDEXES.keys()),
             "sectors": list(screener.SECTORS.keys()),
             "filters": screener.FILTERS,
-            "filter_defaults": screener.DEFAULT_FILTERS}
+            "filter_defaults": screener.DEFAULT_FILTERS,
+            "legend": screener.FILTER_LEGEND}
 
 
 @app.post("/api/screener/run")

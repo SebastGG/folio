@@ -3177,6 +3177,7 @@ var _SCR = {
     defaults:  ['Russell 2000'],
     filters:        [],   // Katalog [{group, items:[{code,label}]}]
     filterDefaults: [],   // voreingestellte Filter-Codes
+    legend:         [],   // Finviz-Code-Referenz [{group, items:[{code,desc}]}]
     results:   {},   // letztes fertiges Ergebnis  { sector: [tickers] }
 };
 
@@ -3188,6 +3189,7 @@ async function screenerInit() {
         _SCR.indexes        = cfg.indexes || [];
         _SCR.filters        = cfg.filters || [];
         _SCR.filterDefaults = cfg.filter_defaults || [];
+        _SCR.legend         = cfg.legend || [];
     } catch (e) {
         _SCR.indexes = ['S&P 500', 'NASDAQ 100', 'DJIA', 'Russell 2000'];
     }
@@ -3216,6 +3218,25 @@ async function screenerInit() {
             return '<div class="scr-filter-grp"><span class="scr-filter-gname">' + esc(grp.group)
                 + '</span><div class="scr-checks">' + checks + '</div></div>';
         }).join('');
+    }
+
+    // Finviz-Code-Legende rechts (Codes klickbar → ins Eigenfilter-Feld)
+    var lbox = document.getElementById('scr-legend');
+    if (lbox) {
+        var escl = function (s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+        lbox.innerHTML = _SCR.legend.map(function (grp, gi) {
+            var rows = grp.items.map(function (it) {
+                return '<div class="scr-leg-row">'
+                    + '<code class="scr-leg-code" data-code="' + escl(it.code) + '" title="Zum Eigenfilter hinzufügen">'
+                    + escl(it.code) + '</code>'
+                    + '<span class="scr-leg-desc">' + escl(it.desc) + '</span></div>';
+            }).join('');
+            return '<details class="scr-leg-grp"' + (gi === 0 ? ' open' : '') + '>'
+                + '<summary>' + escl(grp.group) + '</summary>' + rows + '</details>';
+        }).join('');
+        lbox.querySelectorAll('.scr-leg-code').forEach(function (el) {
+            el.addEventListener('click', function () { _scrAddCustomCode(el.dataset.code); });
+        });
     }
 
     // Live-Hint für MarktCap
@@ -3282,6 +3303,16 @@ function _scrSelectedFilters() {
         });
     }
     return out;
+}
+
+/** Hängt einen Finviz-Code an das Eigenfilter-Feld an (Klick aus der Legende). */
+function _scrAddCustomCode(code) {
+    var inp = document.getElementById('scr-filters-custom');
+    if (!inp) return;
+    var parts = inp.value.split(/[,\s]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (parts.indexOf(code) < 0) parts.push(code);
+    inp.value = parts.join(', ');
+    inp.focus();
 }
 
 async function screenerStart() {
