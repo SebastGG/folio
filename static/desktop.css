@@ -308,20 +308,22 @@ header {
   user-select: none;
 }
 
-/* Immer sichtbares Stammdaten-Feld (Sektor, MarktCap, …) */
-.ticker-info {
-  position: absolute; top: 8px; right: 8px; z-index: 6;
-  max-width: 240px; pointer-events: none;
-  background: rgba(255,255,255,0.88); border: 1px solid var(--border);
-  border-radius: 6px; padding: 7px 10px;
-  font-size: 10px; line-height: 1.5; color: var(--text);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+/* Stammdaten-Fenster unter dem Chart (eigenes, resizebares Pane) */
+.stamm-pane {
+  flex-shrink: 0; height: 150px; min-height: 34px;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-top: 1px solid var(--border);
 }
-.ticker-info .ti-name { font-weight: 700; font-size: 11px; margin-bottom: 3px; }
-.ticker-info .ti-sub  { color: var(--muted); margin-bottom: 5px; }
-.ticker-info .ti-row  { display: flex; justify-content: space-between; gap: 10px; }
+.ticker-info { padding: 8px 12px; font-size: 11px; color: var(--text); }
+.ticker-info .ti-name { font-weight: 700; font-size: 13px; }
+.ticker-info .ti-sub  { color: var(--muted); font-size: 10px; margin-bottom: 8px; }
+.ticker-info .ti-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 3px 18px;
+}
+.ticker-info .ti-row  { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dotted var(--border); padding: 2px 0; }
 .ticker-info .ti-row .ti-k { color: var(--muted); }
-.ticker-info .ti-row .ti-v { font-weight: 500; }
+.ticker-info .ti-row .ti-v { font-weight: 500; text-align: right; }
 .ticker-info .ti-loading { color: var(--muted); }
 .chart-overlay {
   position: absolute; top: 14px; left: 16px;

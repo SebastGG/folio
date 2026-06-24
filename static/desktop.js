@@ -782,13 +782,11 @@ async function fetchTickerInfo(sym) {
     }
 }
 
-/** Rendert das Stammdaten-Feld. null → ausblenden. */
+/** Rendert das Stammdaten-Fenster. null → Platzhalter (Index-Ansicht). */
 function renderTickerInfo(d) {
     var el = document.getElementById('ticker-info');
     if (!el) return;
-    if (!d) { el.style.display = 'none'; el.innerHTML = ''; return; }
-    el.style.display = 'block';
-
+    if (!d)        { el.innerHTML = '<div class="ti-loading">Einzelaktie wählen für Stammdaten.</div>'; return; }
     if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>'; return; }
     if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>'; return; }
 
@@ -824,11 +822,11 @@ function renderTickerInfo(d) {
     ].filter(function(r) { return r[1] != null && r[1] !== ''; });
 
     var html = '<div class="ti-name">' + esc(d.name || d.symbol) + '</div>';
-    if (d.symbol && d.name && d.name !== d.symbol)
-        html += '<div class="ti-sub">' + esc(d.symbol) + '</div>';
-    html += rows.map(function(r) {
+    html += '<div class="ti-sub">' + esc(d.symbol)
+          + (d.quote_type ? ' · ' + esc(d.quote_type) : '') + '</div>';
+    html += '<div class="ti-grid">' + rows.map(function(r) {
         return '<div class="ti-row"><span class="ti-k">' + r[0] + '</span><span class="ti-v">' + r[1] + '</span></div>';
-    }).join('');
+    }).join('') + '</div>';
     el.innerHTML = html;
 }
 
@@ -1378,11 +1376,13 @@ function saveLayout() {
     var rp = document.getElementById('r-perf');
     var rn = document.getElementById('r-notes');
     var ri = document.getElementById('r-import');
+    var st = document.getElementById('r-stammdaten');
     _layout = {
         rightColW: rc ? rc.offsetWidth  : null,
         rPerfH:   rp ? rp.offsetHeight : null,
         rNotesH:  rn ? rn.offsetHeight : null,
         rImportH: ri ? ri.offsetHeight : null,
+        stammH:   st ? st.offsetHeight : null,
     };
     saveBasketsToServer();
 }
@@ -1393,10 +1393,12 @@ function loadLayout() {
     var rp = document.getElementById('r-perf');
     var rn = document.getElementById('r-notes');
     var ri = document.getElementById('r-import');
+    var st = document.getElementById('r-stammdaten');
     if (lay.rightColW != null && rc) rc.style.width  = lay.rightColW + 'px';
     if (lay.rPerfH   != null && rp) rp.style.height = lay.rPerfH    + 'px';
     if (lay.rNotesH  != null && rn) rn.style.height = lay.rNotesH   + 'px';
     if (lay.rImportH != null && ri) ri.style.height = lay.rImportH  + 'px';
+    if (lay.stammH   != null && st) st.style.height = lay.stammH    + 'px';
     if (chart) fitChart();
 }
 
@@ -1492,6 +1494,9 @@ function loadLayout() {
             if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; }
         });
     })();
+
+    // ── Vertikal Links: zwischen Chart und Stammdaten-Fenster (Chart=flex:1 schrumpft) ──
+    makeBottomResizer('lv-resizer-1', 'r-stammdaten', 34, 600, fitChart);
 
     // ── Vertikal Rechts: zwischen Watchlist und Perf (perf schrumpft beim Ziehen nach unten) ──
     makeBottomResizer('rv-resizer-1', 'r-perf', 60, 500, null);
