@@ -571,6 +571,22 @@ footer {
   cursor: pointer; user-select: none;
 }
 .scr-checks input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.scr-checks label { font-size: 11px; }
+.scr-filters-wrap { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; }
+.scr-filter-groups { display: flex; flex-direction: column; gap: 9px; }
+.scr-filter-grp { display: flex; flex-direction: column; gap: 4px; }
+.scr-filter-gname {
+  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
+}
+.scr-custom {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 11px; color: var(--muted); max-width: 520px;
+}
+.scr-custom input[type="text"] {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 6px 8px; border-radius: 4px; outline: none;
+}
+.scr-custom input[type="text"]:focus { border-color: var(--accent); }
 .scr-cap { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .scr-cap label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .scr-cap input[type="number"], .scr-cap select {

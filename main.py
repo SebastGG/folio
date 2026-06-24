@@ -1998,7 +1998,9 @@ async def tax_report_konvex_pdf(request: Request, year: str = ""):
 async def screener_config(request: Request):
     get_user(request)
     return {"indexes": list(screener.INDEXES.keys()),
-            "sectors": list(screener.SECTORS.keys())}
+            "sectors": list(screener.SECTORS.keys()),
+            "filters": screener.FILTERS,
+            "filter_defaults": screener.DEFAULT_FILTERS}
 
 
 @app.post("/api/screener/run")
@@ -2025,7 +2027,13 @@ async def screener_run(request: Request):
     cap_min = int(mn * multiplier) if mn > 0 else None
     cap_max = int(mx * multiplier) if mx > 0 else None
 
-    job_id = screener.start_job(index_names, cap_min, cap_max, unit)
+    # Filter aus Katalog-Auswahl + optionalen Eigenangaben, serverseitig validiert
+    raw_filters = body.get("filters")
+    if not isinstance(raw_filters, list):
+        raw_filters = []
+    filters = screener.sanitize_filters(raw_filters)
+
+    job_id = screener.start_job(index_names, cap_min, cap_max, unit, filters)
     return {"ok": True, "job_id": job_id}
 
 

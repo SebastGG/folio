@@ -514,13 +514,26 @@
         <span id="scr-state" class="settings-badge">bereit</span>
       </h2>
       <p class="settings-hint">
-        Finviz-Screening (52-W-High, SMA20/50/200) je Index × Sektor, optional gefiltert nach MarktCap.
+        Finviz-Screening je Index × Sektor mit frei wählbaren Filtern (Hochs, SMA, RSI, Performance,
+        Fundamental — oder eigene Finviz-Codes), optional gefiltert nach MarktCap.
         Ergebnis als TradingView-Watchliste exportierbar.
       </p>
 
       <div class="scr-row">
         <span class="scr-label">Indizes</span>
         <div id="scr-indexes" class="scr-checks"></div>
+      </div>
+
+      <div class="scr-row">
+        <span class="scr-label">Filter</span>
+        <div class="scr-filters-wrap">
+          <div id="scr-filters" class="scr-filter-groups"></div>
+          <label class="scr-custom">Eigene Finviz-Codes
+            <input type="text" id="scr-filters-custom" placeholder="z.B. ta_pattern_channelup, sh_avgvol_o500"
+              autocomplete="off">
+          </label>
+          <span class="settings-hint">↳ Mehrfachauswahl wird UND-verknüpft · eigene Codes kommagetrennt (siehe Finviz-Screener-URL)</span>
+        </div>
       </div>
 
       <div class="scr-row">

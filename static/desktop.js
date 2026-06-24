@@ -3175,6 +3175,8 @@ var _SCR = {
     pollTimer: null,
     indexes:   [],   // alle verfügbaren Indizes
     defaults:  ['Russell 2000'],
+    filters:        [],   // Katalog [{group, items:[{code,label}]}]
+    filterDefaults: [],   // voreingestellte Filter-Codes
     results:   {},   // letztes fertiges Ergebnis  { sector: [tickers] }
 };
 
@@ -3183,7 +3185,9 @@ async function screenerInit() {
     _SCR.inited = true;
     try {
         var cfg = await fetch('/api/screener/config').then(function (r) { return r.json(); });
-        _SCR.indexes = cfg.indexes || [];
+        _SCR.indexes        = cfg.indexes || [];
+        _SCR.filters        = cfg.filters || [];
+        _SCR.filterDefaults = cfg.filter_defaults || [];
     } catch (e) {
         _SCR.indexes = ['S&P 500', 'NASDAQ 100', 'DJIA', 'Russell 2000'];
     }
@@ -3198,6 +3202,21 @@ async function screenerInit() {
             + name;
         box.appendChild(lbl);
     });
+
+    // Filter-Katalog gruppiert rendern (Defaults vorausgewählt)
+    var fbox = document.getElementById('scr-filters');
+    if (fbox) {
+        var esc = function (s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+        fbox.innerHTML = _SCR.filters.map(function (grp) {
+            var checks = grp.items.map(function (it) {
+                var on = _SCR.filterDefaults.indexOf(it.code) >= 0 ? ' checked' : '';
+                return '<label title="' + esc(it.code) + '"><input type="checkbox" data-filter="'
+                    + esc(it.code) + '"' + on + '> ' + esc(it.label) + '</label>';
+            }).join('');
+            return '<div class="scr-filter-grp"><span class="scr-filter-gname">' + esc(grp.group)
+                + '</span><div class="scr-checks">' + checks + '</div></div>';
+        }).join('');
+    }
 
     // Live-Hint für MarktCap
     function updateHint() {
@@ -3249,6 +3268,22 @@ function _scrSelectedIndexes() {
     return out;
 }
 
+/** Gewählte Katalog-Filter + eigene Finviz-Codes (kommagetrennt) → Liste. */
+function _scrSelectedFilters() {
+    var out = [];
+    document.querySelectorAll('#scr-filters input[type="checkbox"]').forEach(function (cb) {
+        if (cb.checked) out.push(cb.dataset.filter);
+    });
+    var custom = document.getElementById('scr-filters-custom');
+    if (custom && custom.value) {
+        custom.value.split(/[,\s]+/).forEach(function (c) {
+            c = c.trim().toLowerCase();
+            if (c && out.indexOf(c) < 0) out.push(c);
+        });
+    }
+    return out;
+}
+
 async function screenerStart() {
     var indexes = _scrSelectedIndexes();
     if (!indexes.length) {
@@ -3278,6 +3313,7 @@ async function screenerStart() {
         cap_min:  mn,
         cap_max:  mx,
         unit:     document.getElementById('scr-cap-unit').value,
+        filters:  _scrSelectedFilters(),
     };
 
     try {

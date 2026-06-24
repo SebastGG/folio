@@ -26,6 +26,9 @@ YF_BATCH_SIZE          = 10
 YF_BATCH_DELAY         = 1.5
 YF_THREAD_WORKERS      = 5
 JOB_TTL_SECONDS        = 30 * 60   # alte Jobs nach 30 Min weg
+FINVIZ_PAGE_SIZE       = 20        # Treffer pro Finviz-Seite
+MAX_PAGES              = 20        # Sicherheits-Obergrenze je Index×Sektor (≈400 Treffer)
+PAGE_DELAY             = 1.0       # Pause zwischen Seiten-Abrufen
 
 BASE_URL = "https://finviz.com/screener.ashx?v=111&f="
 
@@ -50,7 +53,47 @@ SECTORS = {
     "Utilities":              "sec_utilities",
 }
 
-TECH_FILTERS = [
+# Katalog auswählbarer Finviz-Filter (Gruppen → Items). Die Codes sind die
+# Finviz-Screener-Parameter (f=…). Alle ausgewählten Filter werden UND-verknüpft.
+FILTERS = [
+    {"group": "52-Wochen / N-Tage-Hochs", "items": [
+        {"code": "ta_highlow20d_nh", "label": "20-Tage-Hoch"},
+        {"code": "ta_highlow50d_nh", "label": "50-Tage-Hoch"},
+        {"code": "ta_highlow52w_nh", "label": "52-Wochen-Hoch"},
+        {"code": "ta_highlow52w_nl", "label": "52-Wochen-Tief"},
+    ]},
+    {"group": "Gleitende Durchschnitte", "items": [
+        {"code": "ta_sma20_pa",       "label": "Kurs über SMA20"},
+        {"code": "ta_sma50_pa",       "label": "Kurs über SMA50"},
+        {"code": "ta_sma200_pa",      "label": "Kurs über SMA200"},
+        {"code": "ta_sma20_pb",       "label": "Kurs unter SMA20"},
+        {"code": "ta_sma50_pb",       "label": "Kurs unter SMA50"},
+        {"code": "ta_sma200_pb",      "label": "Kurs unter SMA200"},
+        {"code": "ta_sma50_cross200a", "label": "Golden Cross (SMA50×200 ↑)"},
+        {"code": "ta_sma50_cross200b", "label": "Death Cross (SMA50×200 ↓)"},
+    ]},
+    {"group": "RSI (14)", "items": [
+        {"code": "ta_rsi_os30", "label": "überverkauft (<30)"},
+        {"code": "ta_rsi_os40", "label": "< 40"},
+        {"code": "ta_rsi_ob60", "label": "> 60"},
+        {"code": "ta_rsi_ob70", "label": "überkauft (>70)"},
+    ]},
+    {"group": "Performance", "items": [
+        {"code": "ta_perf_1wup",  "label": "Woche positiv"},
+        {"code": "ta_perf_4wup",  "label": "Monat positiv"},
+        {"code": "ta_perf_13wup", "label": "Quartal positiv"},
+        {"code": "ta_perf_52wup", "label": "Jahr positiv"},
+    ]},
+    {"group": "Fundamental", "items": [
+        {"code": "fa_pe_profitable", "label": "Profitabel (KGV positiv)"},
+        {"code": "fa_pe_u20",        "label": "KGV < 20"},
+        {"code": "fa_div_pos",       "label": "Dividende > 0"},
+        {"code": "fa_epsyoy_pos",    "label": "EPS-Wachstum lfd. Jahr > 0"},
+    ]},
+]
+
+# Voreinstellung = das bisherige fest verdrahtete Set
+DEFAULT_FILTERS = [
     "ta_highlow20d_nh",
     "ta_highlow50d_nh",
     "ta_highlow52w_nh",
@@ -58,6 +101,19 @@ TECH_FILTERS = [
     "ta_sma50_pa",
     "ta_sma200_pa",
 ]
+
+import re as _re
+_FILTER_CODE_RE = _re.compile(r"^[a-z0-9_]+$")
+
+def sanitize_filters(codes) -> list[str]:
+    """Lässt nur gültige Finviz-Filter-Codes durch (a-z0-9_), dedupliziert, Reihenfolge erhalten."""
+    out, seen = [], set()
+    for c in (codes or []):
+        c = str(c).strip().lower()
+        if c and c not in seen and _FILTER_CODE_RE.match(c):
+            seen.add(c)
+            out.append(c)
+    return out
 
 
 # ── Job-Verwaltung ──────────────────────────────────────────
@@ -89,8 +145,8 @@ def _set(job_id: str, **kw):
 
 
 # ── Finviz ──────────────────────────────────────────────────
-def _build_url(index_code: str, sector_code: str) -> str:
-    return BASE_URL + ",".join([index_code, sector_code] + TECH_FILTERS)
+def _build_url(index_code: str, sector_code: str, filters: list[str]) -> str:
+    return BASE_URL + ",".join([index_code, sector_code] + list(filters))
 
 
 def _extract_tickers(df) -> list[str]:
@@ -103,15 +159,39 @@ def _extract_tickers(df) -> list[str]:
     return df[ticker_col].dropna().unique().tolist()
 
 
-def _screen_sector(index_code: str, sector_code: str) -> list[str]:
-    url = _build_url(index_code, sector_code)
-    s = Screener(main_url=url)
-    if not s.data_frames:
-        return []
-    df = pd.concat(s.data_frames.values(), ignore_index=True)
-    if df.empty:
-        return []
-    return _extract_tickers(df)
+def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> list[str]:
+    """Holt ALLE Treffer eines Index×Sektors über Finviz-Seiten-Paginierung (&r=Offset).
+
+    Finviz liefert 20 Treffer/Seite. Wir holen Seite für Seite, bis eine Seite
+    keine neuen Ticker oder weniger als eine volle Seite liefert (oder MAX_PAGES).
+    pyfinviz wirft bei einer leeren Folgeseite einen Fehler → als „Ende" werten.
+    """
+    base = _build_url(index_code, sector_code, filters)
+    seen, seen_set = [], set()
+    for page in range(MAX_PAGES):
+        offset = page * FINVIZ_PAGE_SIZE
+        url = base + (f"&r={offset + 1}" if offset else "")
+        try:
+            s = Screener(main_url=url)
+            frames = s.data_frames
+            if not frames:
+                break
+            df = pd.concat(frames.values(), ignore_index=True)
+        except Exception:
+            break                              # leere/letzte Folgeseite → Ende
+        if df.empty:
+            break
+        tickers = _extract_tickers(df)
+        new = [t for t in tickers if t not in seen_set]
+        for t in new:
+            seen_set.add(t)
+            seen.append(t)
+        # Letzte Seite erreicht: nicht voll ODER keine neuen Ticker (Wiederholung)
+        if len(tickers) < FINVIZ_PAGE_SIZE or not new:
+            break
+        if page < MAX_PAGES - 1:
+            time.sleep(PAGE_DELAY)
+    return seen
 
 
 # ── yfinance MarktCap ───────────────────────────────────────
@@ -155,12 +235,14 @@ def _filter_by_marketcap(tickers, cap_min, cap_max, marketcaps):
 
 
 # ── Worker ──────────────────────────────────────────────────
-def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str):
+def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
+             filters: list[str]):
     try:
         active_indexes = [(n, INDEXES[n]) for n in index_names if n in INDEXES]
         if not active_indexes:
             _set(job_id, status="error", error="Kein gültiger Index ausgewählt")
             return
+        filters = list(filters or [])
 
         need_yf = cap_min is not None or cap_max is not None
         cap_label = "egal (alle)"
@@ -171,6 +253,7 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str):
 
         _log(job_id, "═" * 50)
         _log(job_id, f"  Indizes:  {', '.join(n for n, _ in active_indexes)}")
+        _log(job_id, f"  Filter:   {', '.join(filters) if filters else 'keine (ganzer Index/Sektor)'}")
         _log(job_id, f"  MarktCap: {cap_label}")
         _log(job_id, "═" * 50)
         _log(job_id, "")
@@ -186,7 +269,7 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str):
             for sec_name, sec_code in SECTORS.items():
                 counter += 1
                 try:
-                    tickers = _screen_sector(idx_code, sec_code)
+                    tickers = _screen_sector(idx_code, sec_code, filters)
                     raw_scan[sec_name].update(tickers)
                     _log(job_id, f"[{counter}/{total}] {sec_name}: {len(tickers)} Ticker")
                 except Exception as e:
@@ -238,7 +321,8 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str):
 
 
 # ── Öffentliche API ─────────────────────────────────────────
-def start_job(index_names: list[str], cap_min, cap_max, unit: str) -> str:
+def start_job(index_names: list[str], cap_min, cap_max, unit: str,
+              filters: list[str] | None = None) -> str:
     _gc_old_jobs()
     job_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
@@ -252,7 +336,7 @@ def start_job(index_names: list[str], cap_min, cap_max, unit: str) -> str:
         }
     t = threading.Thread(
         target=_run_job,
-        args=(job_id, index_names, cap_min, cap_max, unit),
+        args=(job_id, index_names, cap_min, cap_max, unit, filters or []),
         daemon=True,
     )
     t.start()
