@@ -824,9 +824,18 @@ function renderTickerInfo(d) {
     var html = '<div class="ti-name">' + esc(d.name || d.symbol) + '</div>';
     html += '<div class="ti-sub">' + esc(d.symbol)
           + (d.quote_type ? ' · ' + esc(d.quote_type) : '') + '</div>';
-    html += '<div class="ti-grid">' + rows.map(function(r) {
-        return '<div class="ti-row"><span class="ti-k">' + r[0] + '</span><span class="ti-v">' + r[1] + '</span></div>';
-    }).join('') + '</div>';
+
+    // Saubere Tabelle: zwei Merkmal/Wert-Paare je Zeile (nutzt die Pane-Breite)
+    var cells = '';
+    for (var i = 0; i < rows.length; i += 2) {
+        var a = rows[i], b = rows[i + 1];
+        cells += '<tr>'
+              +  '<th>' + a[0] + '</th><td>' + a[1] + '</td>'
+              +  (b ? '<th>' + b[0] + '</th><td>' + b[1] + '</td>'
+                    : '<th></th><td></td>')
+              +  '</tr>';
+    }
+    html += '<table class="ti-table"><tbody>' + cells + '</tbody></table>';
     el.innerHTML = html;
 }
 

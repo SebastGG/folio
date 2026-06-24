@@ -354,6 +354,11 @@ def init_db(db_file: str):
         ticker   TEXT PRIMARY KEY,
         currency TEXT
     )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticker_info (
+        symbol  TEXT PRIMARY KEY,
+        data    TEXT,
+        updated REAL
+    )''')
     conn.commit()
     conn.close()
 
@@ -601,54 +606,112 @@ async def get_prices(ticker: str, request: Request):
     return JSONResponse(content=[dict(r) for r in rows])
 
 # ── Ticker-Fundamentaldaten (Sektor, MarktCap, …) ───────────────────────────────
-# Holt Stammdaten via yfinance (kümmert sich um Yahoo-Crumb/Cookies). Ergebnis wird
-# prozessweit gecacht (TTL), da Fundamentaldaten nutzerunabhängig + selten ändern.
+# Holt Stammdaten via yfinance (kümmert sich um Yahoo-Crumb/Cookies). Persistiert in
+# der User-DB (Tabelle ticker_info), zusätzlich prozessweiter In-Memory-Cache. Strategie:
+# „stale-while-revalidate" — gespeicherte Daten werden SOFORT zurückgegeben; sind sie
+# älter als die TTL, läuft im Hintergrund eine Auffrischung. So ist nur der allererste
+# Abruf je Ticker langsam, danach fühlt es sich instant an (auch nach Server-Neustart).
 
 _TICKER_INFO_CACHE: dict[str, tuple] = {}   # sym -> (timestamp, dict)
 _TICKER_INFO_TTL = 12 * 3600
+_TICKER_INFO_INFLIGHT: set[str] = set()     # läuft gerade eine (Hintergrund-)Auffrischung?
+
+def _ticker_info_fetch(sym: str) -> dict:
+    import yfinance as yf
+    info = yf.Ticker(sym).info or {}
+    return {
+        "symbol":         sym,
+        "name":           info.get("longName") or info.get("shortName") or sym,
+        "sector":         info.get("sector"),
+        "industry":       info.get("industry"),
+        "market_cap":     info.get("marketCap"),
+        "currency":       info.get("currency"),
+        "country":        info.get("country"),
+        "exchange":       info.get("fullExchangeName") or info.get("exchange"),
+        "quote_type":     info.get("quoteType"),
+        "pe":             info.get("trailingPE"),
+        "forward_pe":     info.get("forwardPE"),
+        "eps":            info.get("trailingEps"),
+        "dividend_yield": info.get("dividendYield"),
+        "beta":           info.get("beta"),
+        "week52_high":    info.get("fiftyTwoWeekHigh"),
+        "week52_low":     info.get("fiftyTwoWeekLow"),
+        "employees":      info.get("fullTimeEmployees"),
+        "website":        info.get("website"),
+    }
+
+def _ticker_info_db_get(db_file: str, sym: str):
+    """Liefert (data, updated_ts) aus der DB oder (None, 0)."""
+    try:
+        conn = get_db(db_file)
+        row = conn.execute("SELECT data, updated FROM ticker_info WHERE symbol=?", (sym,)).fetchone()
+        conn.close()
+        if row and row["data"]:
+            return json.loads(row["data"]), (row["updated"] or 0)
+    except Exception as e:
+        print(f"ticker_info db_get {sym}: {e}")
+    return None, 0
+
+def _ticker_info_db_put(db_file: str, sym: str, data: dict, ts: float):
+    try:
+        conn = get_db(db_file)
+        conn.execute("INSERT OR REPLACE INTO ticker_info VALUES (?,?,?)",
+                     (sym, json.dumps(data), ts))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"ticker_info db_put {sym}: {e}")
+
+def _ticker_info_refresh(sym: str, db_file: str):
+    """Blockierende Auffrischung (yfinance + DB-Write) — im Threadpool/Hintergrund auszuführen."""
+    if sym in _TICKER_INFO_INFLIGHT:
+        return None
+    _TICKER_INFO_INFLIGHT.add(sym)
+    try:
+        data = _ticker_info_fetch(sym)
+        ts = time.time()
+        _TICKER_INFO_CACHE[sym] = (ts, data)
+        _ticker_info_db_put(db_file, sym, data, ts)
+        return data
+    except Exception as e:
+        # Hintergrund-Auffrischungen laufen unbeaufsichtigt → Fehler nur loggen, nie werfen
+        print(f"ticker_info refresh {sym}: {e}")
+        return None
+    finally:
+        _TICKER_INFO_INFLIGHT.discard(sym)
 
 @app.get("/api/ticker/info/{ticker}")
 async def ticker_info(ticker: str, request: Request):
     import asyncio
-    get_user(request)
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
     sym = (ticker or "").strip().upper()
     if not sym:
         return JSONResponse({"ok": False, "error": "Kein Ticker"}, status_code=400)
 
-    now = time.time()
+    now  = time.time()
+    loop = asyncio.get_running_loop()
+
+    # 1) In-Memory-Cache (prozessweit) — frisch → sofort
     cached = _TICKER_INFO_CACHE.get(sym)
     if cached and now - cached[0] < _TICKER_INFO_TTL:
-        return JSONResponse({"ok": True, "cached": True, **cached[1]})
+        return JSONResponse({"ok": True, "cached": "mem", **cached[1]})
 
-    def _fetch():
-        import yfinance as yf
-        info = yf.Ticker(sym).info or {}
-        return {
-            "symbol":         sym,
-            "name":           info.get("longName") or info.get("shortName") or sym,
-            "sector":         info.get("sector"),
-            "industry":       info.get("industry"),
-            "market_cap":     info.get("marketCap"),
-            "currency":       info.get("currency"),
-            "country":        info.get("country"),
-            "exchange":       info.get("fullExchangeName") or info.get("exchange"),
-            "quote_type":     info.get("quoteType"),
-            "pe":             info.get("trailingPE"),
-            "forward_pe":     info.get("forwardPE"),
-            "eps":            info.get("trailingEps"),
-            "dividend_yield": info.get("dividendYield"),
-            "beta":           info.get("beta"),
-            "week52_high":    info.get("fiftyTwoWeekHigh"),
-            "week52_low":     info.get("fiftyTwoWeekLow"),
-            "employees":      info.get("fullTimeEmployees"),
-            "website":        info.get("website"),
-        }
+    # 2) DB — vorhanden → SOFORT zurückgeben; bei Veraltung im Hintergrund auffrischen
+    data, updated = _ticker_info_db_get(files["db"], sym)
+    if data:
+        _TICKER_INFO_CACHE[sym] = (updated, data)
+        if now - updated >= _TICKER_INFO_TTL:
+            asyncio.ensure_future(loop.run_in_executor(None, _ticker_info_refresh, sym, files["db"]))
+        return JSONResponse({"ok": True, "cached": "db", "stale": now - updated >= _TICKER_INFO_TTL, **data})
 
+    # 3) Nichts gespeichert → live holen (erster Abruf je Ticker)
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _fetch)
-        _TICKER_INFO_CACHE[sym] = (now, result)
-        return JSONResponse({"ok": True, **result})
+        result = await loop.run_in_executor(None, _ticker_info_refresh, sym, files["db"])
+        if result is None:                       # parallele Auffrischung war schon unterwegs
+            result = _TICKER_INFO_CACHE.get(sym, (0, _ticker_info_fetch(sym)))[1]
+        return JSONResponse({"ok": True, "cached": False, **result})
     except Exception as e:
         print(f"ticker_info error {sym}: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
