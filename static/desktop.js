@@ -738,6 +738,100 @@ function updateChartTitle() {
     }
 }
 
+// ── Chart-Meta: Hintergrund-Wasserzeichen + Stammdaten-Feld ──────────────────────
+
+var _tickerInfoCache = {};   // sym -> info-Objekt
+var _tickerInfoReq   = 0;    // Race-Schutz (nur die letzte Anfrage rendert)
+
+/** Setzt den Wasserzeichen-Text im Chart-Hintergrund. */
+function setChartWatermark(text) {
+    var el = document.getElementById('chartWatermark');
+    if (el) el.textContent = text || '';
+}
+
+/** Aktualisiert Wasserzeichen + Stammdaten-Feld passend zur aktuellen Ansicht. */
+function updateChartMeta() {
+    if (typeof currentView === 'undefined') return;
+    if (currentView === 'index') {
+        var name = (typeof baskets !== 'undefined' && baskets[currentBasket])
+            ? baskets[currentBasket].name : 'Index';
+        setChartWatermark(name);
+        renderTickerInfo(null);            // Stammdaten nur für Einzelaktien
+    } else {
+        setChartWatermark(currentView);
+        if (_tickerInfoCache[currentView]) {
+            renderTickerInfo(_tickerInfoCache[currentView]);
+        } else {
+            renderTickerInfo({ loading: true, symbol: currentView });
+            fetchTickerInfo(currentView);
+        }
+    }
+}
+
+/** Holt Stammdaten vom Backend (gecacht) und rendert sie, wenn noch aktuell. */
+async function fetchTickerInfo(sym) {
+    var req = ++_tickerInfoReq;
+    try {
+        var res = await fetch('/api/ticker/info/' + encodeURIComponent(sym))
+                        .then(function(r) { return r.json(); });
+        if (res && res.ok) _tickerInfoCache[sym] = res;
+        if (req !== _tickerInfoReq || currentView !== sym) return;   // Ansicht hat gewechselt
+        renderTickerInfo(res && res.ok ? res : { error: true, symbol: sym });
+    } catch (e) {
+        if (req === _tickerInfoReq && currentView === sym) renderTickerInfo({ error: true, symbol: sym });
+    }
+}
+
+/** Rendert das Stammdaten-Feld. null → ausblenden. */
+function renderTickerInfo(d) {
+    var el = document.getElementById('ticker-info');
+    if (!el) return;
+    if (!d) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = 'block';
+
+    if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>'; return; }
+    if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>'; return; }
+
+    var esc = function(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    var cap = function(v) {
+        if (v == null) return null;
+        var a = Math.abs(v);
+        if (a >= 1e12) return (v/1e12).toFixed(2) + ' T';
+        if (a >= 1e9)  return (v/1e9).toFixed(2) + ' Mrd';
+        if (a >= 1e6)  return (v/1e6).toFixed(2) + ' Mio';
+        return v.toLocaleString('de-DE');
+    };
+    var num = function(v, dec) { return v == null ? null : Number(v).toLocaleString('de-DE', { maximumFractionDigits: dec == null ? 2 : dec }); };
+    // yfinance liefert dividendYield bereits in Prozent (z.B. 0.37 = 0,37 %, 2.64 = 2,64 %)
+    var pct = function(v) { return v == null ? null : Number(v).toLocaleString('de-DE', { maximumFractionDigits: 2 }) + ' %'; };
+
+    var ccy  = d.currency ? (' ' + esc(d.currency)) : '';
+    var rows = [
+        ['Sektor',     d.sector ? esc(d.sector) : null],
+        ['Branche',    d.industry ? esc(d.industry) : null],
+        ['MarktKap.',  cap(d.market_cap) ? cap(d.market_cap) + ccy : null],
+        ['KGV',        num(d.pe)],
+        ['KGV (e)',    num(d.forward_pe)],
+        ['Div.-Rend.', pct(d.dividend_yield)],
+        ['Beta',       num(d.beta)],
+        ['52W-Hoch',   num(d.week52_high) ? num(d.week52_high) + ccy : null],
+        ['52W-Tief',   num(d.week52_low)  ? num(d.week52_low)  + ccy : null],
+        ['Land',       d.country ? esc(d.country) : null],
+        ['Börse',      d.exchange ? esc(d.exchange) : null]
+    ].filter(function(r) { return r[1] != null && r[1] !== ''; });
+
+    var html = '<div class="ti-name">' + esc(d.name || d.symbol) + '</div>';
+    if (d.symbol && d.name && d.name !== d.symbol)
+        html += '<div class="ti-sub">' + esc(d.symbol) + '</div>';
+    html += rows.map(function(r) {
+        return '<div class="ti-row"><span class="ti-k">' + r[0] + '</span><span class="ti-v">' + r[1] + '</span></div>';
+    }).join('');
+    el.innerHTML = html;
+}
+
 function showTab(tab) {
     document.querySelectorAll('.sidebar-tab').forEach(function(t) { t.classList.remove('active'); });
     document.querySelectorAll('.sidebar-content').forEach(function(c) { c.style.display = 'none'; });

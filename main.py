@@ -600,6 +600,60 @@ async def get_prices(ticker: str, request: Request):
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+# ── Ticker-Fundamentaldaten (Sektor, MarktCap, …) ───────────────────────────────
+# Holt Stammdaten via yfinance (kümmert sich um Yahoo-Crumb/Cookies). Ergebnis wird
+# prozessweit gecacht (TTL), da Fundamentaldaten nutzerunabhängig + selten ändern.
+
+_TICKER_INFO_CACHE: dict[str, tuple] = {}   # sym -> (timestamp, dict)
+_TICKER_INFO_TTL = 12 * 3600
+
+@app.get("/api/ticker/info/{ticker}")
+async def ticker_info(ticker: str, request: Request):
+    import asyncio
+    get_user(request)
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return JSONResponse({"ok": False, "error": "Kein Ticker"}, status_code=400)
+
+    now = time.time()
+    cached = _TICKER_INFO_CACHE.get(sym)
+    if cached and now - cached[0] < _TICKER_INFO_TTL:
+        return JSONResponse({"ok": True, "cached": True, **cached[1]})
+
+    def _fetch():
+        import yfinance as yf
+        info = yf.Ticker(sym).info or {}
+        return {
+            "symbol":         sym,
+            "name":           info.get("longName") or info.get("shortName") or sym,
+            "sector":         info.get("sector"),
+            "industry":       info.get("industry"),
+            "market_cap":     info.get("marketCap"),
+            "currency":       info.get("currency"),
+            "country":        info.get("country"),
+            "exchange":       info.get("fullExchangeName") or info.get("exchange"),
+            "quote_type":     info.get("quoteType"),
+            "pe":             info.get("trailingPE"),
+            "forward_pe":     info.get("forwardPE"),
+            "eps":            info.get("trailingEps"),
+            "dividend_yield": info.get("dividendYield"),
+            "beta":           info.get("beta"),
+            "week52_high":    info.get("fiftyTwoWeekHigh"),
+            "week52_low":     info.get("fiftyTwoWeekLow"),
+            "employees":      info.get("fullTimeEmployees"),
+            "website":        info.get("website"),
+        }
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _fetch)
+        _TICKER_INFO_CACHE[sym] = (now, result)
+        return JSONResponse({"ok": True, **result})
+    except Exception as e:
+        print(f"ticker_info error {sym}: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+
 @app.get("/api/drawings")
 async def get_drawings(request: Request, view: str = "index:default"):
     user = get_user(request)

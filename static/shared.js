@@ -969,6 +969,7 @@ async function loadData() {
     } else {
         await loadTickerData(currentView);
     }
+    if (typeof updateChartMeta === 'function') updateChartMeta();
 }
 
 /**
@@ -1093,6 +1094,7 @@ async function renameBasket() {
     b.name = name;
     if (typeof renderBasketSelect === 'function') renderBasketSelect();
     if (typeof updateChartTitle   === 'function') updateChartTitle();
+    if (typeof updateChartMeta    === 'function') updateChartMeta();
     await saveBasketsToServer();
 }
 
