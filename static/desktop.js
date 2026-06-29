@@ -293,6 +293,7 @@ function initChart() {
         }
     });
 
+    applyChartTheme();   // Chart-Farben ans gespeicherte Theme angleichen
 }
 
 function fitChart() {
@@ -2167,8 +2168,58 @@ document.addEventListener('click', function(e) {
 // ║ 13. EINSTELLUNGEN (Konto + IBKR Flex Query)              ║
 // ╚══════════════════════════════════════════════════════════╝
 
+// ── Aussehen / Theme ──────────────────────────────────────────
+// Setzt die data-Attribute am <html>, woraus desktop.css das Theme ableitet.
+function applyAppearance() {
+    var a    = appearance || {};
+    var root = document.documentElement;
+    root.setAttribute('data-theme',    a.theme    || 'light');
+    root.setAttribute('data-contrast', a.contrast || 'normal');
+    root.setAttribute('data-accent',   a.accent   || 'green');
+    root.setAttribute('data-fontsize', a.fontSize || 'compact');
+    applyChartTheme();
+    renderAppearanceControls();
+}
+
+// Chart-Farben (Text + Gitter) an das aktuelle Theme angleichen.
+function applyChartTheme() {
+    if (typeof chart === 'undefined' || !chart) return;
+    var cs   = getComputedStyle(document.documentElement);
+    var txt  = cs.getPropertyValue('--text').trim() || '#1a1a18';
+    var dark = (appearance && appearance.theme === 'dark');
+    var grid = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+    try {
+        chart.applyOptions({
+            layout: { textColor: txt },
+            grid:   { vertLines: { color: grid }, horzLines: { color: grid } },
+        });
+    } catch (e) { /* ignore */ }
+}
+
+// Markiert in den Segmented-Controls die aktiven Werte.
+function renderAppearanceControls() {
+    [['ap-theme', 'theme'], ['ap-contrast', 'contrast'], ['ap-fontSize', 'fontSize'], ['ap-accent', 'accent']]
+        .forEach(function(pair) {
+            var grp = document.getElementById(pair[0]);
+            if (!grp) return;
+            var cur = (appearance && appearance[pair[1]]) || '';
+            grp.querySelectorAll('.seg-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-v') === cur);
+            });
+        });
+}
+
+// Einstellung ändern → anwenden + pro Nutzer speichern.
+async function setAppearance(key, value) {
+    if (!appearance) appearance = {};
+    appearance[key] = value;
+    applyAppearance();
+    await saveBasketsToServer();
+}
+
 /** Lädt eingeloggten User + IBKR-Konfigurationsstatus in die Settings-Seite. */
 async function settingsLoad() {
+    renderAppearanceControls();
     try {
         var w = await fetch('/api/whoami').then(function(r) { return r.json(); });
         var u = document.getElementById('set-user');

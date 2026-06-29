@@ -268,7 +268,7 @@
           <div class="spinner"></div>
           <div class="status-text">Lade Kursdaten...</div>
         </div>
-        <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:rgba(255,255,255,0.85);padding:4px 8px;border:1px solid var(--border);">
+        <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:var(--surface);padding:4px 8px;border:1px solid var(--border);">
           <span id="ov-date" style="color:var(--muted);"></span><br>
           O <span id="ov" class="stat-val">-</span>
           H <span id="oh" class="stat-val">-</span>
@@ -600,6 +600,43 @@
 <!-- ══ SEITE: EINSTELLUNGEN ═══════════════════════════════════════════════════ -->
 <section id="view-settings" class="page">
   <div class="settings-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">Aussehen</h2>
+      <p class="settings-hint">Wird pro Benutzer gespeichert und gilt auf allen Geräten.</p>
+      <div class="settings-row">
+        <span class="settings-label">Theme</span>
+        <div class="seg-group" id="ap-theme">
+          <button class="seg-btn" data-v="light" onclick="setAppearance('theme','light')">☀ Hell</button>
+          <button class="seg-btn" data-v="dark"  onclick="setAppearance('theme','dark')">🌙 Dunkel</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Kontrast</span>
+        <div class="seg-group" id="ap-contrast">
+          <button class="seg-btn" data-v="normal" onclick="setAppearance('contrast','normal')">Normal</button>
+          <button class="seg-btn" data-v="high"   onclick="setAppearance('contrast','high')">Hoch</button>
+          <button class="seg-btn" data-v="max"    onclick="setAppearance('contrast','max')">Sehr hoch</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Schriftgröße</span>
+        <div class="seg-group" id="ap-fontSize">
+          <button class="seg-btn" data-v="compact" onclick="setAppearance('fontSize','compact')">Kompakt</button>
+          <button class="seg-btn" data-v="normal"  onclick="setAppearance('fontSize','normal')">Normal</button>
+          <button class="seg-btn" data-v="large"   onclick="setAppearance('fontSize','large')">Groß</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Akzentfarbe</span>
+        <div class="seg-group" id="ap-accent">
+          <button class="seg-btn" data-v="green"  onclick="setAppearance('accent','green')"><span class="seg-swatch" style="background:#2d8a4e"></span>Grün</button>
+          <button class="seg-btn" data-v="blue"   onclick="setAppearance('accent','blue')"><span class="seg-swatch" style="background:#2f7fe0"></span>Blau</button>
+          <button class="seg-btn" data-v="purple" onclick="setAppearance('accent','purple')"><span class="seg-swatch" style="background:#8b5cf6"></span>Lila</button>
+          <button class="seg-btn" data-v="amber"  onclick="setAppearance('accent','amber')"><span class="seg-swatch" style="background:#d08a1e"></span>Bernstein</button>
+        </div>
+      </div>
+    </div>
 
     <div class="settings-card">
       <h2 class="settings-h">Konto</h2>

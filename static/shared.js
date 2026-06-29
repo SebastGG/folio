@@ -29,6 +29,8 @@ var WEIGHTS       = {};  // { AAPL: 10, GOOGL: 5 } — Anzahl Aktien pro Ticker
 var TICKERS       = [];  // Alle Ticker mit Daten in der DB
 var baskets       = {};  // { basket_id: { name, weights, period, tf, ... } }
 var currentBasket = '';  // Aktiver Basket-ID
+// Aussehen (pro Nutzer in der Config gespeichert). Defaults = bisheriges Aussehen.
+var appearance    = { theme: 'light', contrast: 'normal', fontSize: 'compact', accent: 'green' };
 var currentView   = 'index'; // 'index' oder Ticker-Symbol z.B. 'AAPL'
 
 // Chart-Einstellungen
@@ -713,6 +715,9 @@ async function loadConfig() {
         var cfg = await r.json();
         baskets       = cfg.baskets       || {};
         currentBasket = cfg.currentBasket || '';
+        // Aussehen wiederherstellen und anwenden
+        appearance    = Object.assign(appearance, cfg.appearance || {});
+        if (typeof applyAppearance === 'function') applyAppearance();
         // Layout wiederherstellen
         if (typeof loadLayout === 'function' && cfg.layout) {
             _layout = cfg.layout;
@@ -748,7 +753,7 @@ async function saveBasketsToServer() {
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, layout: (typeof _layout !== 'undefined' ? _layout : {}) })
+            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance, layout: (typeof _layout !== 'undefined' ? _layout : {}) })
         });
     } catch (e) {
         console.warn('saveBasketsToServer failed:', e);
