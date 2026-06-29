@@ -2056,9 +2056,10 @@ async def screener_export(job_id: str, request: Request):
     if s["status"] != "done":
         return JSONResponse({"ok": False, "error": "Screening läuft noch"}, status_code=409)
     text = screener.format_tradingview(s["results"])
+    fname = f'Screening_Ergebnis_{time.strftime("%Y-%m-%d_%H-%M")}.txt'
     return PlainTextResponse(
         text,
         headers={"Content-Disposition":
-                 'attachment; filename="Screening_Ergebnis.txt"'},
+                 f'attachment; filename="{fname}"'},
     )
 
