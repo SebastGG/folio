@@ -1759,14 +1759,14 @@ function ibkrRenderTable() {
     var hasCash   = cashItems.length > 0;
 
     if (!hasPosns && !hasCash) {
-        tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
         if (tfoot) tfoot.innerHTML = '';
         return;
     }
 
     var sectionHdr = function(label) {
         return '<tr style="background:var(--surface);">'
-            + '<td colspan="7" style="font-weight:700;font-size:9px;text-transform:uppercase;'
+            + '<td colspan="8" style="font-weight:700;font-size:9px;text-transform:uppercase;'
             + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
     };
 
@@ -1776,7 +1776,7 @@ function ibkrRenderTable() {
     if (hasPosns) {
         html += sectionHdr('Positionen');
         var ccyFx = ibkrCcyFx();
-        ibkrPositions.forEach(function(p) {
+        ibkrPositions.forEach(function(p, idx) {
             var fx       = p.fx_rate_to_base || 1.0;
             var cbmEur   = (p.cost_basis_money || 0) * fx;   // Einstand aus IBKR
             var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert / Notional (Futures: voller Kontraktwert)
@@ -1793,6 +1793,7 @@ function ibkrRenderTable() {
                 + '</span>';
             var provBadge = p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig, bis T+1-Abrechnung)" style="font-size:9px;color:var(--accent);font-weight:700">•heute</span>' : '';
             html += '<tr>'
+                + '<td style="text-align:center"><input type="checkbox" class="ibkr-sel" data-idx="' + idx + '" onclick="ibkrSyncSelAll()"></td>'
                 + '<td>' + symHtml + provBadge + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
@@ -1811,6 +1812,7 @@ function ibkrRenderTable() {
             var amt = c.ending_cash || 0;
             var amtColor = amt >= 0 ? 'var(--text)' : '#c0392b';
             html += '<tr>'
+                + '<td></td>'
                 + '<td style="font-weight:500">' + c.currency + '</td>'
                 + '<td style="color:var(--muted)">Cash</td>'
                 + '<td>—</td><td>—</td>'
@@ -1828,7 +1830,7 @@ function ibkrRenderTable() {
         var tPnlPctEur = totalCostEur ? totalPnlEur / Math.abs(totalCostEur) * 100 : 0;
         var tc = totalPnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-            + '<td style="font-weight:700">Assets</td><td></td><td></td>'
+            + '<td></td><td style="font-weight:700">Assets</td><td></td><td></td>'
             + '<td style="font-weight:700">' + totalCostEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700">' + totalValueEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700;color:' + tc + '">' + (totalPnlEur >= 0 ? '+' : '') + totalPnlEur.toFixed(2) + ' €</td>'
@@ -1838,7 +1840,7 @@ function ibkrRenderTable() {
     if (cashBase) {
         var cb = cashBase.ending_cash || 0;
         footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
-            + '<td style="font-weight:700">Cash (Basis)</td><td colspan="3"></td>'
+            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="3"></td>'
             + '<td style="font-weight:700">' + cb.toFixed(2) + ' €</td>'
             + '<td colspan="2"></td>'
             + '</tr>';
@@ -1849,7 +1851,7 @@ function ibkrRenderTable() {
                 ? grandPnl / Math.abs(totalCostEur + cb - grandPnl) * 100 : 0;
             var gc = grandTotal >= 0 ? '#2d8a4e' : '#c0392b';
             footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-                + '<td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="2"></td>'
+                + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="2"></td>'
                 + '<td style="font-weight:700;font-size:11px;">' + (totalCostEur + cb).toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;">' + grandTotal.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnl >= 0 ? '+' : '') + grandPnl.toFixed(0) + ' €</td>'
@@ -1936,6 +1938,53 @@ async function ibkrCreateBasket() {
     var id = 'basket_' + Date.now();
     baskets[id] = {
         name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: true,
+        perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+    };
+    await saveBasketsToServer();
+    await switchBasket(id);
+}
+
+// Header-Checkbox: alle Positions-Checkboxen an-/abwählen.
+function ibkrToggleSelAll(cb) {
+    document.querySelectorAll('#ibkrBody input.ibkr-sel').forEach(function(box) {
+        box.checked = cb.checked;
+    });
+}
+
+// Hält die Header-Checkbox im Einklang mit den Zeilen (checked nur wenn alle an).
+function ibkrSyncSelAll() {
+    var all = document.querySelectorAll('#ibkrBody input.ibkr-sel');
+    var sel = document.querySelectorAll('#ibkrBody input.ibkr-sel:checked');
+    var head = document.getElementById('ibkrSelAll');
+    if (!head) return;
+    head.checked       = all.length > 0 && sel.length === all.length;
+    head.indeterminate = sel.length > 0 && sel.length < all.length;
+}
+
+// Erstellt einen Basket aus den angehakten Positionen.
+async function ibkrCreateBasketFromSelection() {
+    var boxes = document.querySelectorAll('#ibkrBody input.ibkr-sel:checked');
+    if (!boxes.length) { alert('Keine Positionen ausgewählt.'); return; }
+    var weights = {};
+    boxes.forEach(function(box) {
+        var p = (ibkrPositions || [])[parseInt(box.getAttribute('data-idx'), 10)];
+        if (!p) return;
+        var cls = (p.asset_class || '').toUpperCase();
+        var qty = p.quantity || 0;
+        if (cls === 'STK' && qty > 0) {
+            var sym = ibkrPosYahoo(p);   // ISIN-Mapping → korrekte Notierung (z.B. ASML.AS)
+            if (sym) weights[sym] = Math.abs(qty);
+        } else if (cls === 'FUT' && qty !== 0) {
+            var fsym = p.yahoo_symbol || ((p.symbol || '').replace(/[FGHJKMNQUVXZ]\d{1,2}$/, '') + '=F');
+            if (fsym && fsym !== '=F') weights[fsym] = qty * (p.multiplier || 1);
+        }
+    });
+    if (Object.keys(weights).length === 0) { alert('Auswahl enthält keine geeigneten Positionen (Long-Aktien / Futures).'); return; }
+    var name = prompt('Name des neuen Baskets:', 'IBKR Auswahl');
+    if (!name) return;
+    var id = 'basket_' + Date.now();
+    baskets[id] = {
+        name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: false,
         perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
     };
     await saveBasketsToServer();
