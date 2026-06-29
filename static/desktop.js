@@ -1866,6 +1866,7 @@ function ibkrRenderTable() {
         syncEl.textContent = ibkrLastSync.slice(0, 16).replace('T', ' ') + ' UTC';
     }
     renderPortfolioReport();
+    ibkrRenderCoverage();
 }
 
 async function ibkrSync() {
@@ -1959,6 +1960,53 @@ function ibkrSyncSelAll() {
     if (!head) return;
     head.checked       = all.length > 0 && sel.length === all.length;
     head.indeterminate = sel.length > 0 && sel.length < all.length;
+}
+
+// Prüft, welche Long-Aktien aus IBKR in keinem Basket einsortiert sind.
+function ibkrRenderCoverage() {
+    var el = document.getElementById('ibkrCoverage');
+    if (!el) return;
+    // Alle Symbole über alle Baskets sammeln (case-insensitiver Vergleich).
+    var covered = {};
+    Object.keys(baskets).forEach(function(id) {
+        var w = baskets[id] && baskets[id].weights;
+        if (w) Object.keys(w).forEach(function(sym) { covered[sym.toUpperCase()] = true; });
+    });
+    var missing = [], stkCount = 0;
+    (ibkrPositions || []).forEach(function(p, idx) {
+        if ((p.asset_class || '').toUpperCase() !== 'STK') return;
+        if ((p.quantity || 0) <= 0) return;
+        stkCount++;
+        var sym = ibkrPosYahoo(p);
+        if (!sym || !covered[sym.toUpperCase()]) missing.push({ idx: idx, sym: sym || p.symbol });
+    });
+    el._missing = missing;
+    if (stkCount === 0) { el.innerHTML = ''; el.style.background = ''; return; }
+    if (missing.length === 0) {
+        el.style.background = 'rgba(45,138,78,.12)';
+        el.style.color      = '#2d8a4e';
+        el.innerHTML = '✓ Alle ' + stkCount + ' Aktien sind in Baskets einsortiert.';
+    } else {
+        el.style.background = 'rgba(192,57,43,.12)';
+        el.style.color      = '#c0392b';
+        var names = missing.map(function(m) { return m.sym; }).join(', ');
+        el.innerHTML = '⚠ ' + missing.length + ' von ' + stkCount + ' Aktien in keinem Basket: '
+            + '<b>' + names + '</b> '
+            + '<a href="#" onclick="ibkrSelectMissing();return false;" style="color:inherit;text-decoration:underline;margin-left:4px;">→ markieren</a>';
+    }
+}
+
+// Hakt genau die nicht einsortierten Aktien an (für "+ Basket aus Auswahl").
+function ibkrSelectMissing() {
+    var el = document.getElementById('ibkrCoverage');
+    var missing = el && el._missing;
+    if (!missing || !missing.length) return;
+    var want = {};
+    missing.forEach(function(m) { want[m.idx] = true; });
+    document.querySelectorAll('#ibkrBody input.ibkr-sel').forEach(function(box) {
+        box.checked = !!want[parseInt(box.getAttribute('data-idx'), 10)];
+    });
+    ibkrSyncSelAll();
 }
 
 // Erstellt einen Basket aus den angehakten Positionen.
