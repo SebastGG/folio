@@ -26,7 +26,7 @@
   --surface: #1e1f25;
   --text:    #e9e7e2;
   --muted:   #8b8b84;
-  --border:  #313238;
+  --border:  #41424c;
   --accent:  #4f9d63;
   --red:     #e05a4d;
   --green:   #3fa463;
@@ -36,8 +36,8 @@
 [data-theme="light"][data-contrast="high"] { --muted: #5d5d55; --border: #cdc7ba; }
 [data-theme="light"][data-contrast="max"]  { --muted: #3c3c36; --border: #aaa394; --text: #000000; }
 /* Kontrast-Stufen — dunkel (hellere Graustufen) */
-[data-theme="dark"][data-contrast="high"]  { --muted: #a9a9a0; --border: #45464e; }
-[data-theme="dark"][data-contrast="max"]   { --muted: #c8c8be; --border: #5a5b65; --text: #ffffff; }
+[data-theme="dark"][data-contrast="high"]  { --muted: #a9a9a0; --border: #565762; }
+[data-theme="dark"][data-contrast="max"]   { --muted: #c8c8be; --border: #6e6f7b; --text: #ffffff; }
 
 /* Akzentfarbe (wirkt in beiden Themes) */
 [data-accent="green"]  { --accent: #2d8a4e; }
