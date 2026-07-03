@@ -432,10 +432,25 @@ def _reconcile_splits(ticker: str, conn: sqlite3.Connection) -> list:
             # Ist die Diskontinuität mind. halbwegs in Richtung Split-Faktor
             # (gleiche Richtung)? → Altdaten liegen noch auf der Vor-Split-Skala.
             if lf != 0 and (lr / lf) > 0.5:
+                # Yahoo back-adjustiert die jüngsten Vor-Split-Tage oft schon mit
+                # dem Ex-Tag; unser Delta-Update holt genau die erneut und legt sie
+                # BEREITS skaliert ab. Nicht pauschal alles < date_str teilen (das
+                # würde diese Tage ein zweites Mal halbieren → künstliche Delle),
+                # sondern nur den zusammenhängenden Roh-Block: von der Grenze rück-
+                # wärts den schon adjustierten Tail (Ratio ≈ 0) überspringen und
+                # erst ab dem ersten klar rohen Tag (Ratio > 0.5) abwärts skalieren.
+                boundary = date_str
+                older = conn.execute(
+                    "SELECT date, close FROM prices WHERE ticker=? AND date<? "
+                    "AND close>0 ORDER BY date DESC", (ticker, date_str)).fetchall()
+                for r in older:
+                    if (math.log(r["close"] / post_m) / lf) > 0.5:
+                        break                 # erster roher Tag → ab hier abwärts
+                    boundary = r["date"]      # noch adjustiert → aus Korrektur raus
                 conn.execute(
                     "UPDATE prices SET open=open/?, high=high/?, low=low/?, "
                     "close=close/?, volume=volume*? WHERE ticker=? AND date<?",
-                    (f, f, f, f, f, ticker, date_str))
+                    (f, f, f, f, f, ticker, boundary))
                 applied = 1
                 applied_factors.append(f)
         elif post and not pre:
@@ -670,6 +685,38 @@ async def update_prices(request: Request):
         results = dict(ex.map(lambda t: update_one(t), tickers))
 
     return JSONResponse(content={"ok": True, "results": results})
+
+@app.post("/api/prices/repair/{ticker}")
+async def repair_ticker(ticker: str, request: Request):
+    """Ticker nach einem fehlerhaften Split-Reconcile sauber neu aufbauen.
+
+    Behebt Fälle, in denen einzelne Tage doppelt split-korrigiert wurden (z.B. weil
+    Yahoo die jüngsten Vor-Split-Tage schon adjustiert lieferte und der frühere
+    pauschale Blanket-Divide sie ein zweites Mal halbierte). Löscht Split-Marker +
+    alle Kurszeilen des Tickers und lädt die Historie voll neu — die korrigierte
+    _reconcile_splits-Logik skaliert dann nur noch den echten Roh-Block.
+
+    Zeichnungen werden NICHT erneut skaliert (sie wurden beim ursprünglichen Lauf
+    bereits angepasst) → hier bewusst ohne _adjust_drawings_for_split.
+    """
+    ticker = ticker.strip().upper()
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    conn = get_db(files["db"])
+    try:
+        conn.execute("DELETE FROM ticker_splits WHERE ticker=?", (ticker,))
+        conn.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
+        conn.commit()
+        n, split_factors = update_ticker(ticker, conn)
+        count = conn.execute(
+            "SELECT COUNT(*) AS c FROM prices WHERE ticker=?", (ticker,)).fetchone()["c"]
+    finally:
+        conn.close()
+    return JSONResponse(content={
+        "ok": n >= 0, "ticker": ticker, "rows": count,
+        "splits_applied": split_factors,
+    })
 
 @app.get("/api/prices/status/all")
 async def get_prices_status(request: Request):
