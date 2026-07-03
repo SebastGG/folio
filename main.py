@@ -359,14 +359,122 @@ def init_db(db_file: str):
         data    TEXT,
         updated REAL
     )''')
+    # Verarbeitete Aktien-Splits — verhindert Doppel-Korrektur der Kursdaten.
+    conn.execute('''CREATE TABLE IF NOT EXISTS ticker_splits (
+        ticker  TEXT NOT NULL,
+        date    TEXT NOT NULL,   -- Ex-Split-Datum (erster Handelstag neu)
+        ratio   REAL NOT NULL,   -- Faktor num/den (4:1 → 4.0, 1:10 → 0.1)
+        applied INTEGER,         -- 1 = Kursdaten wurden rückwirkend skaliert
+        seen_at REAL,
+        PRIMARY KEY (ticker, date)
+    )''')
     conn.commit()
     conn.close()
 
+# ── Aktien-Splits ────────────────────────────────────────────────────────────────
+# Yahoo liefert OHLC rückwirkend split-bereinigt. Da wir aber nur Delta-Updates
+# schreiben (neue Tage anhängen), bleiben Alt-Zeilen nach einem Split auf der
+# Vor-Split-Skala stehen, während neue Tage bereits neu skaliert reinkommen →
+# künstliche Kursklippe. Wir erkennen das am tatsächlichen Kurssprung an der
+# Split-Grenze und korrigieren die Altdaten dann rückwirkend.
+
+def _fetch_all_splits(ticker: str) -> dict:
+    """Alle jemals erfolgten Splits (Datum → Faktor num/den). range=max mit grober
+    Auflösung → winzige Payload (~20 KB)."""
+    import urllib.request, datetime
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+           f"?interval=3mo&range=max&events=split")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+    result = (data.get("chart", {}).get("result") or [None])[0]
+    if not result:
+        return {}
+    splits = (result.get("events", {}) or {}).get("splits", {}) or {}
+    out = {}
+    for ev in splits.values():
+        num = ev.get("numerator") or 0
+        den = ev.get("denominator") or 0
+        if num > 0 and den > 0:
+            d = datetime.datetime.utcfromtimestamp(ev["date"]).strftime("%Y-%m-%d")
+            out[d] = num / den
+    return out
+
+def _reconcile_splits(ticker: str, conn: sqlite3.Connection) -> list:
+    """Gleicht Yahoo-Splits mit der DB ab und korrigiert Altdaten rückwirkend,
+    falls sie noch auf der Vor-Split-Skala liegen. Gibt die Faktoren der NEU
+    angewandten Splits zurück (für die Zeichnungs-Anpassung)."""
+    import math
+    try:
+        splits = _fetch_all_splits(ticker)
+    except Exception as e:
+        print(f"reconcile_splits fetch {ticker}: {e}")
+        return []
+    if not splits:
+        return []
+    applied_factors = []
+    for date_str, f in sorted(splits.items()):
+        if conn.execute("SELECT 1 FROM ticker_splits WHERE ticker=? AND date=?",
+                        (ticker, date_str)).fetchone():
+            continue  # schon abgehandelt
+        # Kurssprung an der Grenze aus unseren eigenen Tagesdaten messen
+        pre = conn.execute(
+            "SELECT close FROM prices WHERE ticker=? AND date<? AND close>0 "
+            "ORDER BY date DESC LIMIT 5", (ticker, date_str)).fetchall()
+        post = conn.execute(
+            "SELECT close FROM prices WHERE ticker=? AND date>=? AND close>0 "
+            "ORDER BY date ASC LIMIT 5", (ticker, date_str)).fetchall()
+        applied = 0
+        if pre and post:
+            pre_m  = sorted(r["close"] for r in pre)[len(pre) // 2]
+            post_m = sorted(r["close"] for r in post)[len(post) // 2]
+            lr, lf = math.log(pre_m / post_m), math.log(f)
+            # Ist die Diskontinuität mind. halbwegs in Richtung Split-Faktor
+            # (gleiche Richtung)? → Altdaten liegen noch auf der Vor-Split-Skala.
+            if lf != 0 and (lr / lf) > 0.5:
+                conn.execute(
+                    "UPDATE prices SET open=open/?, high=high/?, low=low/?, "
+                    "close=close/?, volume=volume*? WHERE ticker=? AND date<?",
+                    (f, f, f, f, f, ticker, date_str))
+                applied = 1
+                applied_factors.append(f)
+        elif post and not pre:
+            applied = 1  # Split liegt vor unseren Daten → nichts zu korrigieren
+        else:
+            continue     # zu wenig Daten für sichere Entscheidung → später erneut
+        conn.execute("INSERT OR REPLACE INTO ticker_splits VALUES (?,?,?,?,?)",
+                     (ticker, date_str, f, applied, time.time()))
+    conn.commit()
+    return applied_factors
+
+def _adjust_drawings_for_split(data_dir: str, view_key: str, factors: list):
+    """Skaliert die Preis-Anker gespeicherter Zeichnungen um die Split-Faktoren
+    (Kurse ÷ f → Anker ÷ f), damit Zeichnungen relativ zu den korrigierten
+    Kerzen an Ort und Stelle bleiben. Alle vor dem Split angelegten Zeichnungen
+    liegen auf der Vor-Split-Skala."""
+    try:
+        f = 1.0
+        for x in factors:
+            f *= x
+        if f == 1.0:
+            return
+        drawings = load_drawings(data_dir, view_key)
+        if not drawings:
+            return
+        for d in drawings:
+            for a in (d.get("anchors") or []):
+                if isinstance(a, dict) and a.get("price") is not None:
+                    a["price"] = a["price"] / f
+        save_drawings(data_dir, view_key, drawings)
+    except Exception as e:
+        print(f"adjust_drawings_for_split {view_key}: {e}")
+
 # ── Yahoo Finance ──────────────────────────────────────────────────────────────
-def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
+def update_ticker(ticker: str, conn: sqlite3.Connection):
     """
     Lädt Kursdaten von Yahoo Finance und speichert sie in SQLite.
     Nutzt Delta-Updates + holt heutigen Intraday-Kurs separat.
+    Rückgabe: (Anzahl neuer/aktualisierter Zeilen, [neu angewandte Split-Faktoren]).
     """
     try:
         import urllib.request, datetime, time as time_module
@@ -450,10 +558,14 @@ def update_ticker(ticker: str, conn: sqlite3.Connection) -> int:
             "INSERT OR REPLACE INTO ticker_currency VALUES (?,?)", (ticker, currency)
         )
         conn.commit()
-        return count
+
+        # Splits abgleichen & Altdaten ggf. rückwirkend korrigieren (nach dem
+        # Insert, damit die neuen Post-Split-Tage in der Sprung-Messung stecken)
+        split_factors = _reconcile_splits(ticker, conn)
+        return count, split_factors
     except Exception as e:
         print(f"update_ticker error for {ticker}: {e}")
-        return -1
+        return -1, []
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 def load_config(config_file: str) -> dict:
@@ -544,8 +656,12 @@ async def update_prices(request: Request):
     def update_one(ticker):
         try:
             conn = get_db(files["db"])
-            n = update_ticker(ticker, conn)
+            n, split_factors = update_ticker(ticker, conn)
             conn.close()
+            # Nach rückwirkender Split-Korrektur der Kurse auch die Zeichnungen
+            # dieses Tickers auf die neue Kurs-Skala anpassen.
+            if split_factors:
+                _adjust_drawings_for_split(files["data_dir"], "ticker:" + ticker, split_factors)
             return ticker, n
         except Exception as e:
             return ticker, f"error: {e}"
