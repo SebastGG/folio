@@ -1582,6 +1582,7 @@ updateClock();
         ibkrLoadIsinMap().then(function() {
             ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
                 ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
+                ibkrLoadSectors().then(function() { ibkrRenderTable(); });
             });
             ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
         });
@@ -1753,6 +1754,7 @@ function ibkrRenderTable() {
     var tbody = document.getElementById('ibkrBody');
     var tfoot = document.getElementById('ibkrFoot');
     if (!tbody) return;
+    var esc = function(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
 
     var cashItems = (ibkrCash || []).filter(function(c) { return c.currency !== 'BASE'; });
     var cashBase  = (ibkrCash || []).find(function(c)   { return c.currency === 'BASE'; });
@@ -1760,14 +1762,14 @@ function ibkrRenderTable() {
     var hasCash   = cashItems.length > 0;
 
     if (!hasPosns && !hasCash) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
         if (tfoot) tfoot.innerHTML = '';
         return;
     }
 
     var sectionHdr = function(label) {
         return '<tr style="background:var(--surface);">'
-            + '<td colspan="8" style="font-weight:700;font-size:9px;text-transform:uppercase;'
+            + '<td colspan="9" style="font-weight:700;font-size:9px;text-transform:uppercase;'
             + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
     };
 
@@ -1793,10 +1795,26 @@ function ibkrRenderTable() {
                 + p.symbol + (yahooSym && yahooSym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + yahooSym + '</span>' : ' <span style="color:var(--muted);font-size:10px">✎</span>')
                 + '</span>';
             var provBadge = p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig, bis T+1-Abrechnung)" style="font-size:9px;color:var(--accent);font-weight:700">•heute</span>' : '';
+            var cls    = (p.asset_class || '').toUpperCase();
+            var secTd;
+            if (cls === 'STK' && qty > 0) {
+                var sec = ibkrPosSector(p);
+                if (sec) {
+                    secTd = '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;'
+                        + 'background:' + ibkrSectorColor(sec) + ';margin-right:5px;vertical-align:middle"></span>' + esc(sec);
+                } else if (ibkrPosYahoo(p) in ibkrSectors) {
+                    secTd = '<span style="color:var(--muted)">—</span>';        // Aktie ohne Sektor-Angabe
+                } else {
+                    secTd = '<span style="color:var(--muted)">…</span>';        // wird noch geladen
+                }
+            } else {
+                secTd = '<span style="color:var(--muted)">—</span>';            // ETF/Future/Cash: kein Sektor
+            }
             html += '<tr>'
                 + '<td style="text-align:center"><input type="checkbox" class="ibkr-sel" data-idx="' + idx + '" onclick="ibkrSyncSelAll()"></td>'
                 + '<td>' + symHtml + provBadge + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
+                + '<td style="color:var(--muted);font-size:10px">' + secTd + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
                 + '<td>' + cbmEur.toFixed(0) + '</td>'
                 + '<td>' + pvEur.toFixed(0) + '</td>'
@@ -1816,6 +1834,7 @@ function ibkrRenderTable() {
                 + '<td></td>'
                 + '<td style="font-weight:500">' + c.currency + '</td>'
                 + '<td style="color:var(--muted)">Cash</td>'
+                + '<td style="color:var(--muted)">—</td>'
                 + '<td>—</td><td>—</td>'
                 + '<td style="color:' + amtColor + '">' + amt.toFixed(2) + '</td>'
                 + '<td>—</td><td>—</td>'
@@ -1831,7 +1850,7 @@ function ibkrRenderTable() {
         var tPnlPctEur = totalCostEur ? totalPnlEur / Math.abs(totalCostEur) * 100 : 0;
         var tc = totalPnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-            + '<td></td><td style="font-weight:700">Assets</td><td></td><td></td>'
+            + '<td></td><td style="font-weight:700">Assets</td><td></td><td></td><td></td>'
             + '<td style="font-weight:700">' + totalCostEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700">' + totalValueEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700;color:' + tc + '">' + (totalPnlEur >= 0 ? '+' : '') + totalPnlEur.toFixed(2) + ' €</td>'
@@ -1841,7 +1860,7 @@ function ibkrRenderTable() {
     if (cashBase) {
         var cb = cashBase.ending_cash || 0;
         footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
-            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="3"></td>'
+            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="4"></td>'
             + '<td style="font-weight:700">' + cb.toFixed(2) + ' €</td>'
             + '<td colspan="2"></td>'
             + '</tr>';
@@ -1852,7 +1871,7 @@ function ibkrRenderTable() {
                 ? grandPnl / Math.abs(totalCostEur + cb - grandPnl) * 100 : 0;
             var gc = grandTotal >= 0 ? '#2d8a4e' : '#c0392b';
             footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-                + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="2"></td>'
+                + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="3"></td>'
                 + '<td style="font-weight:700;font-size:11px;">' + (totalCostEur + cb).toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;">' + grandTotal.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnl >= 0 ? '+' : '') + grandPnl.toFixed(0) + ' €</td>'
@@ -1868,6 +1887,111 @@ function ibkrRenderTable() {
     }
     renderPortfolioReport();
     ibkrRenderCoverage();
+    ibkrRenderSectorAllocation();
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 12b. SEKTOR-ALLOKATION (nur Aktien, aktueller Wert)        ║
+// ╚══════════════════════════════════════════════════════════╝
+
+// GICS-Sektorname (Yahoo/Finviz) → CSS-Slug. Farben stehen in desktop.css als
+// --sec-<slug> (hell/dunkel via [data-theme]). Yahoo liefert "Financial Services"
+// und "Technology"; Finviz "Financial" — beide werden abgebildet.
+var IBKR_SECTOR_SLUG = {
+    'Technology':             'technology',
+    'Financial Services':     'financial',
+    'Financial':              'financial',
+    'Healthcare':             'healthcare',
+    'Consumer Cyclical':      'consumer-cyclical',
+    'Communication Services': 'communication',
+    'Energy':                 'energy',
+    'Industrials':            'industrials',
+    'Consumer Defensive':     'consumer-defensive',
+    'Basic Materials':        'basic-materials',
+    'Real Estate':            'real-estate',
+    'Utilities':              'utilities',
+};
+
+// Theme-reaktive Farbe je Sektor (gibt die CSS-Variable zurück, nicht den Hex-Wert).
+function ibkrSectorColor(sector) {
+    var slug = IBKR_SECTOR_SLUG[sector];
+    return slug ? 'var(--sec-' + slug + ')' : 'var(--muted)';
+}
+
+// Summiert den aktuellen EUR-Wert je Sektor über die Aktien-Positionen (STK, qty>0).
+// ETFs/Futures/Cash bleiben außen vor. Aktien ohne Sektor-Angabe → "Unbekannt".
+function ibkrSectorAlloc() {
+    var ccyFx = ibkrCcyFx();
+    var bySec = {}, total = 0;
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.asset_class || '').toUpperCase() !== 'STK') return;
+        if ((p.quantity || 0) <= 0) return;
+        var val = ibkrLiveValue(p, ccyFx);
+        if (!(val > 0)) return;
+        var sec = ibkrPosSector(p) || 'Unbekannt';
+        bySec[sec] = (bySec[sec] || 0) + val;
+        total += val;
+    });
+    return { bySec: bySec, total: total };
+}
+
+// Rendert Donut-Diagramm + Legende der Sektor-Allokation in #ibkrSectorAlloc.
+function ibkrRenderSectorAllocation() {
+    var box = document.getElementById('ibkrSectorAlloc');
+    if (!box) return;
+    var esc = function(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    var eur = function(v) { return Math.round(v).toLocaleString('de-DE'); };
+
+    var a = ibkrSectorAlloc();
+    if (!a.total) {
+        box.innerHTML = '<div style="color:var(--muted);font-size:10px;padding:6px 2px;">Keine Aktien-Positionen mit Sektor — Sync drücken oder kurz warten (Sektoren werden geladen …).</div>';
+        return;
+    }
+
+    var entries = Object.keys(a.bySec).map(function(s) { return { sector: s, val: a.bySec[s] }; });
+    entries.sort(function(x, y) { return y.val - x.val; });
+    // Mehr als 8 Segmente → kleinste zu "Sonstige" zusammenfassen (Lesbarkeit/Palette).
+    if (entries.length > 8) {
+        var head = entries.slice(0, 7);
+        var restVal = entries.slice(7).reduce(function(s, e) { return s + e.val; }, 0);
+        head.push({ sector: 'Sonstige', val: restVal, _other: true });
+        entries = head;
+    }
+
+    var colOf = function(e) {
+        return (e._other || e.sector === 'Unbekannt') ? 'var(--muted)' : ibkrSectorColor(e.sector);
+    };
+
+    // Donut über gestapelte <circle> mit stroke-dasharray (rotiert, Start oben).
+    var R = 54, SW = 22, r = R - SW / 2, C = 2 * Math.PI * r, off = 0, segs = '';
+    entries.forEach(function(e) {
+        var frac = e.val / a.total;
+        var len  = frac * C;
+        segs += '<circle cx="' + R + '" cy="' + R + '" r="' + r.toFixed(2) + '" fill="none" stroke-width="' + SW + '" '
+            + 'style="stroke:' + colOf(e) + '" stroke-dasharray="' + len.toFixed(2) + ' ' + (C - len).toFixed(2) + '" '
+            + 'stroke-dashoffset="' + (-off).toFixed(2) + '"><title>' + esc(e.sector) + ' — ' + (frac * 100).toFixed(1) + '%</title></circle>';
+        off += len;
+    });
+    var svg = '<svg viewBox="0 0 ' + (R * 2) + ' ' + (R * 2) + '" width="116" height="116" style="transform:rotate(-90deg)">' + segs + '</svg>';
+
+    var leg = entries.map(function(e) {
+        var frac = e.val / a.total;
+        return '<div class="sec-leg-row">'
+            + '<span class="sec-leg-dot" style="background:' + colOf(e) + '"></span>'
+            + '<span class="sec-leg-name">' + esc(e.sector) + '</span>'
+            + '<span class="sec-leg-pct">' + (frac * 100).toFixed(1) + '%</span>'
+            + '<span class="sec-leg-val">' + eur(e.val) + ' €</span>'
+            + '</div>';
+    }).join('');
+
+    box.innerHTML = '<div class="sec-alloc-wrap">'
+        + '<div class="sec-alloc-chart">'
+        +   '<div style="position:relative;width:116px;height:116px;">' + svg
+        +     '<div class="sec-alloc-center">' + eur(a.total) + ' €<span>Aktien</span></div>'
+        +   '</div>'
+        + '</div>'
+        + '<div class="sec-alloc-legend">' + leg + '</div>'
+        + '</div>';
 }
 
 async function ibkrSync() {
@@ -1896,6 +2020,7 @@ async function ibkrSync() {
                 ibkrRenderTrades();
                 refreshTradeMarkers();
             }
+            ibkrLoadSectors().then(function() { ibkrRenderTable(); });
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }
@@ -1944,6 +2069,63 @@ async function ibkrCreateBasket() {
     };
     await saveBasketsToServer();
     await switchBasket(id);
+}
+
+// Legt je Sektor einen Basket aus den Long-Aktien-Positionen an (Depot-Stückzahlen
+// als Gewichte). Name: "IBKR {Sektor}". Gleichnamige Baskets werden aktualisiert.
+// Nicht ibkrManaged — sonst würden sie beim Sync auf alle Positionen zurückgesetzt.
+async function ibkrCreateSectorBaskets() {
+    // Sektoren ggf. erst nachladen (falls Seite frisch und noch nicht gefüllt).
+    if (!Object.keys(ibkrSectors).length) {
+        await ibkrLoadSectors();
+        ibkrRenderTable();
+    }
+    var bySector = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.asset_class || '').toUpperCase() !== 'STK') return;
+        var qty = p.quantity || 0;
+        if (qty <= 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (!sym) return;
+        var sec = ibkrPosSector(p) || 'Unbekannt';
+        (bySector[sec] = bySector[sec] || {})[sym] = Math.abs(qty);
+    });
+    var sectors = Object.keys(bySector);
+    if (!sectors.length) { alert('Keine Long-Aktien-Positionen gefunden.'); return; }
+
+    // Bestehende Baskets nach Name indexieren (für Overwrite).
+    var byName = {};
+    Object.keys(baskets).forEach(function(id) {
+        if (baskets[id] && baskets[id].name) byName[baskets[id].name] = id;
+    });
+
+    var created = 0, updated = 0, firstId = null;
+    sectors.sort().forEach(function(sec, i) {
+        var name = 'IBKR ' + sec;
+        var weights = bySector[sec];
+        var existingId = byName[name];
+        if (existingId) {
+            baskets[existingId].weights = weights;
+            updated++;
+            if (!firstId) firstId = existingId;
+        } else {
+            var id = 'basket_' + (Date.now() + i);   // +i = Kollisionen vermeiden
+            baskets[id] = {
+                name: name, weights: weights, period: 180, tf: '1D',
+                perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+            };
+            created++;
+            if (!firstId) firstId = id;
+        }
+    });
+
+    await saveBasketsToServer();
+    if (typeof renderBasketSelect === 'function') renderBasketSelect();
+    var parts = [];
+    if (created) parts.push(created + ' neu');
+    if (updated) parts.push(updated + ' aktualisiert');
+    alert('Sektor-Baskets: ' + parts.join(', ') + ' (' + sectors.length + ' Sektoren).');
+    if (firstId) await switchBasket(firstId);
 }
 
 // Header-Checkbox: alle Positions-Checkboxen an-/abwählen.

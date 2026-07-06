@@ -18,6 +18,18 @@
   --accent:  #2d6b3e;
   --red:     #c0392b;
   --green:   #2d8a4e;
+  /* Sektor-Farben (validierte kategoriale Palette, Hell-Modus) */
+  --sec-technology:         #2a78d6;
+  --sec-financial:          #1baf7a;
+  --sec-healthcare:         #eda100;
+  --sec-consumer-cyclical:  #008300;
+  --sec-communication:      #4a3aa7;
+  --sec-energy:             #e34948;
+  --sec-industrials:        #e87ba4;
+  --sec-consumer-defensive: #eb6834;
+  --sec-basic-materials:    #8a6d3b;
+  --sec-real-estate:        #17888f;
+  --sec-utilities:          #6b7280;
 }
 
 /* Dunkles Theme */
@@ -30,6 +42,18 @@
   --accent:  #4f9d63;
   --red:     #e05a4d;
   --green:   #3fa463;
+  /* Sektor-Farben (für dunkle Fläche gestuft) */
+  --sec-technology:         #3987e5;
+  --sec-financial:          #22b985;
+  --sec-healthcare:         #d99e1a;
+  --sec-consumer-cyclical:  #2e9e4f;
+  --sec-communication:      #9085e9;
+  --sec-energy:             #e66767;
+  --sec-industrials:        #d55181;
+  --sec-consumer-defensive: #d95926;
+  --sec-basic-materials:    #b08d57;
+  --sec-real-estate:        #3fb0b8;
+  --sec-utilities:          #9aa3b2;
 }
 
 /* Kontrast-Stufen — hell (dunklere Graustufen) */
@@ -485,6 +509,23 @@ header {
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .ibkr-sub-body { flex: 1; overflow-y: auto; }
+
+/* Sektor-Allokation (Donut + Legende) */
+#ibkrSectorAlloc { flex: 0 0 auto; overflow-y: auto; max-height: 40%; }
+.sec-alloc-wrap { padding: 8px; }
+.sec-alloc-chart { display: flex; justify-content: center; margin-bottom: 8px; }
+.sec-alloc-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; pointer-events: none;
+  font-size: 12px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.sec-alloc-center span { font-size: 8px; font-weight: 400; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.sec-alloc-legend { display: flex; flex-direction: column; gap: 2px; }
+.sec-leg-row { display: flex; align-items: center; gap: 6px; font-size: 10px; line-height: 1.5; }
+.sec-leg-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+.sec-leg-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec-leg-pct { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.sec-leg-val { color: var(--muted); min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
 .ibkr-h-resizer {
   width: 5px; cursor: col-resize; background: var(--border); flex-shrink: 0;
   user-select: none; transition: background 0.15s;

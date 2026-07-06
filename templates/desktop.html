@@ -391,12 +391,15 @@
       <button id="ibkrExportBtn" onclick="ibkrExport()" class="export-btn" style="display:inline;margin:0;padding:2px 8px;width:auto;font-size:9px;">⬇ IBKR Export</button>
       <button onclick="ibkrCreateBasket()" class="refresh-btn" style="font-size:9px;padding:3px 10px;" title="Basket aus aktuellen IBKR-Positionen erstellen">+ Als Basket</button>
       <button onclick="ibkrCreateBasketFromSelection()" class="refresh-btn" style="font-size:9px;padding:3px 10px;" title="Basket aus den angehakten Positionen erstellen">+ Basket aus Auswahl</button>
+      <button onclick="ibkrCreateSectorBaskets()" class="refresh-btn" style="font-size:9px;padding:3px 10px;" title="Je Sektor einen Basket aus den Aktien-Positionen erstellen (Depot-Stückzahlen)">+ Baskets nach Sektor</button>
     </div>
     <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
       <!-- Portfolio Report -->
       <div class="ibkr-sub" id="ibkr-report" style="width:320px;">
         <div class="ibkr-sub-title">Portfolio Report</div>
         <div class="ibkr-sub-body" id="portfolioReport"></div>
+        <div class="ibkr-sub-title" style="margin-top:10px;">Sektor-Allokation <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">(Aktien, aktueller Wert)</span></div>
+        <div class="ibkr-sub-body" id="ibkrSectorAlloc"></div>
       </div>
       <div class="ibkr-h-resizer" id="ibkr-h-resizer"></div>
       <!-- Positionen + Trades -->
@@ -407,7 +410,7 @@
           <table class="perf-table">
             <thead><tr>
               <th style="width:20px;text-align:center"><input type="checkbox" id="ibkrSelAll" onclick="ibkrToggleSelAll(this)" title="Alle an-/abwählen"></th>
-              <th>Ticker</th><th>Klasse</th><th>Stück</th><th>Einstand €</th><th>Aktuell €</th><th>P&amp;L €</th><th>P&amp;L %</th>
+              <th>Ticker</th><th>Klasse</th><th>Sektor</th><th>Stück</th><th>Einstand €</th><th>Aktuell €</th><th>P&amp;L €</th><th>P&amp;L %</th>
             </tr></thead>
             <tbody id="ibkrBody"></tbody>
             <tfoot id="ibkrFoot"></tfoot>

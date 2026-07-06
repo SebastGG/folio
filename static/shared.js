@@ -1280,6 +1280,7 @@ var ibkrCash      = [];   // Geladene IBKR-Cash-Balances
 var ibkrTrades    = [];   // Geladene IBKR-Trades
 var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
 var ibkrIsinMap   = {};   // ISIN → Yahoo-Symbol (persistentes Mapping)
+var ibkrSectors   = {};   // Yahoo-Symbol → GICS-Sektor (via /api/ticker/info, gecacht)
 
 // Auflösung Trade/Position → Yahoo-Symbol des Charts.
 // ISIN-Mapping hat Vorrang (venue-unabhängig); sonst Symbol-Fallback,
@@ -1306,6 +1307,45 @@ async function ibkrLoadPositions() {
         ibkrPositions = [];
         return [];
     }
+}
+
+// Sektor einer Position (aus dem gecachten ibkrSectors-Map). null = unbekannt/kein Aktien-Sektor.
+function ibkrPosSector(p) {
+    return ibkrSectors[ibkrPosYahoo(p)] || null;
+}
+
+// Lädt für alle Aktien-Positionen (STK, qty>0) den GICS-Sektor via /api/ticker/info.
+// Der Endpoint cached serverseitig (stale-while-revalidate) → nach dem ersten Abruf instant.
+// Läuft mit begrenzter Parallelität, um Yahoo nicht zu überlasten.
+async function ibkrLoadSectors() {
+    var syms = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.asset_class || '').toUpperCase() !== 'STK') return;
+        if ((p.quantity || 0) <= 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (sym && !(sym in ibkrSectors)) syms[sym] = true;
+    });
+    var todo = Object.keys(syms);
+    if (!todo.length) return ibkrSectors;
+
+    var idx = 0;
+    async function worker() {
+        while (idx < todo.length) {
+            var sym = todo[idx++];
+            try {
+                var r = await fetch('/api/ticker/info/' + encodeURIComponent(sym));
+                var d = await r.json();
+                ibkrSectors[sym] = (d && d.ok !== false && d.sector) ? d.sector : null;
+            } catch(e) {
+                ibkrSectors[sym] = null;
+            }
+        }
+    }
+    // max. 4 parallele Abrufe
+    var pool = [];
+    for (var i = 0; i < 4; i++) pool.push(worker());
+    await Promise.all(pool);
+    return ibkrSectors;
 }
 
 async function ibkrLoadCash() {
