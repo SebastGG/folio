@@ -510,6 +510,11 @@ header {
 }
 .ibkr-sub-body { flex: 1; overflow-y: auto; }
 
+/* Sortierbare Spaltenköpfe (IBKR-Positionstabelle) */
+th.ibkr-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+th.ibkr-sort:hover { color: var(--text); }
+th.ibkr-sort .sort-ind { color: var(--accent); font-size: 8px; }
+
 /* Sektor-Allokation (Donut + Legende) */
 #ibkrSectorAlloc { flex: 0 0 auto; overflow-y: auto; max-height: 40%; }
 .sec-alloc-wrap { padding: 8px; }

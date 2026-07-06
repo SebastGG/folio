@@ -1750,6 +1750,52 @@ function renderPortfolioReport() {
     el.innerHTML = h;
 }
 
+// ── Sortierung der Positionstabelle ──────────────────────────────────────────
+// col = null → Original-Reihenfolge (Backend: nach Symbol). dir: 1 aufsteigend, -1 absteigend.
+var ibkrSort = { col: null, dir: 1 };
+
+// Sortierschlüssel einer Position für eine Spalte (Strings für Text, Zahlen für Werte).
+function ibkrSortKey(p, col, ccyFx) {
+    var fx = p.fx_rate_to_base || 1.0;
+    var cost = (p.cost_basis_money || 0) * fx;
+    switch (col) {
+        case 'ticker': return (ibkrPosYahoo(p) || p.symbol || '').toUpperCase();
+        case 'class':  return (p.asset_class || '').toUpperCase();
+        case 'sector': return (ibkrPosSector(p) || '￿').toUpperCase();   // ohne Sektor ans Ende
+        case 'qty':    return p.quantity || 0;
+        case 'cost':   return cost;
+        case 'value':  return ibkrLiveValue(p, ccyFx);
+        case 'pnl':    return ibkrLiveValue(p, ccyFx) - cost;
+        case 'pnlpct': return cost ? (ibkrLiveValue(p, ccyFx) - cost) / Math.abs(cost) * 100 : 0;
+        default:       return 0;
+    }
+}
+
+// Liefert die Anzeige-Reihenfolge als Original-Indizes (stabil, data-idx bleibt gültig).
+function ibkrSortedOrder(ccyFx) {
+    var order = (ibkrPositions || []).map(function(_, i) { return i; });
+    if (!ibkrSort.col) return order;
+    order.sort(function(a, b) {
+        var ka = ibkrSortKey(ibkrPositions[a], ibkrSort.col, ccyFx);
+        var kb = ibkrSortKey(ibkrPositions[b], ibkrSort.col, ccyFx);
+        if (ka < kb) return -ibkrSort.dir;
+        if (ka > kb) return  ibkrSort.dir;
+        return a - b;   // stabil bei Gleichstand
+    });
+    return order;
+}
+
+// Klick auf einen Spaltenkopf: gleiche Spalte → Richtung umkehren, sonst sinnvolle Startrichtung.
+function ibkrSortBy(col) {
+    if (ibkrSort.col === col) {
+        ibkrSort.dir = -ibkrSort.dir;
+    } else {
+        ibkrSort.col = col;
+        ibkrSort.dir = (col === 'ticker' || col === 'class' || col === 'sector') ? 1 : -1;  // Text A→Z, Zahlen groß→klein
+    }
+    ibkrRenderTable();
+}
+
 function ibkrRenderTable() {
     var tbody = document.getElementById('ibkrBody');
     var tfoot = document.getElementById('ibkrFoot');
@@ -1779,7 +1825,8 @@ function ibkrRenderTable() {
     if (hasPosns) {
         html += sectionHdr('Positionen');
         var ccyFx = ibkrCcyFx();
-        ibkrPositions.forEach(function(p, idx) {
+        ibkrSortedOrder(ccyFx).forEach(function(idx) {
+            var p        = ibkrPositions[idx];
             var fx       = p.fx_rate_to_base || 1.0;
             var cbmEur   = (p.cost_basis_money || 0) * fx;   // Einstand aus IBKR
             var pvEur    = ibkrLiveValue(p, ccyFx);          // aktueller Wert / Notional (Futures: voller Kontraktwert)
@@ -1888,6 +1935,13 @@ function ibkrRenderTable() {
     renderPortfolioReport();
     ibkrRenderCoverage();
     ibkrRenderSectorAllocation();
+
+    // Sortier-Pfeile in den Spaltenköpfen aktualisieren
+    document.querySelectorAll('th.ibkr-sort').forEach(function(th) {
+        var ind = th.querySelector('.sort-ind');
+        if (!ind) return;
+        ind.textContent = (th.getAttribute('data-col') === ibkrSort.col) ? (ibkrSort.dir > 0 ? ' ▲' : ' ▼') : '';
+    });
 }
 
 // ╔══════════════════════════════════════════════════════════╗
