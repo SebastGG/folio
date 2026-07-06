@@ -1281,6 +1281,7 @@ var ibkrTrades    = [];   // Geladene IBKR-Trades
 var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
 var ibkrIsinMap   = {};   // ISIN → Yahoo-Symbol (persistentes Mapping)
 var ibkrSectors   = {};   // Yahoo-Symbol → GICS-Sektor (via /api/ticker/info, gecacht)
+var ibkrIndustries= {};   // Yahoo-Symbol → Subsektor/Industry (via /api/ticker/info, gecacht)
 
 // Auflösung Trade/Position → Yahoo-Symbol des Charts.
 // ISIN-Mapping hat Vorrang (venue-unabhängig); sonst Symbol-Fallback,
@@ -1314,7 +1315,12 @@ function ibkrPosSector(p) {
     return ibkrSectors[ibkrPosYahoo(p)] || null;
 }
 
-// Lädt für alle Aktien-Positionen (STK, qty>0) den GICS-Sektor via /api/ticker/info.
+// Subsektor (yfinance "industry") einer Position. null = unbekannt/kein Aktien-Subsektor.
+function ibkrPosIndustry(p) {
+    return ibkrIndustries[ibkrPosYahoo(p)] || null;
+}
+
+// Lädt für alle Aktien-Positionen (STK, qty>0) GICS-Sektor + Subsektor via /api/ticker/info.
 // Der Endpoint cached serverseitig (stale-while-revalidate) → nach dem ersten Abruf instant.
 // Läuft mit begrenzter Parallelität, um Yahoo nicht zu überlasten.
 async function ibkrLoadSectors() {
@@ -1335,9 +1341,12 @@ async function ibkrLoadSectors() {
             try {
                 var r = await fetch('/api/ticker/info/' + encodeURIComponent(sym));
                 var d = await r.json();
-                ibkrSectors[sym] = (d && d.ok !== false && d.sector) ? d.sector : null;
+                var ok = d && d.ok !== false;
+                ibkrSectors[sym]    = (ok && d.sector)   ? d.sector   : null;
+                ibkrIndustries[sym] = (ok && d.industry) ? d.industry : null;
             } catch(e) {
-                ibkrSectors[sym] = null;
+                ibkrSectors[sym]    = null;
+                ibkrIndustries[sym] = null;
             }
         }
     }

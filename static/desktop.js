@@ -1761,7 +1761,8 @@ function ibkrSortKey(p, col, ccyFx) {
     switch (col) {
         case 'ticker': return (ibkrPosYahoo(p) || p.symbol || '').toUpperCase();
         case 'class':  return (p.asset_class || '').toUpperCase();
-        case 'sector': return (ibkrPosSector(p) || '￿').toUpperCase();   // ohne Sektor ans Ende
+        case 'sector':   return (ibkrPosSector(p)   || '￿').toUpperCase(); // ohne Sektor ans Ende
+        case 'industry': return (ibkrPosIndustry(p) || '￿').toUpperCase(); // ohne Subsektor ans Ende
         case 'qty':    return p.quantity || 0;
         case 'cost':   return cost;
         case 'value':  return ibkrLiveValue(p, ccyFx);
@@ -1808,14 +1809,14 @@ function ibkrRenderTable() {
     var hasCash   = cashItems.length > 0;
 
     if (!hasPosns && !hasCash) {
-        tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="padding:16px;color:var(--muted);text-align:center;">Keine Positionen — Sync drücken oder IBKR konfigurieren (⚙ Einst.)</td></tr>';
         if (tfoot) tfoot.innerHTML = '';
         return;
     }
 
     var sectionHdr = function(label) {
         return '<tr style="background:var(--surface);">'
-            + '<td colspan="9" style="font-weight:700;font-size:9px;text-transform:uppercase;'
+            + '<td colspan="10" style="font-weight:700;font-size:9px;text-transform:uppercase;'
             + 'letter-spacing:.06em;color:var(--muted);padding:3px 6px;">' + label + '</td></tr>';
     };
 
@@ -1857,11 +1858,21 @@ function ibkrRenderTable() {
             } else {
                 secTd = '<span style="color:var(--muted)">—</span>';            // ETF/Future/Cash: kein Sektor
             }
+            var indTd;
+            if (cls === 'STK' && qty > 0) {
+                var ind = ibkrPosIndustry(p);
+                if (ind) indTd = esc(ind);
+                else if (ibkrPosYahoo(p) in ibkrIndustries) indTd = '<span style="color:var(--muted)">—</span>';
+                else indTd = '<span style="color:var(--muted)">…</span>';       // wird noch geladen
+            } else {
+                indTd = '<span style="color:var(--muted)">—</span>';            // ETF/Future/Cash: kein Subsektor
+            }
             html += '<tr>'
                 + '<td style="text-align:center"><input type="checkbox" class="ibkr-sel" data-idx="' + idx + '" onclick="ibkrSyncSelAll()"></td>'
                 + '<td>' + symHtml + provBadge + '</td>'
                 + '<td style="color:var(--muted)">' + (p.asset_class || '-') + '</td>'
                 + '<td style="color:var(--muted);font-size:10px">' + secTd + '</td>'
+                + '<td style="color:var(--muted);font-size:10px">' + indTd + '</td>'
                 + '<td>' + (qty % 1 !== 0 ? qty.toFixed(4) : qty) + '</td>'
                 + '<td>' + cbmEur.toFixed(0) + '</td>'
                 + '<td>' + pvEur.toFixed(0) + '</td>'
@@ -1882,6 +1893,7 @@ function ibkrRenderTable() {
                 + '<td style="font-weight:500">' + c.currency + '</td>'
                 + '<td style="color:var(--muted)">Cash</td>'
                 + '<td style="color:var(--muted)">—</td>'
+                + '<td style="color:var(--muted)">—</td>'
                 + '<td>—</td><td>—</td>'
                 + '<td style="color:' + amtColor + '">' + amt.toFixed(2) + '</td>'
                 + '<td>—</td><td>—</td>'
@@ -1897,7 +1909,7 @@ function ibkrRenderTable() {
         var tPnlPctEur = totalCostEur ? totalPnlEur / Math.abs(totalCostEur) * 100 : 0;
         var tc = totalPnlEur >= 0 ? '#2d8a4e' : '#c0392b';
         footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-            + '<td></td><td style="font-weight:700">Assets</td><td></td><td></td><td></td>'
+            + '<td></td><td style="font-weight:700">Assets</td><td></td><td></td><td></td><td></td>'
             + '<td style="font-weight:700">' + totalCostEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700">' + totalValueEur.toFixed(0) + ' €</td>'
             + '<td style="font-weight:700;color:' + tc + '">' + (totalPnlEur >= 0 ? '+' : '') + totalPnlEur.toFixed(2) + ' €</td>'
@@ -1907,7 +1919,7 @@ function ibkrRenderTable() {
     if (cashBase) {
         var cb = cashBase.ending_cash || 0;
         footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
-            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="4"></td>'
+            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="5"></td>'
             + '<td style="font-weight:700">' + cb.toFixed(2) + ' €</td>'
             + '<td colspan="2"></td>'
             + '</tr>';
@@ -1918,7 +1930,7 @@ function ibkrRenderTable() {
                 ? grandPnl / Math.abs(totalCostEur + cb - grandPnl) * 100 : 0;
             var gc = grandTotal >= 0 ? '#2d8a4e' : '#c0392b';
             footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
-                + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="3"></td>'
+                + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="4"></td>'
                 + '<td style="font-weight:700;font-size:11px;">' + (totalCostEur + cb).toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;">' + grandTotal.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnl >= 0 ? '+' : '') + grandPnl.toFixed(0) + ' €</td>'
