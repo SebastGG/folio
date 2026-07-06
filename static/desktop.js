@@ -2071,13 +2071,20 @@ async function ibkrSync() {
             await ibkrLoadPositions();
             await ibkrLoadCash();
             await ibkrLoadTrades();
-            // IBKR-verwaltete Baskets an aktuellen Bestand angleichen
-            var rebuilt = ibkrRebuildManagedBaskets();
-            if (rebuilt) {
+            // IBKR-verwaltete Baskets komplett neu aufbauen; zusätzlich in allen übrigen
+            // Baskets die Stückzahlen der Depot-Aktien angleichen.
+            var rebuilt       = ibkrRebuildManagedBaskets();
+            var qtyChangedIds = ibkrSyncBasketQuantities();
+            var changed       = rebuilt || qtyChangedIds.length > 0;
+            if (changed) {
                 await saveBasketsToServer();
                 renderBasketSelect();
             }
-            if (rebuilt && baskets[currentBasket] && baskets[currentBasket].ibkrManaged) {
+            // Aktuellen Basket nur dann neu laden (Kurse/Index/Marker), wenn er selbst
+            // betroffen ist — sonst reicht ein Auffrischen der IBKR-Tabelle.
+            var curB          = baskets[currentBasket];
+            var curAffected   = curB && (curB.ibkrManaged ? rebuilt : qtyChangedIds.indexOf(currentBasket) !== -1);
+            if (changed && curAffected) {
                 await switchBasket(currentBasket);   // lädt Kurse/Index/Tabelle/Marker neu
             } else {
                 ibkrRenderTable();
@@ -2310,6 +2317,40 @@ function ibkrRebuildManagedBaskets() {
         changed = true;
     });
     return changed;
+}
+
+// Gleicht in ALLEN (nicht IBKR-verwalteten) Baskets die Stückzahl der Aktien an den
+// aktuellen IBKR-Depotbestand an — aber nur für Ticker, die im Basket UND im Depot
+// liegen. Fügt nichts hinzu und entfernt nichts; ändert ausschließlich überlappende
+// Gewichte. Liefert die Liste der veränderten Basket-IDs zurück.
+function ibkrSyncBasketQuantities() {
+    // IBKR-Aktienbestand: Yahoo-Symbol (uppercase) → Stückzahl
+    var held = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.asset_class || '').toUpperCase() !== 'STK') return;
+        var qty = p.quantity || 0;
+        if (qty <= 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (sym) held[sym.toUpperCase()] = Math.abs(qty);
+    });
+    var changedIds = [];
+    if (!Object.keys(held).length) return changedIds;
+
+    Object.keys(baskets).forEach(function(id) {
+        var b = baskets[id];
+        if (!b || b.ibkrManaged) return;        // verwaltete Baskets werden separat komplett neu aufgebaut
+        var w = b.weights || {};
+        var localChanged = false;
+        Object.keys(w).forEach(function(sym) {
+            var q = held[sym.toUpperCase()];
+            if (q !== undefined && w[sym] !== q) {
+                w[sym] = q;
+                localChanged = true;
+            }
+        });
+        if (localChanged) changedIds.push(id);
+    });
+    return changedIds;
 }
 
 async function ibkrEditSymbol(ibkrSym, el) {
