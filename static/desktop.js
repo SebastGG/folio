@@ -2085,6 +2085,7 @@ async function ibkrSync() {
             var curB          = baskets[currentBasket];
             var curAffected   = curB && (curB.ibkrManaged ? rebuilt : qtyChangedIds.indexOf(currentBasket) !== -1);
             if (changed && curAffected) {
+                ibkrSyncWeightsIfCurrent(currentBasket);   // Rebuild/Angleich-Weights übernehmen, nicht zurücksetzen
                 await switchBasket(currentBasket);   // lädt Kurse/Index/Tabelle/Marker neu
             } else {
                 ibkrRenderTable();
@@ -2102,6 +2103,13 @@ async function ibkrSync() {
     } finally {
         if (btn) { btn.textContent = '↻ Sync'; btn.disabled = false; }
     }
+}
+
+// Nach externem Ersetzen von baskets[id].weights die Anzeige-Weights (globales WEIGHTS)
+// mitziehen — sonst überschreibt switchBasket()'s saveCurrentBasketState() die frisch
+// gesetzten Weights sofort wieder mit dem alten Anzeige-Stand ("überschreiben ändert nichts").
+function ibkrSyncWeightsIfCurrent(id) {
+    if (id === currentBasket && baskets[id]) WEIGHTS = Object.assign({}, baskets[id].weights || {});
 }
 
 async function ibkrCreateBasket() {
@@ -2128,6 +2136,7 @@ async function ibkrCreateBasket() {
             + 'OK = überschreiben\nAbbrechen = neuen Basket anlegen');
         if (ov) {
             baskets[managed[0]].weights = weights;
+            ibkrSyncWeightsIfCurrent(managed[0]);   // sonst setzt switchBasket() die neuen Weights wieder zurück
             await saveBasketsToServer();
             await switchBasket(managed[0]);
             return;
@@ -2198,7 +2207,7 @@ async function ibkrCreateSectorBaskets() {
     if (created) parts.push(created + ' neu');
     if (updated) parts.push(updated + ' aktualisiert');
     alert('Sektor-Baskets: ' + parts.join(', ') + ' (' + sectors.length + ' Sektoren).');
-    if (firstId) await switchBasket(firstId);
+    if (firstId) { ibkrSyncWeightsIfCurrent(firstId); await switchBasket(firstId); }
 }
 
 // Header-Checkbox: alle Positions-Checkboxen an-/abwählen.
