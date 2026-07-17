@@ -24,10 +24,15 @@
 // ╚══════════════════════════════════════════════════════════╝
 
 // Lightweight Charts Instanzen
-var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
+var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries, etfSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
+var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
+var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
+var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
+var _etfCandles        = [];     // Tagesdaten des aktuellen ETFs (für Rebasing bei Zoom/Pan)
+var _sectorEtfReq      = 0;      // Race-Schutz für async ETF-Laden
 var _savedLogicalRange = null;   // Gespeicherter Zoom beim Ticker-Wechsel
 
 function saveChartRange() {
@@ -238,6 +243,17 @@ function initChart() {
     });
     chart.priceScale('ghost').applyOptions({ visible: false });
 
+    // Sektor-ETF-Overlay: eigene LINKE Preisskala (LWC zeichnet pro Seite nur eine
+    // Achse; rechts liegen die Kerzen). Dadurch skaliert der ETF unabhängig von den
+    // Kerzen und ist per Maus an der linken Achse zieh-/skalierbar. Standardmäßig leer.
+    etfSeries = chart.addSeries(LightweightCharts.LineSeries, {
+        color: '#e91e63', lineWidth: 2, lineStyle: 0,
+        priceScaleId: 'left',
+        lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
+    });
+    // Linke Achse: autoskaliert + maus-skalierbar; nur sichtbar wenn das Overlay aktiv ist.
+    chart.priceScale('left').applyOptions({ visible: false, autoScale: true, borderVisible: false });
+
     // Indikatoren
     ma50S  = chart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
     ma200S = chart.addSeries(LightweightCharts.LineSeries, { color: '#f5a623',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
@@ -349,11 +365,14 @@ function refreshTradeMarkers() {
     if (!csSeries) return;
     var markers = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        // Aktuelle IBKR-Position für laufende Bestandsberechnung
+        // Aktuelle IBKR-Position als Anker für die Rückwärtsrechnung des Bestands.
+        // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen). Diese 0 als Anker
+        // nutzen, statt den Bestand bei 0 vorwärts laufen zu lassen — sonst rutscht
+        // er bei unvollständiger Flex-Historie (fehlende frühe Käufe) ins Negative.
         var ibkrPos = (ibkrPositions || []).find(function(p) {
             return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
-        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : null;
+        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : 0;
 
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
         // Matching via ISIN (Vorrang) bzw. Symbol-Fallback — siehe ibkrTradeYahoo()
@@ -361,13 +380,15 @@ function refreshTradeMarkers() {
             return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
 
-        // Laufenden Bestand ab erster Transaktion berechnen
-        // Startbestand = aktuelle IBKR-Menge minus aller bekannten Trades
+        // Laufenden Bestand ab erster Transaktion berechnen.
+        // Startbestand = aktueller IBKR-Bestand minus aller bekannten Trades
+        // (rückwärts vom bekannten Endbestand — fängt fehlende frühe Käufe/Verkäufe
+        // in der Flex-Historie ab, sodass der Verlauf am Ende auf currentQty passt).
         var totalTraded = relevantTrades.reduce(function(s, t) {
             var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
         }, 0);
-        var runningQty = currentQty !== null ? currentQty - totalTraded : 0;
+        var runningQty = currentQty - totalTraded;
 
         // Pro Tag laufenden Bestand ermitteln
         var dateRunning = {};
@@ -451,12 +472,14 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         if (regUS)  regUS.applyOptions({ visible: false });
         if (regLS)  regLS.applyOptions({ visible: false });
         if (ghostSeries) try { ghostSeries.setData([]); } catch(e) {}
+        if (etfSeries) { try { etfSeries.setData([]); } catch(e) {} _setEtfAxisVisible(false); }
         return;
     }
 
     // IBKR Einstandskurs + Trade-Marker
     refreshIbkrCostLine(colored);
     refreshTradeMarkers();
+    refreshSectorEtf();   // Sektor-ETF-Overlay (falls aktiv)
 
     // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
     if (ghostSeries && colored.length) {
@@ -584,6 +607,9 @@ function fitView() {
     requestAnimationFrame(function() {
         if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
     });
+    // Sektor-ETF (eigene linke Achse) ebenfalls neu einpassen — autoScale wieder an,
+    // falls der Nutzer die Achse zuvor manuell gezogen hatte.
+    if (etfSeries) { try { etfSeries.priceScale().applyOptions({ autoScale: true }); } catch(e) {} }
     var candles = allCandles;
     if (!candles || !candles.length) { chart.timeScale().fitContent(); return; }
     var toDate   = candles[candles.length - 1].time;
@@ -635,6 +661,9 @@ function syncUIState() {
     });
     var blog = document.getElementById('blog');
     if (blog) blog.classList.toggle('ind-active', !!logScale);
+
+    // Sektor-ETF-Button an den (in loadBasketState geladenen) Zustand angleichen.
+    updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -778,6 +807,7 @@ async function fetchTickerInfo(sym) {
         if (res && res.ok) _tickerInfoCache[sym] = res;
         if (req !== _tickerInfoReq || currentView !== sym) return;   // Ansicht hat gewechselt
         renderTickerInfo(res && res.ok ? res : { error: true, symbol: sym });
+        if (_showSectorEtf) refreshSectorEtf();   // Sektor jetzt bekannt → Overlay auflösen
     } catch (e) {
         if (req === _tickerInfoReq && currentView === sym) renderTickerInfo({ error: true, symbol: sym });
     }
@@ -1588,6 +1618,7 @@ updateClock();
         });
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
+        updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
     });
 })();
 
@@ -1978,6 +2009,23 @@ var IBKR_SECTOR_SLUG = {
     'Utilities':              'utilities',
 };
 
+// GICS-Sektor (yfinance) → repräsentativer SPDR Select Sector ETF (US). Dient als
+// Sektor-Proxy für das relative-Stärke-Overlay. Bei Bedarf hier um EU-ETFs erweitern.
+var SECTOR_ETF = {
+    'Technology':             'XLK',
+    'Financial Services':     'XLF',
+    'Financial':              'XLF',
+    'Healthcare':             'XLV',
+    'Consumer Cyclical':      'XLY',
+    'Communication Services': 'XLC',
+    'Energy':                 'XLE',
+    'Industrials':            'XLI',
+    'Consumer Defensive':     'XLP',
+    'Basic Materials':        'XLB',
+    'Real Estate':            'XLRE',
+    'Utilities':              'XLU',
+};
+
 // Theme-reaktive Farbe je Sektor (gibt die CSS-Variable zurück, nicht den Hex-Wert).
 function ibkrSectorColor(sector) {
     var slug = IBKR_SECTOR_SLUG[sector];
@@ -2074,8 +2122,9 @@ async function ibkrSync() {
             // IBKR-verwaltete Baskets komplett neu aufbauen; zusätzlich in allen übrigen
             // Baskets die Stückzahlen der Depot-Aktien angleichen.
             var rebuilt       = ibkrRebuildManagedBaskets();
+            var rebuiltFormer = ibkrRebuildFormerBaskets();
             var qtyChangedIds = ibkrSyncBasketQuantities();
-            var changed       = rebuilt || qtyChangedIds.length > 0;
+            var changed       = rebuilt || rebuiltFormer || qtyChangedIds.length > 0;
             if (changed) {
                 await saveBasketsToServer();
                 renderBasketSelect();
@@ -2083,8 +2132,14 @@ async function ibkrSync() {
             // Aktuellen Basket nur dann neu laden (Kurse/Index/Marker), wenn er selbst
             // betroffen ist — sonst reicht ein Auffrischen der IBKR-Tabelle.
             var curB          = baskets[currentBasket];
-            var curAffected   = curB && (curB.ibkrManaged ? rebuilt : qtyChangedIds.indexOf(currentBasket) !== -1);
+            var curAffected   = false;
+            if (curB) {
+                if (curB.ibkrManaged)     curAffected = rebuilt;
+                else if (curB.ibkrFormer) curAffected = rebuiltFormer;
+                else                      curAffected = qtyChangedIds.indexOf(currentBasket) !== -1;
+            }
             if (changed && curAffected) {
+                ibkrSyncWeightsIfCurrent(currentBasket);   // Rebuild/Angleich-Weights übernehmen, nicht zurücksetzen
                 await switchBasket(currentBasket);   // lädt Kurse/Index/Tabelle/Marker neu
             } else {
                 ibkrRenderTable();
@@ -2102,6 +2157,13 @@ async function ibkrSync() {
     } finally {
         if (btn) { btn.textContent = '↻ Sync'; btn.disabled = false; }
     }
+}
+
+// Nach externem Ersetzen von baskets[id].weights die Anzeige-Weights (globales WEIGHTS)
+// mitziehen — sonst überschreibt switchBasket()'s saveCurrentBasketState() die frisch
+// gesetzten Weights sofort wieder mit dem alten Anzeige-Stand ("überschreiben ändert nichts").
+function ibkrSyncWeightsIfCurrent(id) {
+    if (id === currentBasket && baskets[id]) WEIGHTS = Object.assign({}, baskets[id].weights || {});
 }
 
 async function ibkrCreateBasket() {
@@ -2128,6 +2190,7 @@ async function ibkrCreateBasket() {
             + 'OK = überschreiben\nAbbrechen = neuen Basket anlegen');
         if (ov) {
             baskets[managed[0]].weights = weights;
+            ibkrSyncWeightsIfCurrent(managed[0]);   // sonst setzt switchBasket() die neuen Weights wieder zurück
             await saveBasketsToServer();
             await switchBasket(managed[0]);
             return;
@@ -2138,6 +2201,44 @@ async function ibkrCreateBasket() {
     var id = 'basket_' + Date.now();
     baskets[id] = {
         name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: true,
+        perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+    };
+    await saveBasketsToServer();
+    await switchBasket(id);
+}
+
+// Watchlist-Basket "Ehemalige Positionen": alle je gehandelten Aktien (aus den
+// IBKR-Trades), die NICHT mehr im aktuellen Depot liegen — um Aktien im Blick zu
+// behalten, obwohl man sie verkauft hat. Wird als ibkrFormer markiert und beim
+// nächsten Sync automatisch neu abgeglichen (siehe ibkrRebuildFormerBaskets).
+async function ibkrCreateFormerBasket() {
+    if (!ibkrTrades || !ibkrTrades.length) {
+        alert('Keine IBKR-Trades geladen — zuerst Sync mit konfigurierter Trades-Query (⚙ Einst.).');
+        return;
+    }
+    var weights = ibkrFormerWeights();
+    if (Object.keys(weights).length === 0) {
+        alert('Keine ehemaligen Aktien gefunden — alle je gehandelten Aktien liegen aktuell im Depot.');
+        return;
+    }
+    // Existiert schon ein Ehemalige-Basket? → überschreiben oder neu anlegen lassen
+    var former = Object.keys(baskets).filter(function(id) { return baskets[id] && baskets[id].ibkrFormer; });
+    if (former.length) {
+        var ov = confirm('Es gibt bereits einen Ehemalige-Positionen-Basket ("' + baskets[former[0]].name + '").\n\n'
+            + 'OK = überschreiben\nAbbrechen = neuen Basket anlegen');
+        if (ov) {
+            baskets[former[0]].weights = weights;
+            ibkrSyncWeightsIfCurrent(former[0]);   // sonst setzt switchBasket() die neuen Weights wieder zurück
+            await saveBasketsToServer();
+            await switchBasket(former[0]);
+            return;
+        }
+    }
+    var name = prompt('Name des neuen Baskets:', 'Ehemalige Positionen');
+    if (!name) return;
+    var id = 'basket_' + Date.now();
+    baskets[id] = {
+        name: name, weights: weights, period: 180, tf: '1D', ibkrFormer: true,
         perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
     };
     await saveBasketsToServer();
@@ -2198,7 +2299,7 @@ async function ibkrCreateSectorBaskets() {
     if (created) parts.push(created + ' neu');
     if (updated) parts.push(updated + ' aktualisiert');
     alert('Sektor-Baskets: ' + parts.join(', ') + ' (' + sectors.length + ' Sektoren).');
-    if (firstId) await switchBasket(firstId);
+    if (firstId) { ibkrSyncWeightsIfCurrent(firstId); await switchBasket(firstId); }
 }
 
 // Header-Checkbox: alle Positions-Checkboxen an-/abwählen.
@@ -2319,6 +2420,41 @@ function ibkrRebuildManagedBaskets() {
     return changed;
 }
 
+// Weights für den "Ehemalige Positionen"-Basket: alle je gehandelten Aktien (STK
+// aus den IBKR-Trades) außer den aktuell im Depot gehaltenen. Gewicht = 1 je Ticker
+// (Watchlist-Charakter — für geschlossene Positionen gibt es keine Stückzahl).
+// Yahoo-Symbol via ISIN-Mapping (ibkrTradeYahoo), damit auch ausländische Notierungen
+// nach Symbolwechsel korrekt matchen.
+function ibkrFormerWeights() {
+    // Aktuell gehaltene Symbole (im Depot, qty ≠ 0) — werden ausgeschlossen.
+    var held = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.quantity || 0) === 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (sym) held[sym.toUpperCase()] = true;
+    });
+    var weights = {};
+    (ibkrTrades || []).forEach(function(t) {
+        if ((t.asset_class || '').toUpperCase() !== 'STK') return;
+        var sym = ibkrTradeYahoo(t);
+        if (!sym || held[sym.toUpperCase()]) return;
+        weights[sym] = 1;
+    });
+    return weights;
+}
+
+// Baut alle als "Ehemalige Positionen" markierten Baskets (ibkrFormer) beim Sync
+// komplett neu auf. Liefert true, sobald mindestens ein solcher Basket existiert.
+function ibkrRebuildFormerBaskets() {
+    var changed = false;
+    Object.keys(baskets).forEach(function(id) {
+        if (!baskets[id] || !baskets[id].ibkrFormer) return;
+        baskets[id].weights = ibkrFormerWeights();
+        changed = true;
+    });
+    return changed;
+}
+
 // Gleicht in ALLEN (nicht IBKR-verwalteten) Baskets die Stückzahl der Aktien an den
 // aktuellen IBKR-Depotbestand an — aber nur für Ticker, die im Basket UND im Depot
 // liegen. Fügt nichts hinzu und entfernt nichts; ändert ausschließlich überlappende
@@ -2338,7 +2474,7 @@ function ibkrSyncBasketQuantities() {
 
     Object.keys(baskets).forEach(function(id) {
         var b = baskets[id];
-        if (!b || b.ibkrManaged) return;        // verwaltete Baskets werden separat komplett neu aufgebaut
+        if (!b || b.ibkrManaged || b.ibkrFormer) return;   // verwaltete/Ehemalige Baskets werden separat komplett neu aufgebaut
         var w = b.weights || {};
         var localChanged = false;
         Object.keys(w).forEach(function(sym) {
@@ -2423,6 +2559,104 @@ function toggleTradeMarkers(btn) {
     _showTradeMarkers = !_showTradeMarkers;
     if (btn) btn.classList.toggle('active', _showTradeMarkers);
     refreshTradeMarkers();
+}
+
+// ── Sektor-ETF-Overlay (Sektor-Vergleich) ────────────────────────────────────
+// Zeigt beim Betrachten einer Einzelaktie den passenden Sektor-ETF als Linie auf
+// einer EIGENEN linken Achse (unabhängig autoskaliert, per Maus skalierbar).
+// Vergleich der relativen Stärke über den Kurvenverlauf. Toggle pro Basket
+// gespeichert (showSectorEtf).
+
+function toggleSectorEtf(btn) {
+    _showSectorEtf = !_showSectorEtf;
+    if (btn) btn.classList.toggle('active', _showSectorEtf);
+    if (baskets[currentBasket]) { baskets[currentBasket].showSectorEtf = _showSectorEtf; markUnsaved(); }
+    refreshSectorEtf();
+}
+
+// Setzt Beschriftung/Zustand des Toolbar-Buttons. arg: ETF-Symbol | 'none' | 'pending' | null.
+function updateSectorEtfBadge(arg) {
+    var btn = document.getElementById('btn-sector-etf');
+    if (!btn) return;
+    btn.classList.toggle('active', _showSectorEtf);
+    var label = '📊 Sektor-ETF';
+    if (_showSectorEtf) {
+        if (arg && arg !== 'none' && arg !== 'pending') label = '📊 ' + arg;
+        else if (arg === 'none') label = '📊 ETF –';   // Sektor bekannt, aber kein ETF (z.B. ETF/Future)
+    }
+    btn.textContent = label;
+}
+
+// Zeigt/versteckt die linke ETF-Achse (nur sichtbar wenn Overlay aktiv gezeichnet).
+function _setEtfAxisVisible(v) {
+    if (!chart) return;
+    try { chart.priceScale('left').applyOptions({ visible: v }); } catch(e) {}
+}
+
+// Leert das ETF-Overlay und blendet die linke Achse aus.
+function _clearSectorEtf() {
+    _etfSymbol = null; _etfCandles = [];
+    try { etfSeries.setData([]); } catch(e) {}
+    _setEtfAxisVisible(false);
+}
+
+// Voller Refresh: Sektor→ETF auflösen, ETF-Daten (gecacht) laden, dann zeichnen.
+async function refreshSectorEtf() {
+    if (!etfSeries) return;
+    // Aus / Index / keine Kerzen → Overlay leeren
+    if (!_showSectorEtf || currentView === 'index' || !_lastCandles || !_lastCandles.length) {
+        _clearSectorEtf();
+        updateSectorEtfBadge(null);
+        return;
+    }
+    var sector = (_tickerInfoCache[currentView] && _tickerInfoCache[currentView].sector)
+                 || ibkrSectors[currentView] || null;
+    var etf = sector ? SECTOR_ETF[sector] : null;
+    // Kein Sektor bekannt → evtl. lädt fetchTickerInfo noch; ruft refreshSectorEtf erneut.
+    if (!sector) { _clearSectorEtf(); updateSectorEtfBadge('pending'); return; }
+    // Sektor ohne ETF-Mapping, oder man betrachtet den ETF selbst → kein Overlay.
+    if (!etf || etf.toUpperCase() === currentView.toUpperCase()) {
+        _clearSectorEtf();
+        updateSectorEtfBadge(etf ? null : 'none');
+        return;
+    }
+    updateSectorEtfBadge(etf);
+    var req  = ++_sectorEtfReq;
+    var data = _etfDataCache[etf];
+    if (!data) {
+        try {
+            var r   = await fetch('/api/prices/ensure/' + encodeURIComponent(etf), { cache: 'no-store' });
+            var raw = await r.json();
+            data = (raw || []).map(function(d) { return { time: d.date, close: d.close }; })
+                              .filter(function(d) { return d.close != null; });
+            _etfDataCache[etf] = data;
+        } catch(e) { data = []; }
+    }
+    // Ansicht/Toggle inzwischen gewechselt? → Ergebnis verwerfen.
+    if (req !== _sectorEtfReq || !_showSectorEtf || currentView === 'index') return;
+    _etfSymbol  = etf;
+    _etfCandles = data;
+    _renderSectorEtf();
+}
+
+// Zeichnet die ETF-Linie mit ECHTEN ETF-Kursen auf der eigenen linken Achse.
+// Kein Rebasing — die unabhängige, maus-skalierbare Achse sorgt dafür, dass ETF und
+// Aktie trotz unterschiedlicher Größenordnung beide den vollen vertikalen Raum
+// nutzen; der Vergleich der relativen Stärke erfolgt über den Kurvenverlauf.
+function _renderSectorEtf() {
+    if (!etfSeries) return;
+    if (!_showSectorEtf || !_etfCandles || !_etfCandles.length || !_lastCandles || !_lastCandles.length) {
+        _clearSectorEtf();
+        return;
+    }
+    // ETF-Tagesschluss je Kerzenzeit (letzter Schluss am/vor der Kerzenzeit; TF-agnostisch).
+    var line = [], j = 0, last = null;
+    _lastCandles.forEach(function(cd) {
+        while (j < _etfCandles.length && _etfCandles[j].time <= cd.time) { last = _etfCandles[j].close; j++; }
+        if (last > 0) line.push({ time: cd.time, value: last });
+    });
+    try { etfSeries.setData(line); } catch(e) {}
+    _setEtfAxisVisible(line.length > 0);
 }
 
 function doLogout() {

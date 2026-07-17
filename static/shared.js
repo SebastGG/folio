@@ -1016,6 +1016,7 @@ function saveCurrentBasketState() {
     baskets[currentBasket].tf            = currentTF;
     baskets[currentBasket].indicators    = Object.assign({}, indicators);
     baskets[currentBasket].logScale      = logScale;
+    if (typeof _showSectorEtf !== 'undefined') baskets[currentBasket].showSectorEtf = _showSectorEtf;
     var rpEl = document.getElementById('regPeriod');
     if (rpEl) baskets[currentBasket].regPeriod = parseInt(rpEl.value, 10) || 12;
 }
@@ -1036,6 +1037,7 @@ function loadBasketState() {
     currentTF     = b.tf || '1D';
     if (b.indicators) indicators = Object.assign({}, b.indicators);
     if (b.logScale !== undefined) logScale = b.logScale;
+    if (typeof _showSectorEtf !== 'undefined') _showSectorEtf = !!b.showSectorEtf;
     var rpEl = document.getElementById('regPeriod');
     if (rpEl && b.regPeriod) rpEl.value = b.regPeriod;
     updateDerivedConfig();
