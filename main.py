@@ -768,6 +768,46 @@ async def get_prices(ticker: str, request: Request):
     conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+# On-Demand-Ticker (z.B. Sektor-ETF-Overlay): sorgt dafür, dass Kursdaten vorhanden
+# und aktuell sind, und gibt sie zurück. Anders als /api/prices/update OHNE das
+# globale 1x/min-Limit — es holt nur bei fehlenden/veralteten Daten (Delta) und
+# drosselt pro (User,Ticker) auf max. 1 Yahoo-Abruf/60s gegen wiederholtes Toggeln.
+_last_ensure: dict[str, float] = {}        # "user:ticker" -> ts (prozessweiter Throttle)
+_last_ensure_lock = threading.Lock()
+
+@app.get("/api/prices/ensure/{ticker}")
+async def ensure_prices(ticker: str, request: Request):
+    ticker = ticker.strip().upper()
+    user   = get_user(request)
+    files  = get_user_files(user)
+    init_db(files["db"])
+    conn   = get_db(files["db"])
+    try:
+        import datetime
+        row   = conn.execute("SELECT MAX(date) AS last FROM prices WHERE ticker=?", (ticker,)).fetchone()
+        last  = row["last"] if row else None
+        today = datetime.datetime.utcnow().date().strftime("%Y-%m-%d")
+        if (not last) or (last < today):
+            with _last_ensure_lock:
+                key   = f"{user}:{ticker}"
+                stale = time.time() - _last_ensure.get(key, 0) >= 60
+                if stale:
+                    _last_ensure[key] = time.time()
+            if stale:
+                try:
+                    _n, split_factors = update_ticker(ticker, conn)
+                    if split_factors:
+                        _adjust_drawings_for_split(files["data_dir"], "ticker:" + ticker, split_factors)
+                except Exception:
+                    pass
+        rows = conn.execute(
+            "SELECT date,open,high,low,close,volume FROM prices WHERE ticker=? ORDER BY date",
+            (ticker,)
+        ).fetchall()
+    finally:
+        conn.close()
+    return JSONResponse(content=[dict(r) for r in rows])
+
 # ── Ticker-Fundamentaldaten (Sektor, MarktCap, …) ───────────────────────────────
 # Holt Stammdaten via yfinance (kümmert sich um Yahoo-Crumb/Cookies). Persistiert in
 # der User-DB (Tabelle ticker_info), zusätzlich prozessweiter In-Memory-Cache. Strategie:

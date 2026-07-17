@@ -24,10 +24,15 @@
 // ╚══════════════════════════════════════════════════════════╝
 
 // Lightweight Charts Instanzen
-var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries;
+var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries, etfSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
 var _showTradeMarkers  = true;   // Toggle-Zustand
+var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
+var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
+var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
+var _etfCandles        = [];     // Tagesdaten des aktuellen ETFs (für Rebasing bei Zoom/Pan)
+var _sectorEtfReq      = 0;      // Race-Schutz für async ETF-Laden
 var _savedLogicalRange = null;   // Gespeicherter Zoom beim Ticker-Wechsel
 
 function saveChartRange() {
@@ -238,6 +243,14 @@ function initChart() {
     });
     chart.priceScale('ghost').applyOptions({ visible: false });
 
+    // Sektor-ETF-Overlay: liegt auf DERSELBEN rechten Preisskala wie die Kerzen und
+    // wird auf das Kursniveau der Aktie rebasiert (relative Stärke). ETF-Linie über
+    // den Kerzen = Sektor stärker, darunter = Aktie stärker. Standardmäßig leer.
+    etfSeries = chart.addSeries(LightweightCharts.LineSeries, {
+        color: '#e91e63', lineWidth: 2, lineStyle: 0,
+        lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+    });
+
     // Indikatoren
     ma50S  = chart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
     ma200S = chart.addSeries(LightweightCharts.LineSeries, { color: '#f5a623',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
@@ -247,6 +260,11 @@ function initChart() {
 
     // ResizeObserver — Chart passt sich Container an
     new ResizeObserver(fitChart).observe(container);
+
+    // Beim Zoomen/Scrollen den Sektor-ETF neu auf den sichtbaren linken Rand rebasieren.
+    chart.timeScale().subscribeVisibleTimeRangeChange(function() {
+        if (_showSectorEtf) _rebaseSectorEtf();
+    });
 
     // Crosshair → Stats aktualisieren
     chart.subscribeCrosshairMove(function(param) {
@@ -456,12 +474,14 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         if (regUS)  regUS.applyOptions({ visible: false });
         if (regLS)  regLS.applyOptions({ visible: false });
         if (ghostSeries) try { ghostSeries.setData([]); } catch(e) {}
+        if (etfSeries)   try { etfSeries.setData([]); } catch(e) {}
         return;
     }
 
     // IBKR Einstandskurs + Trade-Marker
     refreshIbkrCostLine(colored);
     refreshTradeMarkers();
+    refreshSectorEtf();   // Sektor-ETF-Overlay (falls aktiv)
 
     // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
     if (ghostSeries && colored.length) {
@@ -640,6 +660,9 @@ function syncUIState() {
     });
     var blog = document.getElementById('blog');
     if (blog) blog.classList.toggle('ind-active', !!logScale);
+
+    // Sektor-ETF-Button an den (in loadBasketState geladenen) Zustand angleichen.
+    updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -783,6 +806,7 @@ async function fetchTickerInfo(sym) {
         if (res && res.ok) _tickerInfoCache[sym] = res;
         if (req !== _tickerInfoReq || currentView !== sym) return;   // Ansicht hat gewechselt
         renderTickerInfo(res && res.ok ? res : { error: true, symbol: sym });
+        if (_showSectorEtf) refreshSectorEtf();   // Sektor jetzt bekannt → Overlay auflösen
     } catch (e) {
         if (req === _tickerInfoReq && currentView === sym) renderTickerInfo({ error: true, symbol: sym });
     }
@@ -1593,6 +1617,7 @@ updateClock();
         });
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
+        updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
     });
 })();
 
@@ -1981,6 +2006,23 @@ var IBKR_SECTOR_SLUG = {
     'Basic Materials':        'basic-materials',
     'Real Estate':            'real-estate',
     'Utilities':              'utilities',
+};
+
+// GICS-Sektor (yfinance) → repräsentativer SPDR Select Sector ETF (US). Dient als
+// Sektor-Proxy für das relative-Stärke-Overlay. Bei Bedarf hier um EU-ETFs erweitern.
+var SECTOR_ETF = {
+    'Technology':             'XLK',
+    'Financial Services':     'XLF',
+    'Financial':              'XLF',
+    'Healthcare':             'XLV',
+    'Consumer Cyclical':      'XLY',
+    'Communication Services': 'XLC',
+    'Energy':                 'XLE',
+    'Industrials':            'XLI',
+    'Consumer Defensive':     'XLP',
+    'Basic Materials':        'XLB',
+    'Real Estate':            'XLRE',
+    'Utilities':              'XLU',
 };
 
 // Theme-reaktive Farbe je Sektor (gibt die CSS-Variable zurück, nicht den Hex-Wert).
@@ -2516,6 +2558,104 @@ function toggleTradeMarkers(btn) {
     _showTradeMarkers = !_showTradeMarkers;
     if (btn) btn.classList.toggle('active', _showTradeMarkers);
     refreshTradeMarkers();
+}
+
+// ── Sektor-ETF-Overlay (relative Stärke) ─────────────────────────────────────
+// Zeigt beim Betrachten einer Einzelaktie den passenden Sektor-ETF als auf das
+// Aktien-Kursniveau rebasierte Linie: läuft der ETF über den Kerzen → Sektor
+// stärker, darunter → Aktie stärker. Toggle pro Basket gespeichert (showSectorEtf).
+
+function toggleSectorEtf(btn) {
+    _showSectorEtf = !_showSectorEtf;
+    if (btn) btn.classList.toggle('active', _showSectorEtf);
+    if (baskets[currentBasket]) { baskets[currentBasket].showSectorEtf = _showSectorEtf; markUnsaved(); }
+    refreshSectorEtf();
+}
+
+// Setzt Beschriftung/Zustand des Toolbar-Buttons. arg: ETF-Symbol | 'none' | 'pending' | null.
+function updateSectorEtfBadge(arg) {
+    var btn = document.getElementById('btn-sector-etf');
+    if (!btn) return;
+    btn.classList.toggle('active', _showSectorEtf);
+    var label = '📊 Sektor-ETF';
+    if (_showSectorEtf) {
+        if (arg && arg !== 'none' && arg !== 'pending') label = '📊 ' + arg;
+        else if (arg === 'none') label = '📊 ETF –';   // Sektor bekannt, aber kein ETF (z.B. ETF/Future)
+    }
+    btn.textContent = label;
+}
+
+// Voller Refresh: Sektor→ETF auflösen, ETF-Daten (gecacht) laden, dann rebasieren.
+async function refreshSectorEtf() {
+    if (!etfSeries) return;
+    // Aus / Index / keine Kerzen → Overlay leeren
+    if (!_showSectorEtf || currentView === 'index' || !_lastCandles || !_lastCandles.length) {
+        _etfSymbol = null; _etfCandles = [];
+        try { etfSeries.setData([]); } catch(e) {}
+        updateSectorEtfBadge(null);
+        return;
+    }
+    var sector = (_tickerInfoCache[currentView] && _tickerInfoCache[currentView].sector)
+                 || ibkrSectors[currentView] || null;
+    var etf = sector ? SECTOR_ETF[sector] : null;
+    // Kein Sektor bekannt → evtl. lädt fetchTickerInfo noch; ruft refreshSectorEtf erneut.
+    if (!sector) { _etfSymbol = null; _etfCandles = []; try { etfSeries.setData([]); } catch(e) {} updateSectorEtfBadge('pending'); return; }
+    // Sektor ohne ETF-Mapping, oder man betrachtet den ETF selbst → kein Overlay.
+    if (!etf || etf.toUpperCase() === currentView.toUpperCase()) {
+        _etfSymbol = null; _etfCandles = [];
+        try { etfSeries.setData([]); } catch(e) {}
+        updateSectorEtfBadge(etf ? null : 'none');
+        return;
+    }
+    updateSectorEtfBadge(etf);
+    var req  = ++_sectorEtfReq;
+    var data = _etfDataCache[etf];
+    if (!data) {
+        try {
+            var r   = await fetch('/api/prices/ensure/' + encodeURIComponent(etf), { cache: 'no-store' });
+            var raw = await r.json();
+            data = (raw || []).map(function(d) { return { time: d.date, close: d.close }; })
+                              .filter(function(d) { return d.close != null; });
+            _etfDataCache[etf] = data;
+        } catch(e) { data = []; }
+    }
+    // Ansicht/Toggle inzwischen gewechselt? → Ergebnis verwerfen.
+    if (req !== _sectorEtfReq || !_showSectorEtf || currentView === 'index') return;
+    _etfSymbol  = etf;
+    _etfCandles = data;
+    _rebaseSectorEtf();
+}
+
+// Günstiger Re-Rebase (bei Zoom/Pan): rechnet die ETF-Linie aus den gecachten
+// Tagesdaten auf das Aktien-Kursniveau um, Anker = erster sichtbarer Balken.
+function _rebaseSectorEtf() {
+    if (!etfSeries) return;
+    if (!_showSectorEtf || !_etfCandles || !_etfCandles.length || !_lastCandles || !_lastCandles.length) {
+        try { etfSeries.setData([]); } catch(e) {}
+        return;
+    }
+    // ETF-Tagesschluss je Kerzenzeit (letzter Schluss am/vor der Kerzenzeit; TF-agnostisch).
+    var closeAt = {}, j = 0, last = null;
+    _lastCandles.forEach(function(cd) {
+        while (j < _etfCandles.length && _etfCandles[j].time <= cd.time) { last = _etfCandles[j].close; j++; }
+        closeAt[cd.time] = last;
+    });
+    // Anker = erster sichtbarer Balken mit gültigem ETF-Wert.
+    // (getVisibleRange().from kann String/Timestamp/BusinessDay sein → _timeToStr normalisiert.)
+    var vr = null; try { vr = chart.timeScale().getVisibleRange(); } catch(e) {}
+    var fromStr = vr ? _timeToStr(vr.from) : '';
+    var a = 0;
+    if (fromStr) { while (a < _lastCandles.length && _lastCandles[a].time < fromStr) a++; }
+    while (a < _lastCandles.length && !(closeAt[_lastCandles[a].time] > 0)) a++;
+    if (a >= _lastCandles.length) { try { etfSeries.setData([]); } catch(e) {} return; }
+    var stockAnchor = _lastCandles[a].close;
+    var etfAnchor   = closeAt[_lastCandles[a].time];
+    var line = [];
+    _lastCandles.forEach(function(cd) {
+        var ec = closeAt[cd.time];
+        if (ec > 0) line.push({ time: cd.time, value: stockAnchor * ec / etfAnchor });
+    });
+    try { etfSeries.setData(line); } catch(e) {}
 }
 
 function doLogout() {
