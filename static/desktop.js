@@ -2074,8 +2074,9 @@ async function ibkrSync() {
             // IBKR-verwaltete Baskets komplett neu aufbauen; zusätzlich in allen übrigen
             // Baskets die Stückzahlen der Depot-Aktien angleichen.
             var rebuilt       = ibkrRebuildManagedBaskets();
+            var rebuiltFormer = ibkrRebuildFormerBaskets();
             var qtyChangedIds = ibkrSyncBasketQuantities();
-            var changed       = rebuilt || qtyChangedIds.length > 0;
+            var changed       = rebuilt || rebuiltFormer || qtyChangedIds.length > 0;
             if (changed) {
                 await saveBasketsToServer();
                 renderBasketSelect();
@@ -2083,7 +2084,12 @@ async function ibkrSync() {
             // Aktuellen Basket nur dann neu laden (Kurse/Index/Marker), wenn er selbst
             // betroffen ist — sonst reicht ein Auffrischen der IBKR-Tabelle.
             var curB          = baskets[currentBasket];
-            var curAffected   = curB && (curB.ibkrManaged ? rebuilt : qtyChangedIds.indexOf(currentBasket) !== -1);
+            var curAffected   = false;
+            if (curB) {
+                if (curB.ibkrManaged)     curAffected = rebuilt;
+                else if (curB.ibkrFormer) curAffected = rebuiltFormer;
+                else                      curAffected = qtyChangedIds.indexOf(currentBasket) !== -1;
+            }
             if (changed && curAffected) {
                 ibkrSyncWeightsIfCurrent(currentBasket);   // Rebuild/Angleich-Weights übernehmen, nicht zurücksetzen
                 await switchBasket(currentBasket);   // lädt Kurse/Index/Tabelle/Marker neu
@@ -2147,6 +2153,44 @@ async function ibkrCreateBasket() {
     var id = 'basket_' + Date.now();
     baskets[id] = {
         name: name, weights: weights, period: 180, tf: '1D', ibkrManaged: true,
+        perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+    };
+    await saveBasketsToServer();
+    await switchBasket(id);
+}
+
+// Watchlist-Basket "Ehemalige Positionen": alle je gehandelten Aktien (aus den
+// IBKR-Trades), die NICHT mehr im aktuellen Depot liegen — um Aktien im Blick zu
+// behalten, obwohl man sie verkauft hat. Wird als ibkrFormer markiert und beim
+// nächsten Sync automatisch neu abgeglichen (siehe ibkrRebuildFormerBaskets).
+async function ibkrCreateFormerBasket() {
+    if (!ibkrTrades || !ibkrTrades.length) {
+        alert('Keine IBKR-Trades geladen — zuerst Sync mit konfigurierter Trades-Query (⚙ Einst.).');
+        return;
+    }
+    var weights = ibkrFormerWeights();
+    if (Object.keys(weights).length === 0) {
+        alert('Keine ehemaligen Aktien gefunden — alle je gehandelten Aktien liegen aktuell im Depot.');
+        return;
+    }
+    // Existiert schon ein Ehemalige-Basket? → überschreiben oder neu anlegen lassen
+    var former = Object.keys(baskets).filter(function(id) { return baskets[id] && baskets[id].ibkrFormer; });
+    if (former.length) {
+        var ov = confirm('Es gibt bereits einen Ehemalige-Positionen-Basket ("' + baskets[former[0]].name + '").\n\n'
+            + 'OK = überschreiben\nAbbrechen = neuen Basket anlegen');
+        if (ov) {
+            baskets[former[0]].weights = weights;
+            ibkrSyncWeightsIfCurrent(former[0]);   // sonst setzt switchBasket() die neuen Weights wieder zurück
+            await saveBasketsToServer();
+            await switchBasket(former[0]);
+            return;
+        }
+    }
+    var name = prompt('Name des neuen Baskets:', 'Ehemalige Positionen');
+    if (!name) return;
+    var id = 'basket_' + Date.now();
+    baskets[id] = {
+        name: name, weights: weights, period: 180, tf: '1D', ibkrFormer: true,
         perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false }, logScale: false
     };
     await saveBasketsToServer();
@@ -2328,6 +2372,41 @@ function ibkrRebuildManagedBaskets() {
     return changed;
 }
 
+// Weights für den "Ehemalige Positionen"-Basket: alle je gehandelten Aktien (STK
+// aus den IBKR-Trades) außer den aktuell im Depot gehaltenen. Gewicht = 1 je Ticker
+// (Watchlist-Charakter — für geschlossene Positionen gibt es keine Stückzahl).
+// Yahoo-Symbol via ISIN-Mapping (ibkrTradeYahoo), damit auch ausländische Notierungen
+// nach Symbolwechsel korrekt matchen.
+function ibkrFormerWeights() {
+    // Aktuell gehaltene Symbole (im Depot, qty ≠ 0) — werden ausgeschlossen.
+    var held = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.quantity || 0) === 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (sym) held[sym.toUpperCase()] = true;
+    });
+    var weights = {};
+    (ibkrTrades || []).forEach(function(t) {
+        if ((t.asset_class || '').toUpperCase() !== 'STK') return;
+        var sym = ibkrTradeYahoo(t);
+        if (!sym || held[sym.toUpperCase()]) return;
+        weights[sym] = 1;
+    });
+    return weights;
+}
+
+// Baut alle als "Ehemalige Positionen" markierten Baskets (ibkrFormer) beim Sync
+// komplett neu auf. Liefert true, sobald mindestens ein solcher Basket existiert.
+function ibkrRebuildFormerBaskets() {
+    var changed = false;
+    Object.keys(baskets).forEach(function(id) {
+        if (!baskets[id] || !baskets[id].ibkrFormer) return;
+        baskets[id].weights = ibkrFormerWeights();
+        changed = true;
+    });
+    return changed;
+}
+
 // Gleicht in ALLEN (nicht IBKR-verwalteten) Baskets die Stückzahl der Aktien an den
 // aktuellen IBKR-Depotbestand an — aber nur für Ticker, die im Basket UND im Depot
 // liegen. Fügt nichts hinzu und entfernt nichts; ändert ausschließlich überlappende
@@ -2347,7 +2426,7 @@ function ibkrSyncBasketQuantities() {
 
     Object.keys(baskets).forEach(function(id) {
         var b = baskets[id];
-        if (!b || b.ibkrManaged) return;        // verwaltete Baskets werden separat komplett neu aufgebaut
+        if (!b || b.ibkrManaged || b.ibkrFormer) return;   // verwaltete/Ehemalige Baskets werden separat komplett neu aufgebaut
         var w = b.weights || {};
         var localChanged = false;
         Object.keys(w).forEach(function(sym) {
