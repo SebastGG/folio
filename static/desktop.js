@@ -243,13 +243,16 @@ function initChart() {
     });
     chart.priceScale('ghost').applyOptions({ visible: false });
 
-    // Sektor-ETF-Overlay: liegt auf DERSELBEN rechten Preisskala wie die Kerzen und
-    // wird auf das Kursniveau der Aktie rebasiert (relative Stärke). ETF-Linie über
-    // den Kerzen = Sektor stärker, darunter = Aktie stärker. Standardmäßig leer.
+    // Sektor-ETF-Overlay: eigene LINKE Preisskala (LWC zeichnet pro Seite nur eine
+    // Achse; rechts liegen die Kerzen). Dadurch skaliert der ETF unabhängig von den
+    // Kerzen und ist per Maus an der linken Achse zieh-/skalierbar. Standardmäßig leer.
     etfSeries = chart.addSeries(LightweightCharts.LineSeries, {
         color: '#e91e63', lineWidth: 2, lineStyle: 0,
-        lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        priceScaleId: 'left',
+        lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
     });
+    // Linke Achse: autoskaliert + maus-skalierbar; nur sichtbar wenn das Overlay aktiv ist.
+    chart.priceScale('left').applyOptions({ visible: false, autoScale: true, borderVisible: false });
 
     // Indikatoren
     ma50S  = chart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
@@ -260,11 +263,6 @@ function initChart() {
 
     // ResizeObserver — Chart passt sich Container an
     new ResizeObserver(fitChart).observe(container);
-
-    // Beim Zoomen/Scrollen den Sektor-ETF neu auf den sichtbaren linken Rand rebasieren.
-    chart.timeScale().subscribeVisibleTimeRangeChange(function() {
-        if (_showSectorEtf) _rebaseSectorEtf();
-    });
 
     // Crosshair → Stats aktualisieren
     chart.subscribeCrosshairMove(function(param) {
@@ -474,7 +472,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         if (regUS)  regUS.applyOptions({ visible: false });
         if (regLS)  regLS.applyOptions({ visible: false });
         if (ghostSeries) try { ghostSeries.setData([]); } catch(e) {}
-        if (etfSeries)   try { etfSeries.setData([]); } catch(e) {}
+        if (etfSeries) { try { etfSeries.setData([]); } catch(e) {} _setEtfAxisVisible(false); }
         return;
     }
 
@@ -2560,10 +2558,11 @@ function toggleTradeMarkers(btn) {
     refreshTradeMarkers();
 }
 
-// ── Sektor-ETF-Overlay (relative Stärke) ─────────────────────────────────────
-// Zeigt beim Betrachten einer Einzelaktie den passenden Sektor-ETF als auf das
-// Aktien-Kursniveau rebasierte Linie: läuft der ETF über den Kerzen → Sektor
-// stärker, darunter → Aktie stärker. Toggle pro Basket gespeichert (showSectorEtf).
+// ── Sektor-ETF-Overlay (Sektor-Vergleich) ────────────────────────────────────
+// Zeigt beim Betrachten einer Einzelaktie den passenden Sektor-ETF als Linie auf
+// einer EIGENEN linken Achse (unabhängig autoskaliert, per Maus skalierbar).
+// Vergleich der relativen Stärke über den Kurvenverlauf. Toggle pro Basket
+// gespeichert (showSectorEtf).
 
 function toggleSectorEtf(btn) {
     _showSectorEtf = !_showSectorEtf;
@@ -2585,13 +2584,25 @@ function updateSectorEtfBadge(arg) {
     btn.textContent = label;
 }
 
-// Voller Refresh: Sektor→ETF auflösen, ETF-Daten (gecacht) laden, dann rebasieren.
+// Zeigt/versteckt die linke ETF-Achse (nur sichtbar wenn Overlay aktiv gezeichnet).
+function _setEtfAxisVisible(v) {
+    if (!chart) return;
+    try { chart.priceScale('left').applyOptions({ visible: v }); } catch(e) {}
+}
+
+// Leert das ETF-Overlay und blendet die linke Achse aus.
+function _clearSectorEtf() {
+    _etfSymbol = null; _etfCandles = [];
+    try { etfSeries.setData([]); } catch(e) {}
+    _setEtfAxisVisible(false);
+}
+
+// Voller Refresh: Sektor→ETF auflösen, ETF-Daten (gecacht) laden, dann zeichnen.
 async function refreshSectorEtf() {
     if (!etfSeries) return;
     // Aus / Index / keine Kerzen → Overlay leeren
     if (!_showSectorEtf || currentView === 'index' || !_lastCandles || !_lastCandles.length) {
-        _etfSymbol = null; _etfCandles = [];
-        try { etfSeries.setData([]); } catch(e) {}
+        _clearSectorEtf();
         updateSectorEtfBadge(null);
         return;
     }
@@ -2599,11 +2610,10 @@ async function refreshSectorEtf() {
                  || ibkrSectors[currentView] || null;
     var etf = sector ? SECTOR_ETF[sector] : null;
     // Kein Sektor bekannt → evtl. lädt fetchTickerInfo noch; ruft refreshSectorEtf erneut.
-    if (!sector) { _etfSymbol = null; _etfCandles = []; try { etfSeries.setData([]); } catch(e) {} updateSectorEtfBadge('pending'); return; }
+    if (!sector) { _clearSectorEtf(); updateSectorEtfBadge('pending'); return; }
     // Sektor ohne ETF-Mapping, oder man betrachtet den ETF selbst → kein Overlay.
     if (!etf || etf.toUpperCase() === currentView.toUpperCase()) {
-        _etfSymbol = null; _etfCandles = [];
-        try { etfSeries.setData([]); } catch(e) {}
+        _clearSectorEtf();
         updateSectorEtfBadge(etf ? null : 'none');
         return;
     }
@@ -2623,39 +2633,27 @@ async function refreshSectorEtf() {
     if (req !== _sectorEtfReq || !_showSectorEtf || currentView === 'index') return;
     _etfSymbol  = etf;
     _etfCandles = data;
-    _rebaseSectorEtf();
+    _renderSectorEtf();
 }
 
-// Günstiger Re-Rebase (bei Zoom/Pan): rechnet die ETF-Linie aus den gecachten
-// Tagesdaten auf das Aktien-Kursniveau um, Anker = erster sichtbarer Balken.
-function _rebaseSectorEtf() {
+// Zeichnet die ETF-Linie mit ECHTEN ETF-Kursen auf der eigenen linken Achse.
+// Kein Rebasing — die unabhängige, maus-skalierbare Achse sorgt dafür, dass ETF und
+// Aktie trotz unterschiedlicher Größenordnung beide den vollen vertikalen Raum
+// nutzen; der Vergleich der relativen Stärke erfolgt über den Kurvenverlauf.
+function _renderSectorEtf() {
     if (!etfSeries) return;
     if (!_showSectorEtf || !_etfCandles || !_etfCandles.length || !_lastCandles || !_lastCandles.length) {
-        try { etfSeries.setData([]); } catch(e) {}
+        _clearSectorEtf();
         return;
     }
     // ETF-Tagesschluss je Kerzenzeit (letzter Schluss am/vor der Kerzenzeit; TF-agnostisch).
-    var closeAt = {}, j = 0, last = null;
+    var line = [], j = 0, last = null;
     _lastCandles.forEach(function(cd) {
         while (j < _etfCandles.length && _etfCandles[j].time <= cd.time) { last = _etfCandles[j].close; j++; }
-        closeAt[cd.time] = last;
-    });
-    // Anker = erster sichtbarer Balken mit gültigem ETF-Wert.
-    // (getVisibleRange().from kann String/Timestamp/BusinessDay sein → _timeToStr normalisiert.)
-    var vr = null; try { vr = chart.timeScale().getVisibleRange(); } catch(e) {}
-    var fromStr = vr ? _timeToStr(vr.from) : '';
-    var a = 0;
-    if (fromStr) { while (a < _lastCandles.length && _lastCandles[a].time < fromStr) a++; }
-    while (a < _lastCandles.length && !(closeAt[_lastCandles[a].time] > 0)) a++;
-    if (a >= _lastCandles.length) { try { etfSeries.setData([]); } catch(e) {} return; }
-    var stockAnchor = _lastCandles[a].close;
-    var etfAnchor   = closeAt[_lastCandles[a].time];
-    var line = [];
-    _lastCandles.forEach(function(cd) {
-        var ec = closeAt[cd.time];
-        if (ec > 0) line.push({ time: cd.time, value: stockAnchor * ec / etfAnchor });
+        if (last > 0) line.push({ time: cd.time, value: last });
     });
     try { etfSeries.setData(line); } catch(e) {}
+    _setEtfAxisVisible(line.length > 0);
 }
 
 function doLogout() {
