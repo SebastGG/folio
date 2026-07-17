@@ -607,6 +607,9 @@ function fitView() {
     requestAnimationFrame(function() {
         if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
     });
+    // Sektor-ETF (eigene linke Achse) ebenfalls neu einpassen — autoScale wieder an,
+    // falls der Nutzer die Achse zuvor manuell gezogen hatte.
+    if (etfSeries) { try { etfSeries.priceScale().applyOptions({ autoScale: true }); } catch(e) {} }
     var candles = allCandles;
     if (!candles || !candles.length) { chart.timeScale().fitContent(); return; }
     var toDate   = candles[candles.length - 1].time;
