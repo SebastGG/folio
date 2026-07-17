@@ -298,14 +298,17 @@ function refreshMobileTradeMarkers() {
         var posRow = ibkrPositions && ibkrPositions.find(function(p) {
             return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
-        var currentQty = posRow ? posRow.quantity : null;
+        // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen) — als Anker für die
+        // Rückwärtsrechnung nutzen, sonst fehlt der Verlauf bzw. läuft bei
+        // unvollständiger Flex-Historie ins Negative (siehe Desktop refreshTradeMarkers).
+        var currentQty = posRow ? posRow.quantity : 0;
         var totalTraded = relevantTrades.reduce(function(s, t) {
             return s + ((t.action || '').toUpperCase().indexOf('BUY') >= 0 ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
         }, 0);
-        var runningQty = currentQty !== null ? currentQty - totalTraded : null;
+        var runningQty = currentQty - totalTraded;
         var dateRunning = {};
         relevantTrades.forEach(function(t) {
-            if (!t.trade_date || runningQty === null) return;
+            if (!t.trade_date) return;
             var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             runningQty += buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0);
             dateRunning[t.trade_date] = runningQty;

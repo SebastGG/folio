@@ -349,11 +349,14 @@ function refreshTradeMarkers() {
     if (!csSeries) return;
     var markers = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        // Aktuelle IBKR-Position für laufende Bestandsberechnung
+        // Aktuelle IBKR-Position als Anker für die Rückwärtsrechnung des Bestands.
+        // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen). Diese 0 als Anker
+        // nutzen, statt den Bestand bei 0 vorwärts laufen zu lassen — sonst rutscht
+        // er bei unvollständiger Flex-Historie (fehlende frühe Käufe) ins Negative.
         var ibkrPos = (ibkrPositions || []).find(function(p) {
             return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
-        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : null;
+        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : 0;
 
         // Partial fills aggregieren: ein Marker pro Tag + Richtung
         // Matching via ISIN (Vorrang) bzw. Symbol-Fallback — siehe ibkrTradeYahoo()
@@ -361,13 +364,15 @@ function refreshTradeMarkers() {
             return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
         }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
 
-        // Laufenden Bestand ab erster Transaktion berechnen
-        // Startbestand = aktuelle IBKR-Menge minus aller bekannten Trades
+        // Laufenden Bestand ab erster Transaktion berechnen.
+        // Startbestand = aktueller IBKR-Bestand minus aller bekannten Trades
+        // (rückwärts vom bekannten Endbestand — fängt fehlende frühe Käufe/Verkäufe
+        // in der Flex-Historie ab, sodass der Verlauf am Ende auf currentQty passt).
         var totalTraded = relevantTrades.reduce(function(s, t) {
             var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
         }, 0);
-        var runningQty = currentQty !== null ? currentQty - totalTraded : 0;
+        var runningQty = currentQty - totalTraded;
 
         // Pro Tag laufenden Bestand ermitteln
         var dateRunning = {};
