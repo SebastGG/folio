@@ -10,6 +10,7 @@ werden in einem In-Memory-Dict pro User gehalten und vom Frontend
 gepollt.
 """
 
+import re
 import time
 import uuid
 import threading
@@ -240,14 +241,37 @@ def _build_url(index_code: str, sector_code: str, filters: list[str]) -> str:
     return BASE_URL + ",".join([index_code, sector_code] + list(filters))
 
 
-def _extract_tickers(df) -> list[str]:
-    ticker_col = next(
-        (c for c in df.columns if "Ticker" in c or "Symbol" in c),
-        None,
-    )
-    if ticker_col is None:
-        return []
-    return df[ticker_col].dropna().unique().tolist()
+def _extract_tickers(soup, df=None) -> list[str]:
+    """Liest die Symbole einer Screener-Seite — aus dem HTML, nicht aus dem Zellentext.
+
+    Finviz rendert in der Ticker-Spalte seit einer Umstellung ein Logo-Element vor
+    dem Symbol. `pandas.read_html` liest dessen Text mit, wodurch der erste
+    Buchstabe doppelt erscheint: aus „AAPL" wird „AAAPL", aus „A" wird „AA".
+    Das Attribut `data-boxover-ticker` der Zelle trägt das Symbol unverfälscht.
+
+    Fällt auf den Link `stock?t=SYMBOL` zurück, falls Finviz das Attribut aufgibt.
+    Der DataFrame wird bewusst NICHT mehr als Quelle genutzt (siehe oben), sondern
+    nur noch für die Seiten-Zählung in _screen_sector.
+    """
+    out, seen = [], set()
+
+    def _add(sym):
+        sym = (sym or "").strip().upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            out.append(sym)
+
+    for td in soup.find_all(attrs={"data-boxover-ticker": True}):
+        _add(td.get("data-boxover-ticker"))
+
+    if not out:
+        for a in soup.find_all("a", class_="company-ticker"):
+            href = a.get("href") or ""
+            m = re.search(r"[?&]t=([A-Za-z0-9.\-]+)", href)
+            if m:
+                _add(m.group(1))
+
+    return out
 
 
 def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> list[str]:
@@ -268,11 +292,18 @@ def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> lis
             if not frames:
                 break
             df = pd.concat(frames.values(), ignore_index=True)
+            # Symbole kommen aus dem HTML (siehe _extract_tickers); der DataFrame
+            # dient nur noch dazu, eine leere Seite zu erkennen.
+            soups = list(s.soups.values())
         except Exception:
             break                              # leere/letzte Folgeseite → Ende
-        if df.empty:
+        if df.empty or not soups:
             break
-        tickers = _extract_tickers(df)
+        tickers = []
+        for sp in soups:
+            for t in _extract_tickers(sp):
+                if t not in tickers:
+                    tickers.append(t)
         new = [t for t in tickers if t not in seen_set]
         for t in new:
             seen_set.add(t)

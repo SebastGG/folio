@@ -559,8 +559,13 @@ def update_ticker(ticker: str, conn: sqlite3.Connection):
         period1 = calendar.timegm(time_module.strptime(last_date, "%Y-%m-%d")) - 86400
         period2 = int(time_module.time())
         chart = _yahoo_chart(ticker, period1, period2)
-        timestamps = chart["timestamp"]
-        ohlcv = chart["indicators"]["quote"][0]
+        # Yahoo kennt das Symbol, liefert aber keine Kerzen (ausgesetzt, delistet oder
+        # jünger als der abgefragte Zeitraum). Klartext statt rohem KeyError 'timestamp'.
+        timestamps = chart.get("timestamp")
+        quotes     = (chart.get("indicators") or {}).get("quote") or []
+        if not timestamps or not quotes:
+            raise RuntimeError("Keine Kursdaten bei Yahoo (delistet oder ausgesetzt?)")
+        ohlcv = quotes[0]
         meta  = chart.get("meta", {})
         count = 0
 
