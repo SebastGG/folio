@@ -11,14 +11,15 @@ gepollt.
 """
 
 import re
+import gzip
 import time
 import uuid
 import threading
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import pandas as pd
 import yfinance as yf
-from pyfinviz.screener import Screener
+from bs4 import BeautifulSoup
 
 
 # ── Konfiguration ────────────────────────────────────────────
@@ -238,10 +239,21 @@ def _set(job_id: str, **kw):
 
 # ── Finviz ──────────────────────────────────────────────────
 def _build_url(index_code: str, sector_code: str, filters: list[str]) -> str:
-    return BASE_URL + ",".join([index_code, sector_code] + list(filters))
+    """Baut die Finviz-Screener-URL. Endet bewusst auf ein Komma.
+
+    Ohne das abschließende Komma verwirft Finviz den LETZTEN Filter der Liste —
+    nachgewiesen: `idx_sp500,sec_technology` liefert alle Sektoren des S&P 500,
+    `sec_technology,idx_sp500` liefert Technology quer über alle Indizes, und erst
+    `idx_sp500,sec_technology,` liefert wirklich S&P-500-Technologiewerte.
+    Der Screener hat dadurch faktisch immer einen Filter zu wenig angewandt.
+    """
+    parts = [p for p in ([index_code, sector_code] + list(filters)) if p]
+    if not parts:
+        return BASE_URL
+    return BASE_URL + ",".join(parts) + ","
 
 
-def _extract_tickers(soup, df=None) -> list[str]:
+def _extract_tickers(soup) -> list[str]:
     """Liest die Symbole einer Screener-Seite — aus dem HTML, nicht aus dem Zellentext.
 
     Finviz rendert in der Ticker-Spalte seit einer Umstellung ein Logo-Element vor
@@ -250,8 +262,6 @@ def _extract_tickers(soup, df=None) -> list[str]:
     Das Attribut `data-boxover-ticker` der Zelle trägt das Symbol unverfälscht.
 
     Fällt auf den Link `stock?t=SYMBOL` zurück, falls Finviz das Attribut aufgibt.
-    Der DataFrame wird bewusst NICHT mehr als Quelle genutzt (siehe oben), sondern
-    nur noch für die Seiten-Zählung in _screen_sector.
     """
     out, seen = [], set()
 
@@ -274,40 +284,58 @@ def _extract_tickers(soup, df=None) -> list[str]:
     return out
 
 
+def _fetch_soup(url: str) -> BeautifulSoup:
+    """Holt eine Finviz-Seite. Ohne browserähnliche Kopfzeilen liefert Finviz eine
+    Seite ohne Ergebnistabelle."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        raw = resp.read()
+    if raw[:2] == b"\x1f\x8b":                     # gzip
+        raw = gzip.decompress(raw)
+    return BeautifulSoup(raw.decode("utf-8", "replace"), "html.parser")
+
+
+def _total_hits(soup) -> int | None:
+    """Liest Finviz' eigene Trefferzahl („#1 / 86 Total"). None = nicht gefunden."""
+    m = re.search(r"#\d+\s*/\s*([\d,]+)\s*Total", soup.get_text(" ", strip=True))
+    return int(m.group(1).replace(",", "")) if m else None
+
+
 def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> list[str]:
     """Holt ALLE Treffer eines Index×Sektors über Finviz-Seiten-Paginierung (&r=Offset).
 
-    Finviz liefert 20 Treffer/Seite. Wir holen Seite für Seite, bis eine Seite
-    keine neuen Ticker oder weniger als eine volle Seite liefert (oder MAX_PAGES).
-    pyfinviz wirft bei einer leeren Folgeseite einen Fehler → als „Ende" werten.
+    Bewusst ohne pyfinviz: dessen pandas-Auswertung scheitert an den Folgeseiten
+    („Shape of passed values is (0, 1)"), der Fehler wurde hier als „Ende" gewertet
+    und der Screener lieferte still nur die ersten 20 von z.B. 86 Treffern.
+    Abbruch primär über Finviz' eigene Trefferzahl, ersatzweise über eine nicht
+    volle bzw. wiederholte Seite.
     """
     base = _build_url(index_code, sector_code, filters)
     seen, seen_set = [], set()
+    total = None
     for page in range(MAX_PAGES):
         offset = page * FINVIZ_PAGE_SIZE
         url = base + (f"&r={offset + 1}" if offset else "")
         try:
-            s = Screener(main_url=url)
-            frames = s.data_frames
-            if not frames:
-                break
-            df = pd.concat(frames.values(), ignore_index=True)
-            # Symbole kommen aus dem HTML (siehe _extract_tickers); der DataFrame
-            # dient nur noch dazu, eine leere Seite zu erkennen.
-            soups = list(s.soups.values())
+            soup = _fetch_soup(url)
         except Exception:
-            break                              # leere/letzte Folgeseite → Ende
-        if df.empty or not soups:
+            break                              # Netzfehler → mit dem Bisherigen weiter
+        if total is None:
+            total = _total_hits(soup)
+        tickers = _extract_tickers(soup)
+        if not tickers:
             break
-        tickers = []
-        for sp in soups:
-            for t in _extract_tickers(sp):
-                if t not in tickers:
-                    tickers.append(t)
         new = [t for t in tickers if t not in seen_set]
         for t in new:
             seen_set.add(t)
             seen.append(t)
+        if total is not None and len(seen) >= total:
+            break
         # Letzte Seite erreicht: nicht voll ODER keine neuen Ticker (Wiederholung)
         if len(tickers) < FINVIZ_PAGE_SIZE or not new:
             break
