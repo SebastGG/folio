@@ -39,6 +39,11 @@ var PAGES = [
     {
         id: 'settings', label: 'Einstellungen', icon: '⚙',
         onShow: function () { if (typeof settingsLoad === 'function') settingsLoad(); }
+    },
+    {
+        id: 'log', label: 'Protokoll', icon: '🧾',
+        // renderLog() überspringt versteckte Seiten — beim Öffnen einmal nachziehen
+        onShow: function () { if (typeof renderLog === 'function') renderLog(true); }
     }
 ];
 

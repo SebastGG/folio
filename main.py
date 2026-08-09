@@ -35,6 +35,7 @@ from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 import screener
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -330,9 +331,14 @@ async def logout():
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_db(db_file: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_file)
+    # timeout/busy_timeout: WAL erlaubt parallele Leser, aber nur EINEN Schreiber.
+    # Beim Refresh schreiben mehrere Worker-Threads gleichzeitig — mit dem sqlite3-
+    # Default von 5 s brach das unter Last mit "database is locked" ab (der Fehler
+    # wurde früher verschluckt, der Ticker blieb einfach ohne neue Kurse).
+    conn = sqlite3.connect(db_file, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")  # besser für concurrent reads
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 def init_db(db_file: str):
@@ -485,32 +491,74 @@ def _adjust_drawings_for_split(data_dir: str, view_key: str, factors: list):
         print(f"adjust_drawings_for_split {view_key}: {e}")
 
 # ── Yahoo Finance ──────────────────────────────────────────────────────────────
+def _yahoo_chart(ticker: str, period1: int, period2: int) -> dict:
+    """Holt die Yahoo-Chart-Antwort mit Retry.
+
+    Yahoo drosselt Bursts (429/999) und lässt einzelne Verbindungen auflaufen. Ohne
+    Retry blieb bei jedem Refresh zufällig ein Teil der Ticker auf altem Stand —
+    genau das Symptom „manchmal werden die Kurse nicht geladen".
+    """
+    import urllib.request, urllib.error, time as time_module
+
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+        f"?interval=1d&period1={period1}&period2={period2}"
+    )
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            err = (data.get("chart") or {}).get("error")
+            if err:
+                # Fachlicher Fehler (unbekanntes Symbol o.ä.) — Retry bringt nichts
+                raise RuntimeError(f"Yahoo: {err.get('description') or err}")
+            result = (data.get("chart") or {}).get("result") or []
+            if not result:
+                raise RuntimeError("Yahoo: leere Antwort")
+            return result[0]
+        except RuntimeError:
+            raise
+        except urllib.error.HTTPError as e:
+            # 400/404 = Symbol gibt es nicht — sofort aufgeben statt 4,5 s zu warten.
+            # 429/5xx dagegen sind genau die Fälle, für die der Retry da ist.
+            if e.code in (400, 404):
+                raise RuntimeError(f"Unbekanntes Symbol (HTTP {e.code})")
+            last_err = e
+            if attempt < 2:
+                time_module.sleep(1.5 * (attempt + 1))   # 1,5 s / 3 s
+        except Exception as e:          # URLError, Timeout, JSON-Fehler
+            last_err = e
+            if attempt < 2:
+                time_module.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"Yahoo nicht erreichbar: {last_err}")
+
 def update_ticker(ticker: str, conn: sqlite3.Connection):
     """
     Lädt Kursdaten von Yahoo Finance und speichert sie in SQLite.
     Nutzt Delta-Updates + holt heutigen Intraday-Kurs separat.
     Rückgabe: (Anzahl neuer/aktualisierter Zeilen, [neu angewandte Split-Faktoren]).
+    Wirft bei Fehlschlag — die Aufrufer melden das an die Oberfläche weiter.
     """
     try:
-        import urllib.request, datetime, time as time_module
+        import datetime, time as time_module
 
         row = conn.execute(
             "SELECT MAX(date) as last FROM prices WHERE ticker=?", (ticker,)
         ).fetchone()
         last_date = row["last"] if row and row["last"] else "2020-01-01"
 
-        # Historische Daten (1d interval) — liefert abgeschlossene Tage
-        period1 = int(time_module.mktime(time_module.strptime(last_date, "%Y-%m-%d")))
+        # Historische Daten (1d interval) — liefert abgeschlossene Tage.
+        # calendar.timegm statt mktime: last_date/date_str sind UTC-Datumsangaben,
+        # mktime hätte sie als Lokalzeit gelesen (auf UTC+X ein Tag Versatz).
+        # Ein Tag Vorlauf als Puffer gegen Zeitzonen-Randfälle (Börsen östlich von UTC
+        # haben ihren Balken-Zeitstempel genau auf Mitternacht UTC). Zusätzliche Tage
+        # kosten nichts: die Schleife unten überspringt alles vor last_date.
+        import calendar
+        period1 = calendar.timegm(time_module.strptime(last_date, "%Y-%m-%d")) - 86400
         period2 = int(time_module.time())
-        url = (
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-            f"?interval=1d&period1={period1}&period2={period2}"
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-
-        chart = data["chart"]["result"][0]
+        chart = _yahoo_chart(ticker, period1, period2)
         timestamps = chart["timestamp"]
         ohlcv = chart["indicators"]["quote"][0]
         meta  = chart.get("meta", {})
@@ -579,8 +627,11 @@ def update_ticker(ticker: str, conn: sqlite3.Connection):
         split_factors = _reconcile_splits(ticker, conn)
         return count, split_factors
     except Exception as e:
+        # Bewusst weiterwerfen: früher wurde hier -1 zurückgegeben und der Fehler war
+        # für die Oberfläche unsichtbar — der Refresh sah erfolgreich aus, obwohl der
+        # Ticker auf altem Stand blieb.
         print(f"update_ticker error for {ticker}: {e}")
-        return -1, []
+        raise
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 def load_config(config_file: str) -> dict:
@@ -654,9 +705,11 @@ async def update_prices(request: Request):
     user = get_user(request)
     now = time.time()
     with _last_update_lock:
-        if now - _last_update.get(user, 0) < 60:
+        wait = 60 - (now - _last_update.get(user, 0))
+        if wait > 0:
             return JSONResponse(
-                content={"ok": False, "error": "Rate limit: 1x pro Minute"},
+                content={"ok": False, "error": "Rate limit: 1x pro Minute",
+                         "retry_after": int(wait) + 1},
                 status_code=429
             )
         _last_update[user] = now
@@ -666,25 +719,50 @@ async def update_prices(request: Request):
     body = await request.json()
     tickers = body.get("tickers", [])
     if not tickers:
-        return JSONResponse(content={"ok": True, "updated": 0})
+        return JSONResponse(content={"ok": True, "updated": 0, "failed": {}})
 
     def update_one(ticker):
+        conn = None
         try:
             conn = get_db(files["db"])
             n, split_factors = update_ticker(ticker, conn)
-            conn.close()
             # Nach rückwirkender Split-Korrektur der Kurse auch die Zeichnungen
             # dieses Tickers auf die neue Kurs-Skala anpassen.
             if split_factors:
                 _adjust_drawings_for_split(files["data_dir"], "ticker:" + ticker, split_factors)
-            return ticker, n
+            return ticker, {"ok": True, "rows": n}
         except Exception as e:
-            return ticker, f"error: {e}"
+            return ticker, {"ok": False, "error": str(e)}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        results = dict(ex.map(lambda t: update_one(t), tickers))
+    def run_all():
+        # Weniger Worker als früher (8): Yahoo drosselt parallele Bursts, und jeder
+        # Worker schreibt in dieselbe SQLite — beides erzeugte stille Ausfälle.
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            return dict(ex.map(update_one, tickers))
 
-    return JSONResponse(content={"ok": True, "results": results})
+    # Der Pool blockiert; in einer async-Route würde er den Event-Loop anhalten und
+    # alle parallelen /api/prices/-Abrufe der Oberfläche mit ausbremsen.
+    results = await run_in_threadpool(run_all)
+
+    failed = {t: r["error"] for t, r in results.items() if not r["ok"]}
+    if failed and len(failed) == len(tickers):
+        # Komplett fehlgeschlagen (Yahoo weg, kein Netz) — Sperre wieder freigeben,
+        # sonst wartet der Benutzer eine Minute auf einen Versuch, der nichts tat.
+        with _last_update_lock:
+            _last_update.pop(user, None)
+
+    return JSONResponse(content={
+        "ok": not failed,
+        "requested": len(tickers),
+        "updated": len(tickers) - len(failed),
+        "failed": failed,
+    })
 
 @app.post("/api/prices/repair/{ticker}")
 async def repair_ticker(ticker: str, request: Request):
@@ -704,18 +782,22 @@ async def repair_ticker(ticker: str, request: Request):
     files = get_user_files(user)
     init_db(files["db"])
     conn = get_db(files["db"])
+    error, split_factors = None, []
     try:
         conn.execute("DELETE FROM ticker_splits WHERE ticker=?", (ticker,))
         conn.execute("DELETE FROM prices WHERE ticker=?", (ticker,))
         conn.commit()
-        n, split_factors = update_ticker(ticker, conn)
+        try:
+            _n, split_factors = update_ticker(ticker, conn)
+        except Exception as e:
+            error = str(e)
         count = conn.execute(
             "SELECT COUNT(*) AS c FROM prices WHERE ticker=?", (ticker,)).fetchone()["c"]
     finally:
         conn.close()
     return JSONResponse(content={
-        "ok": n >= 0, "ticker": ticker, "rows": count,
-        "splits_applied": split_factors,
+        "ok": error is None, "ticker": ticker, "rows": count,
+        "splits_applied": split_factors, "error": error,
     })
 
 @app.get("/api/prices/status/all")
@@ -759,6 +841,7 @@ async def get_prices(ticker: str, request: Request):
     """Kursdaten für einen Ticker aus SQLite."""
     user = get_user(request)
     files = get_user_files(user)
+    init_db(files["db"])   # frischer Benutzer: sonst "no such table: prices"
     conn = get_db(files["db"])
     rows = conn.execute(
         "SELECT date,open,high,low,close,volume FROM prices "

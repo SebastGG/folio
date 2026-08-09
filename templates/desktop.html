@@ -702,6 +702,36 @@
   </div>
 </section><!-- end #view-settings -->
 
+<!-- ══ SEITE: PROTOKOLL ═══════════════════════════════════════════════════════ -->
+<section id="view-log" class="page">
+  <div class="log-page">
+    <div class="log-bar">
+      <span class="panel-title">🧾 Laufprotokoll</span>
+
+      <label class="log-lvl">
+        Detailgrad
+        <input type="range" id="logLevelRange" min="1" max="10" step="1"
+               oninput="setLogLevel(this.value)">
+        <input type="number" id="logLevelNum" min="1" max="10" step="1"
+               onchange="setLogLevel(this.value)">
+        <span id="logLevelHint" class="log-hint"></span>
+      </label>
+
+      <label class="log-chk">
+        <input type="checkbox" id="logAutoscroll" checked> Mitlaufen
+      </label>
+
+      <input type="text" id="logFilter" class="log-filter" placeholder="Filter (Text oder Bereich)…"
+             oninput="renderLog(true)" autocomplete="off">
+
+      <span id="logCount" class="log-hint"></span>
+      <button class="export-btn log-btn" onclick="copyLog()">📋 Kopieren</button>
+      <button class="export-btn log-btn" onclick="clearLog()">🗑 Leeren</button>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+</section><!-- end #view-log -->
+
 </div><!-- end #page-container -->
 
 

@@ -50,6 +50,93 @@ var _dataMap         = {}; // { AAPL: [{time, open, high, low, close, volume}] }
 var tickerCurrencies = {}; // { AAPL: 'USD', HLMA.L: 'GBp', SAP.DE: 'EUR' }
 var _fxDataMap       = {}; // { 'EURUSD=X': [...], 'GBPUSD=X': [...] }
 
+// ╔══════════════════════════════════════════════════════════╗
+// ║  1b. LAUFPROTOKOLL                                        ║
+// ╚══════════════════════════════════════════════════════════╝
+// Ringpuffer im Browser. Jeder Eintrag hat eine Stufe 1–10; angezeigt wird alles
+// bis zum eingestellten Detailgrad (1 = nur Fehler, 10 = jeder Einzelschritt).
+// Faustregel für neue Aufrufe:
+//   1 Fehler · 2 Warnungen · 3 Ergebnis einer Aktion · 4 Start einer Aktion
+//   5 Teilschritte · 6 Netzabrufe gebündelt · 7 einzelner Netzabruf
+//   8 Rendern/Zeichnen · 9 Zwischenwerte · 10 alles
+
+/** HTML-Maskierung für eingebettete Fremdtexte (Tickernamen, Fehlermeldungen). */
+function escHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+var LOG_MAX     = 800;     // Ringpuffer-Größe
+var logEntries  = [];      // [{ t: Date, lvl: 1..10, tag, msg }]
+var logLevel    = 3;       // Detailgrad, aus localStorage wiederhergestellt
+var _logSeq     = 0;
+var _logT0      = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+
+try {
+    var _lvl = parseInt(localStorage.getItem('folio.logLevel'), 10);
+    if (_lvl >= 1 && _lvl <= 10) logLevel = _lvl;
+} catch (e) {}
+
+/**
+ * Schreibt einen Protokolleintrag.
+ * @param {number} lvl 1–10, siehe Faustregel oben
+ * @param {string} tag Kurzer Bereich, z.B. 'Kurse', 'IBKR', 'Chart'
+ * @param {string} msg Meldung
+ */
+function logIt(lvl, tag, msg) {
+    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+    logEntries.push({
+        n:   ++_logSeq,
+        t:   new Date(),
+        ms:  Math.round(now - _logT0),
+        lvl: lvl,
+        tag: tag || '',
+        msg: String(msg)
+    });
+    if (logEntries.length > LOG_MAX) logEntries.splice(0, logEntries.length - LOG_MAX);
+    if (lvl <= 2 && typeof console !== 'undefined') {
+        (lvl === 1 ? console.error : console.warn)('[' + tag + '] ' + msg);
+    }
+    if (typeof renderLog === 'function') renderLog();
+}
+
+/** Misst die Dauer eines Abschnitts: var done = logTimer(4,'Kurse','Refresh'); … done(); */
+function logTimer(lvl, tag, msg) {
+    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+    logIt(lvl, tag, msg + ' …');
+    return function(suffix) {
+        var dt = ((typeof performance !== 'undefined' && performance.now ? performance.now() : 0) - t0);
+        logIt(lvl, tag, msg + ' fertig' + (suffix ? ' — ' + suffix : '') + ' (' + Math.round(dt) + ' ms)');
+    };
+}
+
+function setLogLevel(v) {
+    var n = parseInt(v, 10);
+    if (isNaN(n)) n = 3;                       // nicht `|| 3` — das verschluckt die 0
+    n = Math.max(1, Math.min(10, n));
+    logLevel = n;
+    try { localStorage.setItem('folio.logLevel', String(n)); } catch (e) {}
+    logIt(1, 'Log', 'Detailgrad auf ' + n + ' gesetzt');   // Stufe 1 → immer sichtbar
+    if (typeof renderLog === 'function') renderLog();
+}
+
+function clearLog() {
+    logEntries = [];
+    if (typeof renderLog === 'function') renderLog();
+}
+
+// Unerwartete Fehler landen ebenfalls im Protokoll — sonst sieht der Benutzer nur,
+// dass „nichts passiert" ist.
+if (typeof window !== 'undefined') {
+    window.addEventListener('error', function(e) {
+        logIt(1, 'Fehler', (e.message || 'Fehler') + ' @ ' + (e.filename || '').split('/').pop() + ':' + e.lineno);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        logIt(1, 'Fehler', 'Unbehandelt: ' + ((e.reason && e.reason.message) || e.reason));
+    });
+}
+
 // ── Währungssymbol für die aktuelle Basket-Basiswährung ──────────────
 var _CUR_SYMBOLS = { USD: '$', EUR: '€', GBP: '£', CHF: 'Fr.', JPY: '¥', CAD: 'C$', AUD: 'A$' };
 function basketCurSymbol() {
@@ -740,8 +827,10 @@ async function loadConfig() {
 
         loadBasketState();
         if (typeof renderBasketSelect === 'function') renderBasketSelect();
+        logIt(3, 'Config', 'Geladen: ' + Object.keys(baskets).length + ' Portfolios, aktiv „'
+            + ((baskets[currentBasket] || {}).name || currentBasket) + '"');
     } catch (e) {
-        console.error('loadConfig failed:', e);
+        logIt(1, 'Config', 'Laden fehlgeschlagen: ' + e.message);
     }
 }
 
@@ -792,8 +881,15 @@ async function loadDbTickers() {
         var data = await r.json();
         TICKERS  = Object.keys(data);
         _volumeData = []; // Reset
+        logIt(3, 'DB', TICKERS.length + ' Ticker mit Kursdaten in der Datenbank');
+        // Bei hohem Detailgrad: welcher Ticker hängt auf welchem Stand fest?
+        if (logLevel >= 9) {
+            TICKERS.forEach(function(t) {
+                logIt(9, 'DB', t + ': bis ' + data[t].last + ' (' + data[t].count + ' Tage)');
+            });
+        }
     } catch (e) {
-        console.warn('loadDbTickers failed:', e);
+        logIt(1, 'DB', 'Ticker-Status konnte nicht geladen werden: ' + e.message);
     }
 }
 
@@ -806,7 +902,11 @@ async function updateAllPrices() {
         Object.keys(b.weights || {}).forEach(function(s) { if ((b.weights[s] || 0) !== 0) _allT.add(s); });
     });
     var tickers = Array.from(_allT);
-    if (tickers.length === 0) return;
+    if (tickers.length === 0) {
+        logIt(2, 'Kurse', 'Kein Ticker mit Gewicht ≠ 0 — nichts zu aktualisieren');
+        return { ok: true, requested: 0, updated: 0, failed: {} };
+    }
+    logIt(6, 'Kurse', 'Yahoo-Update für ' + tickers.length + ' Ticker: ' + tickers.join(', '));
     try {
         var r = await fetch('/api/prices/update', {
             method: 'POST',
@@ -814,14 +914,29 @@ async function updateAllPrices() {
             body: JSON.stringify({ tickers: tickers })
         });
         var data = await r.json();
-        if (!data.ok) {
-            console.warn('updateAllPrices:', data.error);
-            return false;
+
+        if (r.status === 429) {
+            logIt(2, 'Kurse', 'Rate-Limit — noch ' + (data.retry_after || 60) + ' s bis zum nächsten Update');
+            return { ok: false, rateLimited: true, retryAfter: data.retry_after || 60,
+                     requested: tickers.length, updated: 0, failed: {} };
         }
-        return true;
+        var failed = data.failed || {};
+        var nFailed = Object.keys(failed).length;
+        if (nFailed) {
+            logIt(1, 'Kurse', nFailed + ' von ' + tickers.length + ' Tickern fehlgeschlagen');
+            Object.keys(failed).forEach(function(t) { logIt(2, 'Kurse', t + ': ' + failed[t]); });
+        } else {
+            logIt(3, 'Kurse', 'Alle ' + tickers.length + ' Ticker aktualisiert');
+        }
+        return {
+            ok: !!data.ok, requested: tickers.length,
+            updated: data.updated != null ? data.updated : tickers.length - nFailed,
+            failed: failed
+        };
     } catch (e) {
-        console.error('updateAllPrices failed:', e);
-        return false;
+        logIt(1, 'Kurse', 'Update-Aufruf fehlgeschlagen: ' + e.message);
+        return { ok: false, requested: tickers.length, updated: 0,
+                 failed: {}, transport: e.message };
     }
 }
 
@@ -838,9 +953,13 @@ async function doRefresh() {
         btn.style.opacity = '0.55';
         btn.textContent = btn.id === 'm-refresh-btn' ? '…' : '⟳ Laden…';
     }
+    var done = logTimer(4, 'Refresh', 'Kurse aktualisieren + neu laden');
     try {
-        await updateAllPrices();
+        var res = await updateAllPrices();
         await loadData();
+        setRefreshStatus(res);
+        done(res.ok ? res.updated + ' Ticker' : 'mit Fehlern');
+        return res;
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -851,12 +970,48 @@ async function doRefresh() {
 }
 
 /**
+ * Schreibt das Ergebnis eines Refresh sichtbar in die Fußzeile (#lastUpdate).
+ * Vorher stand dort dauerhaft „Noch nicht geladen" — ein fehlgeschlagenes oder
+ * durch das Rate-Limit abgewiesenes Update war von einem erfolgreichen nicht
+ * zu unterscheiden.
+ */
+function setRefreshStatus(res) {
+    var el = document.getElementById('lastUpdate');
+    if (!el) return;
+    var now = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    if (res.rateLimited) {
+        el.textContent = '⏳ ' + now + ' — Rate-Limit, Kurse unverändert (noch ' + res.retryAfter + ' s)';
+        el.style.color = '#d08a1e';
+        return;
+    }
+    if (res.transport) {
+        el.textContent = '✕ ' + now + ' — Server nicht erreichbar: ' + res.transport;
+        el.style.color = 'var(--red)';
+        return;
+    }
+    var failedSyms = Object.keys(res.failed || {});
+    if (failedSyms.length) {
+        el.textContent = '⚠ ' + now + ' — ' + res.updated + '/' + res.requested
+            + ' aktualisiert, fehlgeschlagen: ' + failedSyms.slice(0, 6).join(', ')
+            + (failedSyms.length > 6 ? ' …' : '') + ' (Details im Protokoll)';
+        el.style.color = 'var(--red)';
+        return;
+    }
+    el.textContent = '✓ ' + now + ' — ' + res.updated + ' Ticker aktualisiert';
+    el.style.color = '';
+}
+
+/**
  * Lädt Kursdaten für einen einzelnen Ticker.
  */
 async function fetchTicker(sym) {
     try {
         var r    = await fetch('/api/prices/' + sym, { cache: 'no-store' });
         var data = await r.json();
+        if (!Array.isArray(data)) throw new Error('Unerwartete Antwort für ' + sym);
+        if (!data.length) logIt(2, 'Kurse', sym + ': keine Kursdaten in der Datenbank');
+        else logIt(7, 'Kurse', sym + ': ' + data.length + ' Tage, letzter ' + data[data.length - 1].date);
         return data.map(function(d) {
             return {
                 time:   d.date,
@@ -871,7 +1026,7 @@ async function fetchTicker(sym) {
             return day !== 0 && day !== 6;
         });
     } catch (e) {
-        console.error('fetchTicker failed for ' + sym + ':', e);
+        logIt(1, 'Kurse', sym + ': Abruf fehlgeschlagen — ' + e.message);
         return [];
     }
 }
@@ -881,6 +1036,7 @@ async function fetchTicker(sym) {
  */
 async function loadIndexData() {
     if (typeof showLoading === 'function') showLoading('Lade Index...');
+    var done = logTimer(4, 'Index', 'Indexdaten laden');
     try {
         var syms = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) !== 0; });
         if (syms.length === 0) {
@@ -889,10 +1045,13 @@ async function loadIndexData() {
             if (typeof renderWatchlist    === 'function') renderWatchlist();
             renderPerfTable();
             if (typeof hideLoading === 'function') hideLoading();
+            logIt(2, 'Index', 'Portfolio ohne Positionen — nichts zu zeichnen');
+            done();
             return;
         }
 
         // Alle Ticker parallel laden
+        logIt(6, 'Index', syms.length + ' Ticker aus der Datenbank abrufen');
         var results = await Promise.all(syms.map(function(sym) {
             return fetchTicker(sym).then(function(data) {
                 return { sym: sym, data: data };
@@ -900,12 +1059,17 @@ async function loadIndexData() {
         }));
 
         results.forEach(function(r) { _dataMap[r.sym] = r.data; });
+        var leer = results.filter(function(r) { return !r.data.length; }).map(function(r) { return r.sym; });
+        if (leer.length) logIt(2, 'Index', 'Ohne Kursdaten: ' + leer.join(', '));
 
         // Währungen laden und FX-Paare bei Bedarf nachladen
         try {
             var currResp = await fetch('/api/prices/currencies?tickers=' + syms.join(','));
             tickerCurrencies = await currResp.json();
-        } catch(e) { tickerCurrencies = {}; }
+        } catch(e) {
+            tickerCurrencies = {};
+            logIt(2, 'Index', 'Währungen nicht abrufbar — rechne ohne Umrechnung: ' + e.message);
+        }
 
         var basket   = baskets[currentBasket] || {};
         var baseCur  = basket.baseCurrency || 'USD';
@@ -924,6 +1088,9 @@ async function loadIndexData() {
                 return fetchTicker(fx).then(function(data) { return { sym: fx, data: data }; });
             }));
             fxResults.forEach(function(r) { if (r.data && r.data.length) _fxDataMap[r.sym] = r.data; });
+            logIt(5, 'Index', 'Wechselkurse nach ' + baseCur + ': ' + fxPairs.join(', '));
+            var fxLeer = fxPairs.filter(function(p) { return !_fxDataMap[p]; });
+            if (fxLeer.length) logIt(2, 'Index', 'Ohne Wechselkurs (Positionen bleiben in Fremdwährung): ' + fxLeer.join(', '));
         }
 
         // Index aufbauen (mit optionaler Währungskonvertierung)
@@ -932,15 +1099,19 @@ async function loadIndexData() {
 
         if (allCandles.length === 0) {
             if (typeof hideLoading === 'function') hideLoading();
+            logIt(1, 'Index', 'Indexreihe ist leer — kein Ticker lieferte verwertbare Kurse');
+            done();
             return;
         }
 
         applyPeriod();
         if (typeof renderWatchlist === 'function') renderWatchlist();
         if (typeof hideLoading === 'function') hideLoading();
+        done(allCandles.length + ' Tage, Basis ' + baseCur);
     } catch (e) {
-        console.error('loadIndexData failed:', e);
+        logIt(1, 'Index', 'Laden fehlgeschlagen: ' + e.message);
         if (typeof hideLoading === 'function') hideLoading();
+        done('Fehler');
     }
 }
 
@@ -949,6 +1120,7 @@ async function loadIndexData() {
  */
 async function loadTickerData(sym) {
     if (typeof showLoading === 'function') showLoading('Lade ' + sym + '...');
+    var done = logTimer(4, 'Chart', sym + ' laden');
     try {
         var data    = await fetchTicker(sym);
         _dataMap[sym] = data;   // auch in _dataMap speichern für buildPerfData()
@@ -956,9 +1128,11 @@ async function loadTickerData(sym) {
         _volumeData = data.map(function(c) { return { time: c.time, volume: c.volume }; });
         applyPeriod();
         if (typeof hideLoading === 'function') hideLoading();
+        done(data.length + ' Tage');
     } catch (e) {
-        console.error('loadTickerData failed for ' + sym + ':', e);
+        logIt(1, 'Chart', sym + ' laden fehlgeschlagen: ' + e.message);
         if (typeof hideLoading === 'function') hideLoading();
+        done('Fehler');
     }
 }
 
@@ -981,6 +1155,7 @@ async function loadData() {
  * Wechselt zwischen Index und Ticker-View.
  */
 function switchView(view) {
+    logIt(4, 'Ansicht', 'Wechsel ' + currentView + ' → ' + view);
     if (typeof saveChartRange === 'function') saveChartRange();
     if (typeof saveMobileChartRange === 'function') saveMobileChartRange();
     currentView = view;
@@ -1304,9 +1479,11 @@ async function ibkrLoadPositions() {
         var r = await fetch('/api/ibkr/positions');
         ibkrPositions = await r.json();
         if (ibkrPositions.length > 0) ibkrLastSync = ibkrPositions[0].last_sync;
+        logIt(3, 'IBKR', ibkrPositions.length + ' Positionen geladen'
+            + (ibkrLastSync ? ', Sync ' + String(ibkrLastSync).slice(0, 16).replace('T', ' ') : ''));
         return ibkrPositions;
     } catch(e) {
-        console.warn('ibkrLoadPositions failed:', e);
+        logIt(1, 'IBKR', 'Positionen laden fehlgeschlagen: ' + e.message);
         ibkrPositions = [];
         return [];
     }
@@ -1364,9 +1541,10 @@ async function ibkrLoadCash() {
         var r = await fetch('/api/ibkr/cash');
         ibkrCash = await r.json();
         if (ibkrCash.length > 0 && !ibkrLastSync) ibkrLastSync = ibkrCash[0].last_sync;
+        logIt(5, 'IBKR', ibkrCash.length + ' Cash-Salden geladen');
         return ibkrCash;
     } catch(e) {
-        console.warn('ibkrLoadCash failed:', e);
+        logIt(1, 'IBKR', 'Cash laden fehlgeschlagen: ' + e.message);
         ibkrCash = [];
         return [];
     }
@@ -1376,9 +1554,10 @@ async function ibkrLoadTrades() {
     try {
         var r = await fetch('/api/ibkr/trades');
         ibkrTrades = await r.json();
+        logIt(3, 'IBKR', ibkrTrades.length + ' Trades geladen');
         return ibkrTrades;
     } catch(e) {
-        console.warn('ibkrLoadTrades failed:', e);
+        logIt(1, 'IBKR', 'Trades laden fehlgeschlagen: ' + e.message);
         ibkrTrades = [];
         return [];
     }

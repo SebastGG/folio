@@ -26,7 +26,8 @@
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries, etfSeries;
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
-var _markersPlugin     = null;   // LWC v5 SeriesMarkers-Plugin
+var _markersPlugin     = null;   // Chart-Primitive für die Trade-Pfeile
+var _tradeMarkerData   = [];     // [{date, isBuy, qty, price, label}] — je Tag+Richtung
 var _showTradeMarkers  = true;   // Toggle-Zustand
 var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
 var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
@@ -188,6 +189,89 @@ function showLoading(msg) {
 function hideLoading() {
     var overlay = document.getElementById('statusOverlay');
     if (overlay) overlay.style.display = 'none';
+}
+
+// ── Protokoll-Seite ─────────────────────────────────────────────────────────
+// logIt() (shared.js) ruft renderLog() nach jedem Eintrag. Damit ein Refresh mit
+// hunderten Zeilen die Oberfläche nicht ausbremst, wird pro Frame nur einmal
+// gezeichnet — und gar nicht, solange die Seite versteckt ist.
+
+var _logRaf     = null;
+var _LOG_HINTS  = {
+    1: 'nur Fehler', 2: '+ Warnungen', 3: '+ Ergebnisse', 4: '+ Aktionen',
+    5: '+ Teilschritte', 6: '+ Abrufe gebündelt', 7: '+ jeder Abruf',
+    8: '+ Zeichnen', 9: '+ Zwischenwerte', 10: 'alles'
+};
+
+function renderLog(force) {
+    var page = document.getElementById('view-log');
+    if (!page) return;
+    if (!force && !page.classList.contains('active')) return;   // versteckt → beim Öffnen via onShow
+    if (_logRaf) return;
+    _logRaf = requestAnimationFrame(function() { _logRaf = null; _renderLogNow(); });
+}
+
+function _renderLogNow() {
+    var body = document.getElementById('logBody');
+    if (!body) return;
+
+    // Bedienelemente an den aktuellen Detailgrad angleichen
+    var rng = document.getElementById('logLevelRange');
+    var num = document.getElementById('logLevelNum');
+    if (rng && String(rng.value) !== String(logLevel)) rng.value = logLevel;
+    if (num && String(num.value) !== String(logLevel)) num.value = logLevel;
+    var hint = document.getElementById('logLevelHint');
+    if (hint) hint.textContent = _LOG_HINTS[logLevel] || '';
+
+    var q = ((document.getElementById('logFilter') || {}).value || '').trim().toLowerCase();
+    var shown = logEntries.filter(function(e) {
+        if (e.lvl > logLevel) return false;
+        if (!q) return true;
+        return e.msg.toLowerCase().indexOf(q) >= 0 || e.tag.toLowerCase().indexOf(q) >= 0;
+    });
+
+    var cnt = document.getElementById('logCount');
+    if (cnt) cnt.textContent = shown.length + ' / ' + logEntries.length + ' Zeilen';
+
+    if (!shown.length) {
+        body.innerHTML = '<div class="log-empty">Keine Einträge für Detailgrad ' + logLevel
+            + (q ? ' und Filter „' + escHtml(q) + '"' : '') + '.</div>';
+        return;
+    }
+
+    var html = shown.map(function(e) {
+        var cls = e.lvl === 1 ? ' lvl-err' : e.lvl === 2 ? ' lvl-warn' : e.lvl >= 7 ? ' lvl-deep' : '';
+        var t = e.t;
+        var hhmmss = String(t.getHours()).padStart(2, '0') + ':'
+                   + String(t.getMinutes()).padStart(2, '0') + ':'
+                   + String(t.getSeconds()).padStart(2, '0') + '.'
+                   + String(t.getMilliseconds()).padStart(3, '0');
+        return '<div class="log-row' + cls + '">'
+             + '<span class="log-time">' + hhmmss + '</span>'
+             + '<span class="log-lv">' + e.lvl + '</span>'
+             + '<span class="log-tag">' + escHtml(e.tag) + '</span>'
+             + '<span class="log-msg">' + escHtml(e.msg) + '</span>'
+             + '</div>';
+    }).join('');
+    body.innerHTML = html;
+
+    var auto = document.getElementById('logAutoscroll');
+    if (!auto || auto.checked) body.scrollTop = body.scrollHeight;
+}
+
+/** Sichtbare Zeilen in die Zwischenablage — für Rückfragen/Fehlersuche. */
+function copyLog() {
+    var text = logEntries.filter(function(e) { return e.lvl <= logLevel; }).map(function(e) {
+        return e.t.toISOString() + '  [' + e.lvl + '] ' + (e.tag || '-') + ': ' + e.msg;
+    }).join('\n');
+    var done = function(ok) {
+        logIt(1, 'Log', ok ? 'Protokoll kopiert' : 'Kopieren fehlgeschlagen — Text manuell markieren');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() { done(true); }, function() { done(false); });
+    } else {
+        done(false);
+    }
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -358,12 +442,12 @@ function refreshIbkrCostLine(colored) {
 }
 
 /**
- * Wird von shared.js applyPeriod() aufgerufen.
- * Rendert Kerzen, Volumen, Indikatoren, LogReg, Seit-Marker.
+ * Fasst die IBKR-Trades des aktuellen Tickers zu Markergruppen zusammen —
+ * eine je Handelstag und Richtung, mit mengengewichtetem Ausführungskurs und
+ * Bestandslabel. Reines Rechnen, kein Zeichnen.
  */
-function refreshTradeMarkers() {
-    if (!csSeries) return;
-    var markers = [];
+function _tradeMarkerGroups() {
+    var groups = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
         // Aktuelle IBKR-Position als Anker für die Rückwärtsrechnung des Bestands.
         // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen). Diese 0 als Anker
@@ -404,13 +488,17 @@ function refreshTradeMarkers() {
             dateRunning[date] = runningQty;
         });
 
+        // Teilausführungen je Tag+Richtung zusammenfassen. Der Kurs wird dabei
+        // mengengewichtet gemittelt — das ist die Höhe, auf der die Pfeilspitze sitzt.
         var agg = {};
         relevantTrades.forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             var key = t.trade_date + (isBuy ? '_B' : '_S');
-            if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0 };
-            agg[key].qty += Math.abs(t.quantity || 0);
+            if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0, notional: 0 };
+            var q = Math.abs(t.quantity || 0);
+            agg[key].qty      += q;
+            agg[key].notional += q * (t.price || 0);
         });
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
@@ -423,30 +511,150 @@ function refreshTradeMarkers() {
             } else {
                 label = (g.isBuy ? '+' : '-') + fmt(g.qty);
             }
-            var _pos = g.isBuy ? 'belowBar' : 'aboveBar';
-            markers.push({
-                time: g.date, position: _pos,
-                color: g.isBuy ? '#00E5FF' : '#FF6D00',
-                shape: g.isBuy ? 'arrowUp' : 'arrowDown',
-                text: '', size: 3,
-            });
-            markers.push({
-                time: g.date, position: _pos,
-                color: '#000000',
-                shape: g.isBuy ? 'arrowUp' : 'arrowDown',
-                text: label,
-                size: 0,
+            groups.push({
+                date:  g.date,
+                isBuy: g.isBuy,
+                qty:   g.qty,
+                price: g.qty > 0 ? g.notional / g.qty : 0,   // Ø-Ausführungskurs
+                label: label
             });
         });
-        markers.sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+        groups.sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
     }
+    return groups;
+}
+
+/**
+ * Setzt die Trade-Marker neu. Gezeichnet wird über ein Chart-Primitive
+ * (siehe _makeTradeMarkerPrimitive) — nicht über createSeriesMarkers, weil dessen
+ * Pfeile nur über/unter der Kerze sitzen können. Die Pfeilspitze soll aber genau
+ * auf dem Ausführungskurs liegen, und dafür braucht es die Preis-Koordinate.
+ */
+function refreshTradeMarkers() {
+    if (!csSeries) return;
+    _tradeMarkerData = _tradeMarkerGroups();
+    logIt(8, 'Chart', 'Trade-Marker: ' + _tradeMarkerData.length + ' Gruppen für ' + currentView);
     try {
         if (!_markersPlugin) {
-            _markersPlugin = LightweightCharts.createSeriesMarkers(csSeries, markers);
-        } else {
-            _markersPlugin.setMarkers(markers);
+            _markersPlugin = _makeTradeMarkerPrimitive();
+            csSeries.attachPrimitive(_markersPlugin);
         }
-    } catch(e) { console.warn('refreshTradeMarkers:', e); }
+        if (_markersPlugin.requestUpdate) _markersPlugin.requestUpdate();
+    } catch (e) {
+        logIt(1, 'Chart', 'Trade-Marker fehlgeschlagen: ' + e.message);
+    }
+}
+
+/**
+ * Ordnet ein Trade-Datum der Kerze zu, in die es fällt.
+ * Nötig, weil bei Wochen-/Monats-Timeframe (und an Feiertagen) kein Balken mit
+ * exakt diesem Datum existiert — timeToCoordinate() liefert dort nichts.
+ * Rückgabe: Zeitschlüssel eines vorhandenen Balkens oder null.
+ */
+function _snapTradeTime(date) {
+    var bars = _lastCandles;
+    if (!bars || !bars.length) return null;
+    if (date < bars[0].time) return null;                       // vor dem Chartbeginn
+    var lo = 0, hi = bars.length - 1, best = 0;
+    while (lo <= hi) {                                          // letzter Balken mit time <= date
+        var mid = (lo + hi) >> 1;
+        if (bars[mid].time <= date) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+    }
+    return bars[best].time;
+}
+
+/**
+ * Chart-Primitive, das die Trade-Pfeile zeichnet.
+ * Vorteil gegenüber einem eigenen Canvas-Overlay: das Chart ruft draw() bei JEDER
+ * Änderung auf — auch beim Ziehen der Preisachse, was kein Zeitbereichs-Ereignis
+ * auslöst. Die Pfeile bleiben dadurch immer auf ihrem Kurs kleben.
+ */
+function _makeTradeMarkerPrimitive() {
+    var _update = null;
+    return {
+        attached: function(param) { _update = param.requestUpdate; },
+        detached: function() { _update = null; },
+        updateAllViews: function() {},
+        requestUpdate: function() { if (_update) _update(); },
+        paneViews: function() {
+            return [{
+                zOrder: function() { return 'top'; },
+                renderer: function() { return { draw: _drawTradeMarkers }; }
+            }];
+        }
+    };
+}
+
+function _drawTradeMarkers(target) {
+    if (!_tradeMarkerData.length || !csSeries || !chart) return;
+    target.useMediaCoordinateSpace(function(scope) {
+        var ctx = scope.context;
+        var ts  = chart.timeScale();
+
+        var HEAD_H = 11;   // Länge der Pfeilspitze
+        var HEAD_W = 5;    // halbe Breite der Pfeilspitze
+        var SHAFT  = 9;    // Länge des Schafts hinter der Spitze
+        var TICK   = 8;    // halbe Breite des Kursstrichs auf Ausführungshöhe
+
+        ctx.save();
+        ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
+        ctx.textAlign = 'center';
+
+        _tradeMarkerData.forEach(function(g) {
+            var barTime = _snapTradeTime(g.date);
+            if (barTime === null) return;
+            var x = ts.timeToCoordinate(barTime);
+            var y = csSeries.priceToCoordinate(g.price);
+            if (x === null || y === null) return;
+            if (x < -40 || x > scope.mediaSize.width + 40) return;   // außerhalb des Sichtbereichs
+
+            var col  = g.isBuy ? '#00b8d4' : '#e05a00';   // gegenüber Cyan/Orange abgedunkelt: auf hellem Grund lesbar
+            var dir  = g.isBuy ? 1 : -1;                  // Kauf: Schaft unterhalb, Spitze zeigt nach oben
+            var tipY = y;                                 // <<< Pfeilspitze exakt auf dem Ausführungskurs
+            var baseY = tipY + dir * HEAD_H;
+            var endY  = baseY + dir * SHAFT;
+
+            // Feiner Kursstrich auf Ausführungshöhe — macht das Ablesen eindeutig
+            ctx.strokeStyle = col;
+            ctx.globalAlpha = 0.55;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x - TICK, tipY);
+            ctx.lineTo(x + TICK, tipY);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+
+            // Schaft
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, baseY);
+            ctx.lineTo(x, endY);
+            ctx.stroke();
+
+            // Pfeilspitze (Dreieck, Spitze auf tipY)
+            ctx.fillStyle = col;
+            ctx.beginPath();
+            ctx.moveTo(x, tipY);
+            ctx.lineTo(x - HEAD_W, baseY);
+            ctx.lineTo(x + HEAD_W, baseY);
+            ctx.closePath();
+            ctx.fill();
+
+            // Beschriftung hinter dem Schaft, mit Hinterlegung gegen Kerzen/Gitter
+            var ty = endY + dir * 11;
+            var w  = ctx.measureText(g.label).width;
+            ctx.fillStyle = 'rgba(255,255,255,0.82)';
+            if (document.documentElement.getAttribute('data-theme') === 'dark') {
+                ctx.fillStyle = 'rgba(20,21,26,0.82)';
+            }
+            ctx.fillRect(x - w / 2 - 3, ty - 8, w + 6, 12);
+            ctx.fillStyle = col;
+            ctx.fillText(g.label, x, ty + 2);
+        });
+
+        ctx.restore();
+    });
 }
 
 /**
@@ -817,14 +1025,13 @@ async function fetchTickerInfo(sym) {
 function renderTickerInfo(d) {
     var el = document.getElementById('ticker-info');
     if (!el) return;
+    // Auch ohne Stammdaten sollen die eigenen Trades sichtbar sein — deshalb hängt
+    // der Trade-Block in jedem Zweig unten dran, nicht nur im Erfolgsfall.
     if (!d)        { el.innerHTML = '<div class="ti-loading">Einzelaktie wählen für Stammdaten.</div>'; return; }
-    if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>'; return; }
-    if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>'; return; }
+    if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>' + renderTickerTrades(d.symbol); return; }
+    if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>' + renderTickerTrades(d.symbol); return; }
 
-    var esc = function(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    };
+    var esc = escHtml;
     var cap = function(v) {
         if (v == null) return null;
         var a = Math.abs(v);
@@ -867,7 +1074,68 @@ function renderTickerInfo(d) {
               +  '</tr>';
     }
     html += '<table class="ti-table"><tbody>' + cells + '</tbody></table>';
+    html += renderTickerTrades(d.symbol);
     el.innerHTML = html;
+}
+
+/**
+ * Eigene IBKR-Trades des angezeigten Tickers als HTML-Block für das Stammdaten-Fenster.
+ * Zuordnung über ibkrTradeYahoo() (ISIN vor Symbol) — dieselbe Logik wie die
+ * Chart-Marker, damit Tabelle und Pfeile nie auseinanderlaufen.
+ * Gibt '' zurück, wenn es zu diesem Ticker nichts zu zeigen gibt.
+ */
+function renderTickerTrades(sym) {
+    if (!sym || sym === 'index') return '';
+    if (!ibkrTrades || !ibkrTrades.length) return '';
+
+    var mine = ibkrTrades.filter(function(t) { return ibkrTradeYahoo(t) === sym; })
+        .sort(function(a, b) { return a.trade_date < b.trade_date ? 1 : a.trade_date > b.trade_date ? -1 : 0; });
+    if (!mine.length) return '';
+
+    // Kennzahlen über alle Trades: Stückzahl, Volumen, Ø-Kurs je Richtung
+    var buyQty = 0, sellQty = 0, buyVal = 0, sellVal = 0, feeEur = 0;
+    mine.forEach(function(t) {
+        var q = Math.abs(t.quantity || 0);
+        var p = t.price || 0;
+        feeEur += Math.abs(t.commission || 0) * (t.fx_rate || 1);
+        if ((t.action || '').toUpperCase().indexOf('BUY') >= 0) { buyQty += q; buyVal += q * p; }
+        else { sellQty += q; sellVal += q * p; }
+    });
+    var cur  = tickerCurrencies[sym] || '';
+    var curS = tickerCurSymbol(sym);
+    var f2   = function(v) { return Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var fq   = function(v) { return v === Math.floor(v) ? String(v) : f2(v); };
+
+    var head = '<div class="tt-head">'
+        + '<span class="tt-title">Eigene Trades (' + mine.length + ')</span>'
+        + (buyQty  ? '<span class="tt-kpi"><b style="color:var(--green)">Kauf</b> ' + fq(buyQty)
+                     + ' Ø ' + curS + f2(buyVal / buyQty) + '</span>' : '')
+        + (sellQty ? '<span class="tt-kpi"><b style="color:var(--red)">Verkauf</b> ' + fq(sellQty)
+                     + ' Ø ' + curS + f2(sellVal / sellQty) + '</span>' : '')
+        + '<span class="tt-kpi">Bestand ' + fq(buyQty - sellQty) + '</span>'
+        + (feeEur ? '<span class="tt-kpi">Gebühren ' + f2(feeEur) + ' €</span>' : '')
+        + '</div>';
+
+    var rows = mine.map(function(t) {
+        var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+        var q     = Math.abs(t.quantity || 0);
+        var valEur = Math.abs(t.value || 0) * (t.fx_rate || 1);
+        return '<tr>'
+            + '<td class="tt-date">' + escHtml((t.trade_date || '').slice(0, 10)) + '</td>'
+            + '<td class="tt-act" style="color:' + (isBuy ? 'var(--green)' : 'var(--red)') + '">'
+            +   (isBuy ? 'Kauf' : 'Verkauf') + '</td>'
+            + '<td class="tt-num">' + fq(q) + '</td>'
+            + '<td class="tt-num">' + curS + f2(t.price || 0) + '</td>'
+            + '<td class="tt-num">' + f2(valEur) + ' €</td>'
+            + '<td class="tt-sym">' + escHtml(t.symbol || '') + (cur ? ' · ' + escHtml(cur) : '') + '</td>'
+            + '</tr>';
+    }).join('');
+
+    return '<div class="ti-trades">' + head
+         + '<table class="tt-table"><thead><tr>'
+         + '<th>Datum</th><th>Art</th><th class="tt-num">Anz.</th>'
+         + '<th class="tt-num">Kurs</th><th class="tt-num">Wert</th><th>IBKR-Symbol</th>'
+         + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
 function showTab(tab) {
@@ -1597,16 +1865,22 @@ updateClock();
  * 6. Zeichnungen + Notizen laden
  */
 (function startup() {
+    logIt(1, 'Start', 'Folio startet — Protokoll-Detailgrad ' + logLevel + ' (Seite „Protokoll")');
+    renderLog(true);   // Schieberegler/Zahlenfeld auf den gespeicherten Wert stellen
+
     initChart();
     initDrawingManager();
     loadLayout();  // Layout wiederherstellen nachdem Chart initialisiert
     fitChart();
+    logIt(5, 'Start', 'Chart und Zeichenwerkzeuge bereit');
 
+    var doneStart = logTimer(4, 'Start', 'Startsequenz');
     loadConfig().then(function() {
         return loadDbTickers();
     }).then(function() {
         return loadData();
     }).then(function() {
+        doneStart();
         loadDrawings();
         loadNotes();
         ibkrLoadIsinMap().then(function() {
@@ -1614,7 +1888,13 @@ updateClock();
                 ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
                 ibkrLoadSectors().then(function() { ibkrRenderTable(); });
             });
-            ibkrLoadTrades().then(function() { ibkrRenderTrades(); refreshTradeMarkers(); });
+            // Trades treffen erst NACH loadData() ein — Stammdaten-Fenster und
+            // Chart-Marker deshalb hier noch einmal nachziehen.
+            ibkrLoadTrades().then(function() {
+                ibkrRenderTrades();
+                refreshTradeMarkers();
+                updateChartMeta();
+            });
         });
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
@@ -2147,6 +2427,7 @@ async function ibkrSync() {
                 renderPerfTable();
                 ibkrRenderTrades();
                 refreshTradeMarkers();
+                updateChartMeta();   // Trade-Liste im Stammdaten-Fenster nachziehen
             }
             ibkrLoadSectors().then(function() { ibkrRenderTable(); });
         } else {
