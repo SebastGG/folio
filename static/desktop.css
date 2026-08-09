@@ -781,6 +781,9 @@ footer {
 .scr-btn-run { background: var(--accent); color: white; border-color: var(--accent); }
 .scr-btn-run:hover:not(:disabled) { opacity: .9; color: white; }
 .scr-btn-run:disabled { background: var(--muted); border-color: var(--muted); color: white; }
+/* Aufräumen: dezent, aber beim Überfahren klar als löschend erkennbar */
+.scr-btn-clean { margin-left: auto; color: var(--muted); }
+.scr-btn-clean:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 
 .scr-progress-wrap {
   margin-top: 14px; height: 6px; background: var(--bg);

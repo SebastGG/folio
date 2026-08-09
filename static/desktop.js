@@ -4467,3 +4467,62 @@ async function screenerToBaskets() {
         _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
     }
 }
+
+/* Namenspräfix, unter dem screenerToBaskets() seine Baskets anlegt. */
+var SCREENER_BASKET_PREFIX = 'Screener ';
+
+function _screenerBasketIds() {
+    return Object.keys(baskets).filter(function (id) {
+        return ((baskets[id] || {}).name || '').indexOf(SCREENER_BASKET_PREFIX) === 0;
+    });
+}
+
+/* Entfernt alle vom Screener angelegten Baskets auf einmal — sonst muss jeder
+   einzeln über das ×-Symbol weg. Handarbeit gelöschte Baskets sind nicht
+   wiederherstellbar, deshalb Rückfrage mit vollständiger Liste. */
+async function screenerDeleteBaskets() {
+    var ids = _screenerBasketIds();
+    if (!ids.length) {
+        _scrMsg('Keine Screener-Baskets vorhanden', 'err');
+        return;
+    }
+
+    var namen = ids.map(function (id) { return baskets[id].name; }).sort();
+    var liste = namen.slice(0, 12).join('\n  • ');
+    if (namen.length > 12) liste += '\n  … und ' + (namen.length - 12) + ' weitere';
+    if (!confirm(namen.length + ' Screener-Basket' + (namen.length === 1 ? '' : 's')
+                 + ' unwiderruflich löschen?\n\n  • ' + liste)) {
+        return;
+    }
+
+    var warAktiv = ids.indexOf(currentBasket) !== -1;
+    ids.forEach(function (id) { delete baskets[id]; });
+    logIt(3, 'Screener', namen.length + ' Screener-Baskets gelöscht');
+
+    // Ohne Basket ist die App nicht bedienbar — dann einen leeren anlegen,
+    // genau wie loadConfig() es beim ersten Start tut.
+    if (!Object.keys(baskets).length) {
+        var neu = 'basket_' + Date.now();
+        baskets[neu] = {
+            name: 'Mein Portfolio', weights: {}, period: 180, tf: '1D',
+            perfSinceDate: '', indicators: { ma50: false, ma200: false, reg: false },
+            logScale: false,
+        };
+        logIt(2, 'Screener', 'Alle Baskets waren Screener-Baskets — leeres „Mein Portfolio" angelegt');
+    }
+
+    try {
+        if (warAktiv) {
+            currentBasket = Object.keys(baskets)[0];
+            await saveBasketsToServer();
+            await switchBasket(currentBasket);   // lädt Gewichte, Chart und Watchlist neu
+        } else {
+            await saveBasketsToServer();
+        }
+        if (typeof renderBasketSelect === 'function') renderBasketSelect();
+        _scrMsg(namen.length + ' Basket' + (namen.length === 1 ? '' : 's') + ' gelöscht', 'ok');
+    } catch (e) {
+        logIt(1, 'Screener', 'Löschen konnte nicht gespeichert werden: ' + e.message);
+        _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
+    }
+}
