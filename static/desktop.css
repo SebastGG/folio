@@ -84,7 +84,17 @@
 .seg-btn:last-child { border-right: none; }
 .seg-btn:hover { color: var(--text); }
 .seg-btn.active { background: var(--accent); color: #fff; }
-.seg-swatch { width: 13px; height: 13px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.seg-swatch { width: 13px; height: 13px; border-radius: 50%; display: inline-block; margin-right: 6px;
+  border: 1px solid var(--border); }
+/* Freie Farbwahl neben einem Segmented-Control (Chart-Hintergrund) */
+.ap-color {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 10px;
+  font-size: 11px; color: var(--muted); cursor: pointer;
+}
+.ap-color input[type="color"] {
+  width: 28px; height: 22px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); background: none;
+}
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -270,6 +280,9 @@ header {
   display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; min-height: 60px;
 }
 #r-watch { flex: 1; flex-shrink: 1; min-height: 120px; }
+/* Ist die Watchlist geschlossen, füllt das unterste offene Fenster den Rest der
+   Spalte — sonst bliebe darunter Leerraum (siehe _syncGrow in desktop.js). */
+.r-pane.pane-grow { flex: 1 1 auto; height: auto !important; }
 .rv-resizer {
   height: 5px; cursor: row-resize; background: var(--border); flex-shrink: 0;
   transition: background 0.15s; user-select: none;
@@ -358,8 +371,11 @@ header {
 .draw-sidebar .dtool-btn.active { background: rgba(41,98,255,0.08); color: #2962ff; font-weight: 600; }
 
 /* ── Chart-Container ───────────────────────────────────────────────────────── */
+/* --chart-bg wird von applyAppearance() am <html> gesetzt (Einstellungen → Aussehen).
+   Ohne eigene Wahl gilt die Theme-Fläche. Der Chart selbst zeichnet transparent. */
 .chart-wrap {
   position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden;
+  background: var(--chart-bg, var(--bg));
 }
 #chartContainer { width: 100%; height: 100%; position: relative; z-index: 2; }
 
@@ -370,13 +386,13 @@ header {
   pointer-events: none; overflow: hidden;
   font-weight: 800; font-size: 17vh; line-height: 1;
   letter-spacing: .04em; white-space: nowrap;
-  color: var(--text); opacity: .05; text-transform: uppercase;
+  color: var(--chart-fg, var(--text)); opacity: .05; text-transform: uppercase;
   user-select: none;
 }
 
-/* Stammdaten-Fenster unter dem Chart (eigenes, resizebares Pane) */
+/* Stammdaten- und Trade-Fenster unter dem Chart (eigene, resizebare Panes) */
 .stamm-pane {
-  flex-shrink: 0; height: 150px; min-height: 34px;
+  flex-shrink: 0; height: 130px; min-height: 34px;
   display: flex; flex-direction: column; overflow: hidden;
   border-top: 1px solid var(--border);
 }
@@ -399,8 +415,8 @@ header {
 .ti-table tr:hover { background: var(--bg); }
 .ticker-info .ti-loading { color: var(--muted); }
 
-/* Eigene Trades im Stammdaten-Fenster */
-.ti-trades { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+/* Eigene Trades — eigenes Fenster unter den Stammdaten, daher ohne Trennlinie */
+.ti-trades { margin: 0; }
 .tt-head {
   display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px;
 }
@@ -449,8 +465,9 @@ header {
 
 /* ── Sidebar-Tabs (in right-col) ───────────────────────────────────────────── */
 .sidebar-tabs {
-  display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  display: flex; align-items: center; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
+.sidebar-tabs .pane-close { padding: 0 8px; }
 .sidebar-tab {
   flex: 1; padding: 8px; text-align: center; cursor: pointer;
   color: var(--muted); font-size: 10px; text-transform: uppercase;
@@ -524,6 +541,14 @@ header {
 }
 .panel-title { font-weight: 700; font-size: 10px; text-transform: uppercase; color: var(--muted); }
 .panel-body { flex: 1; overflow-y: auto; }
+/* Schließ-Kreuz — immer ganz rechts in der Kopfzeile, wiederholbar über
+   Einstellungen → Fenster → „Layout wiederherstellen". */
+.pane-close {
+  margin-left: auto; flex-shrink: 0;
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  font-size: 15px; line-height: 1; padding: 0 4px; font-family: inherit;
+}
+.pane-close:hover { color: var(--red); }
 #notesArea { width: 100%; height: 100%; resize: none; border: none; background: var(--surface); padding: 8px; outline: none; }
 
 /* ── IBKR Sub-Panels ───────────────────────────────────────────────────────── */

@@ -48,8 +48,8 @@
 </div>
 
 <div class="app-layout">
-  <div class="left-col">
-  <div class="chart-pane">
+  <div class="left-col" id="left-col">
+  <div class="chart-pane" data-min-h="140">
     <div class="chart-toolbar">
       <span id="chartTitle" class="chart-title">Index</span>
       <div class="btn-group" id="period-btns">
@@ -285,12 +285,25 @@
 
   <div class="lv-resizer" id="lv-resizer-1"></div>
 
-  <div class="stamm-pane" id="r-stammdaten">
+  <div class="stamm-pane" id="r-stammdaten" data-pane-name="Stammdaten" data-min-h="34">
     <div class="panel-header">
       <span class="panel-title">📇 Stammdaten</span>
+      <button class="pane-close" onclick="hidePane('r-stammdaten')" title="Fenster schließen">×</button>
     </div>
     <div class="panel-body">
       <div id="ticker-info" class="ticker-info"></div>
+    </div>
+  </div>
+
+  <div class="lv-resizer" id="lv-resizer-2"></div>
+
+  <div class="stamm-pane" id="r-trades" data-pane-name="Eigene Trades" data-min-h="34">
+    <div class="panel-header">
+      <span class="panel-title">💼 Eigene Trades</span>
+      <button class="pane-close" onclick="hidePane('r-trades')" title="Fenster schließen">×</button>
+    </div>
+    <div class="panel-body">
+      <div id="ticker-trades" class="ticker-info"></div>
     </div>
   </div>
 
@@ -300,10 +313,11 @@
 
   <div class="right-col" id="right-col">
 
-    <div class="r-pane" id="r-watch">
+    <div class="r-pane" id="r-watch" data-pane-name="Kurse / Verwaltung" data-min-h="120">
       <div class="sidebar-tabs">
         <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
         <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
+        <button class="pane-close" onclick="hidePane('r-watch')" title="Fenster schließen">×</button>
       </div>
       <div class="sidebar-content" id="content-kurse" style="padding:0;">
         <div id="basket-pills-bar"></div>
@@ -321,7 +335,7 @@
 
     <div class="rv-resizer" id="rv-resizer-1"></div>
 
-    <div class="r-pane" id="r-perf" style="height:200px;">
+    <div class="r-pane" id="r-perf" style="height:200px;" data-pane-name="Performance" data-min-h="60">
       <div class="panel-header">
         <span class="panel-title">📊 Performance</span>
         <select id="perfSort" onchange="renderPerfTable()" style="border:1px solid var(--border);background:var(--bg);padding:2px 4px;font-size:9px;">
@@ -333,6 +347,7 @@
           <option value="ytd">YTD</option>
           <option value="ibkr">IBKR</option>
         </select>
+        <button class="pane-close" onclick="hidePane('r-perf')" title="Fenster schließen">×</button>
       </div>
       <div class="panel-body">
         <table class="perf-table">
@@ -348,10 +363,11 @@
 
     <div class="rv-resizer" id="rv-resizer-2"></div>
 
-    <div class="r-pane" id="r-notes" style="height:160px;">
+    <div class="r-pane" id="r-notes" style="height:160px;" data-pane-name="Notizen" data-min-h="50">
       <div class="panel-header">
         <span class="panel-title">📝 Notizen</span>
         <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:10px;" onclick="saveNotes()">Speichern</button>
+        <button class="pane-close" onclick="hidePane('r-notes')" title="Fenster schließen">×</button>
       </div>
       <div class="panel-body" style="padding:0;">
         <textarea id="notesArea" placeholder="Notizen, Beobachtungen, Trading-Ideen..."
@@ -361,8 +377,11 @@
 
     <div class="rv-resizer" id="rv-resizer-3"></div>
 
-    <div class="r-pane" id="r-import" style="height:140px;">
-      <div class="panel-header"><span class="panel-title">📥 Import / Export</span></div>
+    <div class="r-pane" id="r-import" style="height:140px;" data-pane-name="Import / Export" data-min-h="50">
+      <div class="panel-header">
+        <span class="panel-title">📥 Import / Export</span>
+        <button class="pane-close" onclick="hidePane('r-import')" title="Fenster schließen">×</button>
+      </div>
       <div class="panel-body" style="padding:8px;">
         <div class="drop-zone" id="dropZone"
           ondragover="event.preventDefault();this.classList.add('over')"
@@ -650,6 +669,41 @@
           <button class="seg-btn" data-v="purple" onclick="setAppearance('accent','purple')"><span class="seg-swatch" style="background:#8b5cf6"></span>Lila</button>
           <button class="seg-btn" data-v="amber"  onclick="setAppearance('accent','amber')"><span class="seg-swatch" style="background:#d08a1e"></span>Bernstein</button>
         </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Chart-Hintergrund</span>
+        <div class="seg-group" id="ap-chartBg">
+          <button class="seg-btn" data-v=""        onclick="setAppearance('chartBg','')">Wie Theme</button>
+          <button class="seg-btn" data-v="#ffffff" onclick="setAppearance('chartBg','#ffffff')"><span class="seg-swatch" style="background:#ffffff"></span>Weiß</button>
+          <button class="seg-btn" data-v="#f2efe9" onclick="setAppearance('chartBg','#f2efe9')"><span class="seg-swatch" style="background:#f2efe9"></span>Papier</button>
+          <button class="seg-btn" data-v="#1e222d" onclick="setAppearance('chartBg','#1e222d')"><span class="seg-swatch" style="background:#1e222d"></span>Nachtblau</button>
+          <button class="seg-btn" data-v="#000000" onclick="setAppearance('chartBg','#000000')"><span class="seg-swatch" style="background:#000000"></span>Schwarz</button>
+        </div>
+        <label class="ap-color">
+          <input type="color" id="ap-chartBg-custom" value="#ffffff"
+                 oninput="setAppearance('chartBg', this.value)">
+          <span>Eigene…</span>
+        </label>
+      </div>
+      <p class="settings-hint">
+        Gilt für die Fläche hinter dem Kurschart. Schrift- und Gitterfarbe im Chart passen sich
+        automatisch an — bei dunklem Hintergrund wird hell beschriftet.
+      </p>
+    </div>
+
+    <div class="settings-card">
+      <h2 class="settings-h">Fenster</h2>
+      <p class="settings-hint">
+        Jedes Fenster auf der Chart-Seite lässt sich über das <b>×</b> in seiner Kopfzeile schließen.
+        Geschlossene Fenster und alle Größen werden pro Benutzer gespeichert.
+      </p>
+      <div class="settings-row">
+        <span class="settings-label">Geschlossen</span>
+        <span id="set-hidden-panes" class="settings-val">—</span>
+      </div>
+      <div class="settings-actions">
+        <button class="refresh-btn" onclick="restoreLayout(this)">↺ Layout wiederherstellen</button>
+        <span class="settings-msg">Öffnet alle Fenster und setzt die Größen zurück.</span>
       </div>
     </div>
 

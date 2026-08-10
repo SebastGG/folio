@@ -2284,6 +2284,38 @@ async def tax_report_konvex_pdf(request: Request, year: str = ""):
 
 # ── Screener ──────────────────────────────────────────────────────────────────
 # Logik in screener.py. Jobs laufen im Background-Thread; Frontend pollt /status.
+# Die zuletzt gestartete Job-ID liegt pro Benutzer auf der Platte, damit ein
+# Neuladen der Seite ein laufendes Screening nicht aus den Augen verliert.
+
+def _last_screener_job_path(user: str) -> str:
+    return os.path.join(get_user_dir(user), "last_screener_job.json")
+
+
+def _save_last_screener_job(user: str, job_id):
+    path = _last_screener_job_path(user)
+    if job_id is None:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"job_id": job_id, "started": time.time()}, f)
+    shutil.move(tmp, path)
+
+
+def _load_last_screener_job(user: str):
+    path = _last_screener_job_path(user)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f).get("job_id") or None
+    except (OSError, ValueError):
+        return None
+
 
 @app.get("/api/screener/config")
 async def screener_config(request: Request):
@@ -2297,7 +2329,7 @@ async def screener_config(request: Request):
 
 @app.post("/api/screener/run")
 async def screener_run(request: Request):
-    get_user(request)
+    user = get_user(request)
     body = await request.json()
     index_names = body.get("indexes") or []
     if not isinstance(index_names, list) or not index_names:
@@ -2326,6 +2358,23 @@ async def screener_run(request: Request):
     filters = screener.sanitize_filters(raw_filters)
 
     job_id = screener.start_job(index_names, cap_min, cap_max, unit, filters)
+    _save_last_screener_job(user, job_id)
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/api/screener/last")
+async def screener_last(request: Request):
+    """
+    Letzter gestarteter Job dieses Benutzers — damit sich die Oberfläche nach
+    einem Seitenwechsel oder Neuladen wieder an ein laufendes Screening hängt.
+    Jobs leben nur im Speicher (30 Min TTL); ist der Job weg, gilt das auch hier.
+    """
+    user = get_user(request)
+    job_id = _load_last_screener_job(user)
+    if not job_id or screener.get_status(job_id) is None:
+        if job_id:
+            _save_last_screener_job(user, None)   # verwaiste Notiz aufräumen
+        return {"ok": True, "job_id": None}
     return {"ok": True, "job_id": job_id}
 
 

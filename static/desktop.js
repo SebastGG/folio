@@ -987,7 +987,7 @@ function setChartWatermark(text) {
     if (el) el.textContent = text || '';
 }
 
-/** Aktualisiert Wasserzeichen + Stammdaten-Feld passend zur aktuellen Ansicht. */
+/** Aktualisiert Wasserzeichen, Stammdaten- und Trade-Fenster zur aktuellen Ansicht. */
 function updateChartMeta() {
     if (typeof currentView === 'undefined') return;
     if (currentView === 'index') {
@@ -995,8 +995,10 @@ function updateChartMeta() {
             ? baskets[currentBasket].name : 'Index';
         setChartWatermark(name);
         renderTickerInfo(null);            // Stammdaten nur für Einzelaktien
+        renderTickerTradesPane(null);
     } else {
         setChartWatermark(currentView);
+        renderTickerTradesPane(currentView);
         if (_tickerInfoCache[currentView]) {
             renderTickerInfo(_tickerInfoCache[currentView]);
         } else {
@@ -1021,15 +1023,15 @@ async function fetchTickerInfo(sym) {
     }
 }
 
-/** Rendert das Stammdaten-Fenster. null → Platzhalter (Index-Ansicht). */
+/** Rendert das Stammdaten-Fenster. null → Platzhalter (Index-Ansicht).
+    Die eigenen Trades stehen in einem eigenen Fenster (renderTickerTradesPane),
+    damit sie sichtbar bleiben, wenn die Stammdaten zugeklappt sind. */
 function renderTickerInfo(d) {
     var el = document.getElementById('ticker-info');
     if (!el) return;
-    // Auch ohne Stammdaten sollen die eigenen Trades sichtbar sein — deshalb hängt
-    // der Trade-Block in jedem Zweig unten dran, nicht nur im Erfolgsfall.
     if (!d)        { el.innerHTML = '<div class="ti-loading">Einzelaktie wählen für Stammdaten.</div>'; return; }
-    if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>' + renderTickerTrades(d.symbol); return; }
-    if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>' + renderTickerTrades(d.symbol); return; }
+    if (d.loading) { el.innerHTML = '<div class="ti-loading">Lade Stammdaten …</div>'; return; }
+    if (d.error)   { el.innerHTML = '<div class="ti-loading">Keine Stammdaten verfügbar</div>'; return; }
 
     var esc = escHtml;
     var cap = function(v) {
@@ -1074,12 +1076,24 @@ function renderTickerInfo(d) {
               +  '</tr>';
     }
     html += '<table class="ti-table"><tbody>' + cells + '</tbody></table>';
-    html += renderTickerTrades(d.symbol);
     el.innerHTML = html;
 }
 
+/** Rendert das Trade-Fenster unter den Stammdaten. null → Platzhalter. */
+function renderTickerTradesPane(sym) {
+    var el = document.getElementById('ticker-trades');
+    if (!el) return;
+    if (!sym || sym === 'index') {
+        el.innerHTML = '<div class="ti-loading">Einzelaktie wählen für eigene Trades.</div>';
+        return;
+    }
+    var html = renderTickerTrades(sym);
+    el.innerHTML = html || '<div class="ti-loading">Keine eigenen Trades zu '
+                         + escHtml(sym) + '.</div>';
+}
+
 /**
- * Eigene IBKR-Trades des angezeigten Tickers als HTML-Block für das Stammdaten-Fenster.
+ * Eigene IBKR-Trades des angezeigten Tickers als HTML-Block für das Trade-Fenster.
  * Zuordnung über ibkrTradeYahoo() (ISIN vor Symbol) — dieselbe Logik wie die
  * Chart-Marker, damit Tabelle und Pfeile nie auseinanderlaufen.
  * Gibt '' zurück, wenn es zu diesem Ticker nichts zu zeigen gibt.
@@ -1676,85 +1690,257 @@ function toggleDrawFlyout(id, event) {
 // ║  8. RESIZER (horizontal + vertikal)                       ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// ── Layouts speichern / laden ──
-var _layout = {};
+// ── Layout: Größen + geschlossene Fenster ──────────────────────────────────
+// _layout reist als Teil der Server-Config mit (shared.js → /api/config):
+//   { rightColW: 300, panes: { 'r-perf': { h: 200, hidden: false }, … } }
+// Frühere Konfigurationen kannten nur feste Schlüssel (rPerfH, stammH, …) —
+// die werden beim ersten Laden einmalig übersetzt.
+// Die Variable _layout selbst steht in shared.js (Mobile reicht sie durch).
+
+/* Alle schließ- und größenveränderbaren Fenster der Chart-Seite, in DOM-Reihenfolge
+   je Spalte. #r-watch trägt keine feste Höhe, es füllt seine Spalte aus. */
+var LAYOUT_PANES_LEFT  = ['r-stammdaten', 'r-trades'];
+var LAYOUT_PANES_RIGHT = ['r-watch', 'r-perf', 'r-notes', 'r-import'];
+var LAYOUT_PANES       = LAYOUT_PANES_LEFT.concat(LAYOUT_PANES_RIGHT);
+
+/* Übersetzung der alten, festen Layout-Schlüssel auf die Fenster-IDs. */
+var _LAYOUT_LEGACY_H = {
+    'r-stammdaten': 'stammH', 'r-perf': 'rPerfH',
+    'r-notes': 'rNotesH', 'r-import': 'rImportH',
+};
+
+function _isResizer(el) {
+    return !!el && (el.classList.contains('lv-resizer') || el.classList.contains('rv-resizer'));
+}
+
+/* Mindesthöhe eines Fensters — steht als data-min-h im HTML. */
+function _paneMinH(el) {
+    return parseInt((el && el.getAttribute('data-min-h')) || '', 10) || 60;
+}
+
+/* Elastisch = wächst mit der Spalte, bekommt deshalb nie eine feste Höhe. */
+function _paneFlex(el) {
+    return !!el && parseFloat(getComputedStyle(el).flexGrow || '0') > 0;
+}
+
+function _paneHidden(id) {
+    var p = (_layout.panes || {})[id];
+    return !!(p && p.hidden);
+}
+
+function _paneName(id) {
+    var el = document.getElementById(id);
+    return (el && el.getAttribute('data-pane-name')) || id;
+}
+
+/* Nächster sichtbarer Nachbar eines Trenners (dir -1 = oben, +1 = unten).
+   Geschlossene Fenster werden übersprungen, damit ein Trenner immer die
+   beiden Fenster bewegt, die tatsächlich an ihm hängen. */
+function _neighborPane(res, dir) {
+    var el = dir < 0 ? res.previousElementSibling : res.nextElementSibling;
+    while (el) {
+        if (!_isResizer(el) && el.style.display !== 'none') return el;
+        el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+    }
+    return null;
+}
 
 function saveLayout() {
-    var rc = document.getElementById('right-col');
-    var rp = document.getElementById('r-perf');
-    var rn = document.getElementById('r-notes');
-    var ri = document.getElementById('r-import');
-    var st = document.getElementById('r-stammdaten');
-    _layout = {
-        rightColW: rc ? rc.offsetWidth  : null,
-        rPerfH:   rp ? rp.offsetHeight : null,
-        rNotesH:  rn ? rn.offsetHeight : null,
-        rImportH: ri ? ri.offsetHeight : null,
-        stammH:   st ? st.offsetHeight : null,
-    };
+    var rc    = document.getElementById('right-col');
+    var panes = {};
+    LAYOUT_PANES.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var prev   = (_layout.panes || {})[id] || {};
+        var hidden = !!prev.hidden;
+        // Höhe nur messen, solange das Fenster offen ist — sonst die gemerkte behalten.
+        var h = prev.h != null ? prev.h : null;
+        if (!hidden && !_paneFlex(el)) h = el.offsetHeight;
+        panes[id] = { h: h, hidden: hidden };
+    });
+    var w = _layout.rightColW != null ? _layout.rightColW : null;
+    if (rc && rc.style.display !== 'none' && rc.offsetWidth > 0) w = rc.offsetWidth;
+    _layout = { rightColW: w, panes: panes };
     saveBasketsToServer();
 }
 
 function loadLayout() {
     var lay = _layout || {};
+    if (!lay.panes) {                       // alte Konfiguration übersetzen
+        lay.panes = {};
+        Object.keys(_LAYOUT_LEGACY_H).forEach(function (id) {
+            var v = lay[_LAYOUT_LEGACY_H[id]];
+            if (v != null) lay.panes[id] = { h: v, hidden: false };
+        });
+        _layout = lay;
+    }
     var rc = document.getElementById('right-col');
-    var rp = document.getElementById('r-perf');
-    var rn = document.getElementById('r-notes');
-    var ri = document.getElementById('r-import');
-    var st = document.getElementById('r-stammdaten');
-    if (lay.rightColW != null && rc) rc.style.width  = lay.rightColW + 'px';
-    if (lay.rPerfH   != null && rp) rp.style.height = lay.rPerfH    + 'px';
-    if (lay.rNotesH  != null && rn) rn.style.height = lay.rNotesH   + 'px';
-    if (lay.rImportH != null && ri) ri.style.height = lay.rImportH  + 'px';
-    if (lay.stammH   != null && st) st.style.height = lay.stammH    + 'px';
-    if (chart) fitChart();
+    if (lay.rightColW != null && rc) rc.style.width = lay.rightColW + 'px';
+    LAYOUT_PANES.forEach(function (id) {
+        var el = document.getElementById(id);
+        var p  = lay.panes[id];
+        if (!el || !p || p.h == null || _paneFlex(el)) return;
+        el.style.height = p.h + 'px';
+    });
+    applyPaneVisibility();
+}
+
+/* Setzt die Sichtbarkeit aller Fenster und räumt hinterher auf: Trenner ohne
+   zwei Nachbarn verschwinden, eine leere rechte Spalte gibt ihre Breite an den
+   Chart ab, und je Spalte füllt ein Fenster den Rest aus. */
+function applyPaneVisibility() {
+    LAYOUT_PANES.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = _paneHidden(id) ? 'none' : '';
+    });
+
+    var rightCol   = document.getElementById('right-col');
+    var colRes     = document.getElementById('col-resizer');
+    var rightEmpty = LAYOUT_PANES_RIGHT.every(_paneHidden);
+    if (rightCol) rightCol.style.display = rightEmpty ? 'none' : '';
+    if (colRes)   colRes.style.display   = rightEmpty ? 'none' : '';
+
+    _syncGrow(LAYOUT_PANES_RIGHT);
+    _syncResizers(document.getElementById('left-col'));
+    if (!rightEmpty) _syncResizers(rightCol);
+
+    renderHiddenPaneInfo();
+    if (typeof chart !== 'undefined' && chart) fitChart();
+}
+
+/* Je Lücke zwischen zwei sichtbaren Fenstern bleibt genau ein Trenner stehen.
+   Wichtig, wenn mittendrin ein Fenster geschlossen ist: sonst stünden dessen
+   beide Trenner direkt übereinander und würden dasselbe Paar bewegen. */
+function _syncResizers(col) {
+    if (!col) return;
+    var seenPane = false;   // liegt oberhalb überhaupt ein sichtbares Fenster?
+    var claimed  = false;   // ist der Trenner dieser Lücke schon vergeben?
+    var trailing = null;    // Trenner ohne Fenster darunter → am Ende ausblenden
+    Array.prototype.forEach.call(col.children, function (el) {
+        if (_isResizer(el)) {
+            var take = seenPane && !claimed;
+            el.style.display = take ? '' : 'none';
+            if (take) { claimed = true; trailing = el; }
+            return;
+        }
+        if (el.style.display === 'none') return;   // geschlossenes Fenster überspringen
+        seenPane = true;
+        claimed  = false;                          // ab hier beginnt die nächste Lücke
+        trailing = null;
+    });
+    if (trailing) trailing.style.display = 'none';
+}
+
+/* Ohne elastisches Fenster bliebe unten in der Spalte Luft — dann wächst das
+   unterste sichtbare Fenster. #r-watch ist von Haus aus elastisch. */
+function _syncGrow(ids) {
+    var visible = [];
+    ids.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.classList.remove('pane-grow');
+        if (!_paneHidden(id)) visible.push(el);
+    });
+    if (!visible.length) return;
+    var natural = document.getElementById(ids[0]);
+    if (natural && !_paneHidden(ids[0])) return;   // #r-watch offen → nichts zu tun
+    var last = visible[visible.length - 1];
+    last.classList.add('pane-grow');
+    last.style.height = '';
+}
+
+/* Schließt ein Fenster (× in der Kopfzeile). Die Höhe wird gemerkt, damit sie
+   beim Wiederöffnen noch stimmt. */
+function hidePane(id) {
+    if (!_layout.panes) _layout.panes = {};
+    var p  = _layout.panes[id] || (_layout.panes[id] = {});
+    var el = document.getElementById(id);
+    if (el && !p.hidden && !_paneFlex(el)) p.h = el.offsetHeight;
+    p.hidden = true;
+    applyPaneVisibility();
+    saveLayout();
+    logIt(3, 'Layout', 'Fenster „' + _paneName(id) + '" geschlossen');
+}
+
+/* Öffnet alle Fenster wieder und setzt sämtliche Größen auf die Vorgabe zurück.
+   Knopf auf der Einstellungsseite. */
+async function restoreLayout(btn) {
+    var label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    LAYOUT_PANES.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = '';
+        el.style.height  = '';
+        el.classList.remove('pane-grow');
+    });
+    var rc = document.getElementById('right-col');
+    if (rc) { rc.style.display = ''; rc.style.width = ''; }
+    _layout = { rightColW: null, panes: {} };
+    applyPaneVisibility();
+    try {
+        await saveBasketsToServer();
+        logIt(3, 'Layout', 'Alle Fenster geöffnet, Größen zurückgesetzt');
+    } catch (e) {
+        logIt(1, 'Layout', 'Zurücksetzen konnte nicht gespeichert werden: ' + e.message);
+    }
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+}
+
+/* Zeigt auf der Einstellungsseite, welche Fenster gerade geschlossen sind. */
+function renderHiddenPaneInfo() {
+    var el = document.getElementById('set-hidden-panes');
+    if (!el) return;
+    var names = LAYOUT_PANES.filter(_paneHidden).map(_paneName);
+    el.textContent = names.length ? names.join(' · ') : 'keine — alle Fenster offen';
 }
 
 (function() {
-    // Hilfsfunktion: Resizer für Panel UNTERHALB (down = Panel kleiner)
-    function makeBottomResizer(resizerId, belowId, minH, maxH, cb) {
-        var res = document.getElementById(resizerId);
-        var pan = document.getElementById(belowId);
-        if (!res || !pan) return;
-        var drag = false, startY = 0, startH = 0;
-        res.addEventListener('mousedown', function(e) {
-            drag = true; startY = e.clientY; startH = pan.offsetHeight;
-            res.classList.add('dragging');
-            document.body.style.userSelect = 'none'; document.body.style.cursor = 'row-resize';
-            e.preventDefault();
-        });
-        window.addEventListener('mousemove', function(e) {
-            if (!drag) return;
-            var newH = Math.max(minH, Math.min(maxH, startH - (e.clientY - startY)));
-            pan.style.height = newH + 'px';
-            if (cb) cb();
-        });
-        window.addEventListener('mouseup', function() {
-            if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
-        });
-    }
+    /* Senkrechter Trenner. Er greift sich beim Anfassen seine beiden nächsten
+       sichtbaren Nachbarn — dadurch stimmt er auch, wenn dazwischen ein Fenster
+       geschlossen ist. Ein elastisches Fenster (Chart, Watchlist, unterstes
+       Fenster einer Spalte) bekommt nie eine feste Höhe, es folgt von selbst. */
+    function makeVResizer(res) {
+        var drag = false, startY = 0, above = null, below = null,
+            aboveH = 0, belowH = 0, aboveFlex = false, belowFlex = false, inLeft = false;
 
-    // Hilfsfunktion: Resizer zwischen zwei Fixed-Panels (split)
-    function makeSplitResizer(resizerId, aboveId, belowId, minH) {
-        var res   = document.getElementById(resizerId);
-        var above = document.getElementById(aboveId);
-        var below = document.getElementById(belowId);
-        if (!res || !above || !below) return;
-        var drag = false, startY = 0, aboveH = 0, belowH = 0;
         res.addEventListener('mousedown', function(e) {
-            drag = true; startY = e.clientY; aboveH = above.offsetHeight; belowH = below.offsetHeight;
+            above = _neighborPane(res, -1);
+            below = _neighborPane(res, +1);
+            if (!above || !below) return;
+            aboveFlex = _paneFlex(above);
+            belowFlex = _paneFlex(below);
+            if (aboveFlex && belowFlex) return;        // beide elastisch → nichts zu ziehen
+            inLeft = res.classList.contains('lv-resizer');
+            drag = true; startY = e.clientY;
+            aboveH = above.offsetHeight; belowH = below.offsetHeight;
             res.classList.add('dragging');
             document.body.style.userSelect = 'none'; document.body.style.cursor = 'row-resize';
             e.preventDefault();
         });
+
         window.addEventListener('mousemove', function(e) {
             if (!drag) return;
-            var d = e.clientY - startY;
-            above.style.height = Math.max(minH, aboveH + d) + 'px';
-            below.style.height = Math.max(minH, belowH - d) + 'px';
+            var d    = e.clientY - startY;
+            var minA = _paneMinH(above), minB = _paneMinH(below);
+            var colH = (res.parentElement ? res.parentElement.clientHeight : 0) - res.offsetHeight;
+            if (aboveFlex) {
+                below.style.height = Math.max(minB, Math.min(colH - minA, belowH - d)) + 'px';
+            } else if (belowFlex) {
+                above.style.height = Math.max(minA, Math.min(colH - minB, aboveH + d)) + 'px';
+            } else {
+                var dd = Math.max(minA - aboveH, Math.min(belowH - minB, d));
+                above.style.height = (aboveH + dd) + 'px';
+                below.style.height = (belowH - dd) + 'px';
+            }
+            if (inLeft) fitChart();
         });
+
         window.addEventListener('mouseup', function() {
-            if (drag) { drag = false; res.classList.remove('dragging'); document.body.style.userSelect = ''; document.body.style.cursor = ''; saveLayout(); }
+            if (!drag) return;
+            drag = false; res.classList.remove('dragging');
+            document.body.style.userSelect = ''; document.body.style.cursor = '';
+            saveLayout();
         });
     }
 
@@ -1803,17 +1989,8 @@ function loadLayout() {
         });
     })();
 
-    // ── Vertikal Links: zwischen Chart und Stammdaten-Fenster (Chart=flex:1 schrumpft) ──
-    makeBottomResizer('lv-resizer-1', 'r-stammdaten', 34, 600, fitChart);
-
-    // ── Vertikal Rechts: zwischen Watchlist und Perf (perf schrumpft beim Ziehen nach unten) ──
-    makeBottomResizer('rv-resizer-1', 'r-perf', 60, 500, null);
-
-    // ── Vertikal Rechts: zwischen Perf und Notes (split) ──
-    makeSplitResizer('rv-resizer-2', 'r-perf', 'r-notes', 60);
-
-    // ── Vertikal Rechts: zwischen Notes und Import (split) ──
-    makeSplitResizer('rv-resizer-3', 'r-notes', 'r-import', 50);
+    // ── Vertikal: alle Trenner beider Spalten, Nachbarn ergeben sich aus dem DOM ──
+    document.querySelectorAll('.lv-resizer, .rv-resizer').forEach(makeVResizer);
 })();
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -2427,7 +2604,7 @@ async function ibkrSync() {
                 renderPerfTable();
                 ibkrRenderTrades();
                 refreshTradeMarkers();
-                updateChartMeta();   // Trade-Liste im Stammdaten-Fenster nachziehen
+                updateChartMeta();   // Trade-Fenster unter dem Chart nachziehen
             }
             ibkrLoadSectors().then(function() { ibkrRenderTable(); });
         } else {
@@ -2981,16 +3158,37 @@ function applyAppearance() {
     root.setAttribute('data-contrast', a.contrast || 'normal');
     root.setAttribute('data-accent',   a.accent   || 'green');
     root.setAttribute('data-fontsize', a.fontSize || 'compact');
+    // Chart-Hintergrund: freie Farbe des Nutzers, sonst die Theme-Fläche (CSS-Vorgabe).
+    if (a.chartBg) {
+        root.style.setProperty('--chart-bg', a.chartBg);
+        root.style.setProperty('--chart-fg', _isDarkColor(a.chartBg) ? '#e9e7e2' : '#1a1a18');
+    } else {
+        root.style.removeProperty('--chart-bg');
+        root.style.removeProperty('--chart-fg');
+    }
     applyChartTheme();
     renderAppearanceControls();
 }
 
-// Chart-Farben (Text + Gitter) an das aktuelle Theme angleichen.
+/* Hell oder dunkel? Wahrgenommene Helligkeit eines #rrggbb-Werts.
+   Entscheidet, ob im Chart hell oder dunkel beschriftet wird. */
+function _isDarkColor(hex) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return false;
+    var n = parseInt(m[1], 16);
+    var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return (0.299 * r + 0.587 * g + 0.114 * b) < 140;
+}
+
+// Chart-Farben (Text + Gitter) an Theme und gewählten Chart-Hintergrund angleichen.
 function applyChartTheme() {
     if (typeof chart === 'undefined' || !chart) return;
-    var cs   = getComputedStyle(document.documentElement);
-    var txt  = cs.getPropertyValue('--text').trim() || '#1a1a18';
-    var dark = (appearance && appearance.theme === 'dark');
+    var cs  = getComputedStyle(document.documentElement);
+    var bg  = (appearance && appearance.chartBg) || '';
+    // Ohne eigene Farbe zählt das Theme, sonst die Helligkeit der gewählten Fläche.
+    var dark = bg ? _isDarkColor(bg) : (appearance && appearance.theme === 'dark');
+    var txt  = bg ? (dark ? '#e9e7e2' : '#1a1a18')
+                  : (cs.getPropertyValue('--text').trim() || '#1a1a18');
     var grid = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
     try {
         chart.applyOptions({
@@ -3002,7 +3200,8 @@ function applyChartTheme() {
 
 // Markiert in den Segmented-Controls die aktiven Werte.
 function renderAppearanceControls() {
-    [['ap-theme', 'theme'], ['ap-contrast', 'contrast'], ['ap-fontSize', 'fontSize'], ['ap-accent', 'accent']]
+    [['ap-theme', 'theme'], ['ap-contrast', 'contrast'], ['ap-fontSize', 'fontSize'],
+     ['ap-accent', 'accent'], ['ap-chartBg', 'chartBg']]
         .forEach(function(pair) {
             var grp = document.getElementById(pair[0]);
             if (!grp) return;
@@ -3011,6 +3210,13 @@ function renderAppearanceControls() {
                 btn.classList.toggle('active', btn.getAttribute('data-v') === cur);
             });
         });
+    // Farbfeld auf den aktuellen Wert stellen — auch wenn er von keinem Knopf stammt.
+    var pick = document.getElementById('ap-chartBg-custom');
+    if (pick) {
+        var cur = (appearance && appearance.chartBg) || '';
+        pick.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur
+            : (getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#ffffff');
+    }
 }
 
 // Einstellung ändern → anwenden + pro Nutzer speichern.
@@ -3024,6 +3230,7 @@ async function setAppearance(key, value) {
 /** Lädt eingeloggten User + IBKR-Konfigurationsstatus in die Settings-Seite. */
 async function settingsLoad() {
     renderAppearanceControls();
+    renderHiddenPaneInfo();
     try {
         var w = await fetch('/api/whoami').then(function(r) { return r.json(); });
         var u = document.getElementById('set-user');
@@ -4124,6 +4331,7 @@ async function _taxDeleteFile(kind, name) {
 var _SCR = {
     inited:    false,
     jobId:     null,
+    polling:   false,   // verhindert zwei parallele Poll-Schleifen
     pollTimer: null,
     indexes:   [],   // alle verfügbaren Indizes
     defaults:  ['Russell 2000'],
@@ -4134,7 +4342,7 @@ var _SCR = {
 };
 
 async function screenerInit() {
-    if (_SCR.inited) return;
+    if (_SCR.inited) { screenerResume(); return; }
     _SCR.inited = true;
     try {
         var cfg = await fetch('/api/screener/config').then(function (r) { return r.json(); });
@@ -4217,6 +4425,39 @@ async function screenerInit() {
         if (el) el.addEventListener('change', updateHint);
     });
     updateHint();
+    screenerResume();
+}
+
+/**
+ * Hängt die Oberfläche wieder an ein Screening, das noch im Hintergrund läuft.
+ * Nötig nach einem Neuladen der Seite: die Job-ID lebt dann nur noch serverseitig
+ * (data/{user}/last_screener_job.json). Jobs verfallen nach 30 Minuten — meldet
+ * der Server keinen, ist schlicht nichts wiederaufzunehmen.
+ */
+async function screenerResume() {
+    if (_SCR.polling || _SCR.jobId) return;
+    if (!document.getElementById('scr-btn-run')) return;   // Screener-Seite fehlt
+    var jobId;
+    try {
+        var r = await fetch('/api/screener/last').then(function (r) { return r.json(); });
+        jobId = r && r.ok ? r.job_id : null;
+    } catch (e) {
+        return;   // kein Netz → nichts zu tun, der nächste Seitenaufruf versucht es erneut
+    }
+    if (!jobId || _SCR.polling || _SCR.jobId) return;
+
+    _SCR.jobId = jobId;
+    // Oberfläche in den Lauf-Zustand versetzen; _scrPoll füllt Log und Balken.
+    document.getElementById('scr-btn-run').disabled     = true;
+    document.getElementById('scr-btn-export').disabled  = true;
+    document.getElementById('scr-btn-baskets').disabled = true;
+    document.getElementById('scr-log-card').style.display     = '';
+    document.getElementById('scr-results-card').style.display = 'none';
+    document.getElementById('scr-progress-wrap').style.display = '';
+    _scrSetState('läuft …', 'run');
+    _scrMsg('Laufendes Screening wieder aufgenommen');
+    logIt(3, 'Screener', 'An laufendes Screening angehängt (' + jobId + ')');
+    _scrPoll();
 }
 
 function _scrSetState(label, cls) {
@@ -4312,6 +4553,7 @@ async function screenerStart() {
             document.getElementById('scr-btn-run').disabled = false;
             return;
         }
+        clearTimeout(_SCR.pollTimer);   // eine eventuell wieder aufgenommene Schleife ablösen
         _SCR.jobId = res.job_id;
         _scrPoll();
     } catch (e) {
@@ -4322,11 +4564,16 @@ async function screenerStart() {
 }
 
 async function _scrPoll() {
-    if (!_SCR.jobId) return;
+    if (!_SCR.jobId) { _SCR.polling = false; return; }
+    _SCR.polling = true;
     try {
         var s = await fetch('/api/screener/status/' + _SCR.jobId)
             .then(function (r) { return r.json(); });
         if (!s.ok) {
+            // Job ist weg (Neustart oder 30-Min-Ablauf) — Kennung fallen lassen,
+            // sonst blockiert sie jedes spätere Wiederanhängen.
+            _SCR.jobId = null;
+            _SCR.polling = false;
             _scrSetState('Fehler', 'err');
             _scrMsg(s.error || 'Job verloren', 'err');
             document.getElementById('scr-btn-run').disabled = false;
@@ -4348,6 +4595,7 @@ async function _scrPoll() {
         }
 
         if (s.status === 'error') {
+            _SCR.polling = false;
             _scrSetState('Fehler', 'err');
             _scrMsg(s.error || 'Screening fehlgeschlagen', 'err');
             document.getElementById('scr-btn-run').disabled = false;
@@ -4355,6 +4603,7 @@ async function _scrPoll() {
         }
 
         // done
+        _SCR.polling = false;
         _scrSetState('fertig', 'ok');
         _scrMsg('Screening abgeschlossen', 'ok');
         _SCR.results = s.results || {};
