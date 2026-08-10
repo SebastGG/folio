@@ -374,6 +374,18 @@ def init_db(db_file: str):
         seen_at REAL,
         PRIMARY KEY (ticker, date)
     )''')
+    # Earnings-Termine (vergangene + kommende) je Ticker, gecacht (siehe /api/earnings).
+    conn.execute('''CREATE TABLE IF NOT EXISTS earnings (
+        ticker  TEXT NOT NULL,
+        date    TEXT NOT NULL,   -- Earnings-Termin YYYY-MM-DD
+        eps_est REAL,            -- geschätztes EPS
+        eps_act REAL,            -- berichtetes EPS (NULL = noch nicht berichtet)
+        PRIMARY KEY (ticker, date)
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS earnings_meta (
+        ticker  TEXT PRIMARY KEY,
+        updated REAL             -- Zeitstempel des letzten Yahoo-Abrufs
+    )''')
     conn.commit()
     conn.close()
 
@@ -1005,6 +1017,137 @@ async def ticker_info(ticker: str, request: Request):
         return JSONResponse({"ok": True, "cached": False, **result})
     except Exception as e:
         print(f"ticker_info error {sym}: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+
+# ── Earnings-Termine ─────────────────────────────────────────────────────────────
+# Vergangene + kommende Earnings-Daten via yfinance (get_earnings_dates), gecacht in
+# der User-DB (Tabellen earnings/earnings_meta). Gleiche „stale-while-revalidate"-
+# Strategie wie ticker_info: gespeicherte Termine sofort zurück, bei Veraltung
+# (> TTL) im Hintergrund auffrischen. Genutzt für die vertikalen Earnings-Linien im Chart.
+
+_EARNINGS_CACHE: dict[str, tuple] = {}      # sym -> (timestamp, [ {date, eps_est, eps_act} ])
+_EARNINGS_TTL = 24 * 3600                    # Earnings-Termine ändern sich selten → 1 Tag
+_EARNINGS_INFLIGHT: set[str] = set()
+
+def _earnings_fetch(sym: str) -> list:
+    """Earnings-Termine via yfinance. Liste von {date, eps_est, eps_act}, aufsteigend."""
+    import yfinance as yf, math
+    df = yf.Ticker(sym).get_earnings_dates(limit=24)
+    out: list = []
+    if df is None or getattr(df, "empty", True):
+        return out
+
+    def _num(v):
+        try:
+            f = float(v)
+            return None if math.isnan(f) else f
+        except (TypeError, ValueError):
+            return None
+
+    for idx, row in df.iterrows():
+        try:
+            date_str = idx.date().strftime("%Y-%m-%d")
+        except Exception:
+            continue
+        out.append({
+            "date":    date_str,
+            "eps_est": _num(row.get("EPS Estimate")),
+            "eps_act": _num(row.get("Reported EPS")),
+        })
+    out.sort(key=lambda r: r["date"])
+    return out
+
+def _earnings_db_get(db_file: str, sym: str):
+    """Liefert (list, updated_ts) aus der DB oder ([], 0)."""
+    try:
+        conn = get_db(db_file)
+        meta = conn.execute("SELECT updated FROM earnings_meta WHERE ticker=?", (sym,)).fetchone()
+        rows = conn.execute(
+            "SELECT date, eps_est, eps_act FROM earnings WHERE ticker=? ORDER BY date", (sym,)
+        ).fetchall()
+        conn.close()
+        if meta:
+            return [dict(r) for r in rows], (meta["updated"] or 0)
+    except Exception as e:
+        print(f"earnings db_get {sym}: {e}")
+    return [], 0
+
+def _earnings_db_put(db_file: str, sym: str, items: list, ts: float):
+    try:
+        conn = get_db(db_file)
+        conn.execute("DELETE FROM earnings WHERE ticker=?", (sym,))
+        conn.executemany(
+            "INSERT OR REPLACE INTO earnings (ticker,date,eps_est,eps_act) VALUES (?,?,?,?)",
+            [(sym, it["date"], it["eps_est"], it["eps_act"]) for it in items],
+        )
+        conn.execute("INSERT OR REPLACE INTO earnings_meta (ticker,updated) VALUES (?,?)", (sym, ts))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"earnings db_put {sym}: {e}")
+
+def _earnings_refresh(sym: str, db_file: str):
+    """Blockierende Auffrischung (yfinance + DB-Write) — im Threadpool auszuführen."""
+    if sym in _EARNINGS_INFLIGHT:
+        return None
+    _EARNINGS_INFLIGHT.add(sym)
+    try:
+        items = _earnings_fetch(sym)
+        ts = time.time()
+        _EARNINGS_CACHE[sym] = (ts, items)
+        _earnings_db_put(db_file, sym, items, ts)
+        return items
+    except Exception as e:
+        print(f"earnings refresh {sym}: {e}")
+        return None
+    finally:
+        _EARNINGS_INFLIGHT.discard(sym)
+
+@app.get("/api/earnings/{ticker}")
+async def get_earnings(ticker: str, request: Request):
+    import asyncio, datetime
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return JSONResponse({"ok": False, "error": "Kein Ticker"}, status_code=400)
+
+    now   = time.time()
+    loop  = asyncio.get_running_loop()
+    today = datetime.datetime.utcnow().date().strftime("%Y-%m-%d")
+
+    def _pack(items):
+        return [{
+            "date":    it["date"],
+            "eps_est": it.get("eps_est"),
+            "eps_act": it.get("eps_act"),
+            "future":  it["date"] > today,
+        } for it in items]
+
+    # 1) In-Memory-Cache — frisch → sofort
+    cached = _EARNINGS_CACHE.get(sym)
+    if cached and now - cached[0] < _EARNINGS_TTL:
+        return JSONResponse({"ok": True, "cached": "mem", "earnings": _pack(cached[1])})
+
+    # 2) DB — vorhanden → SOFORT zurück; bei Veraltung im Hintergrund auffrischen
+    items, updated = _earnings_db_get(files["db"], sym)
+    if items:
+        _EARNINGS_CACHE[sym] = (updated, items)
+        if now - updated >= _EARNINGS_TTL:
+            asyncio.ensure_future(loop.run_in_executor(None, _earnings_refresh, sym, files["db"]))
+        return JSONResponse({"ok": True, "cached": "db",
+                             "stale": now - updated >= _EARNINGS_TTL, "earnings": _pack(items)})
+
+    # 3) Nichts gespeichert → live holen (erster Abruf je Ticker)
+    try:
+        result = await loop.run_in_executor(None, _earnings_refresh, sym, files["db"])
+        if result is None:                       # parallele Auffrischung war schon unterwegs
+            result = _EARNINGS_CACHE.get(sym, (0, []))[1]
+        return JSONResponse({"ok": True, "cached": False, "earnings": _pack(result)})
+    except Exception as e:
+        print(f"earnings error {sym}: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
 

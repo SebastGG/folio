@@ -57,6 +57,8 @@
         <button class="btn" onclick="setPeriod(90)">3M</button>
         <button class="btn active" onclick="setPeriod(180)">6M</button>
         <button class="btn" onclick="setPeriod(365)">1J</button>
+        <button class="btn" onclick="setPeriod(730)">2J</button>
+        <button class="btn" onclick="setPeriod(1825)">5J</button>
         <button class="btn" onclick="setPeriod(0)">All</button>
       </div>
       <div class="sep"></div>
@@ -80,6 +82,7 @@
       <div class="sep"></div>
       <button class="btn" onclick="fitView()" title="Chart einpassen">⤢ Fit</button>
       <button class="btn" id="btn-trades-toggle" onclick="toggleTradeMarkers(this)" title="Trade-Marker ein/ausblenden">📍 Trades</button>
+      <button class="btn active" id="btn-earnings" onclick="toggleEarnings(this)" title="Earnings-Termine als vertikale Linien ein/ausblenden (nur bei Einzelaktie)">📅 Earnings</button>
       <button class="btn" id="btn-sector-etf" onclick="toggleSectorEtf(this)" title="Sektor-ETF als relative-Stärke-Overlay ein/ausblenden (nur bei Einzelaktie)">📊 Sektor-ETF</button>
     </div>
 
@@ -818,7 +821,7 @@
   setPeriod = function(days) {
     var grp = document.getElementById('period-btns');
     if (grp) grp.querySelectorAll('.btn').forEach(function(b) {
-      b.classList.toggle('active', b.textContent === ({30:'1M',90:'3M',180:'6M',365:'1J',0:'All'}[days]));
+      b.classList.toggle('active', b.textContent === ({30:'1M',90:'3M',180:'6M',365:'1J',730:'2J',1825:'5J',0:'All'}[days]));
     });
     _origSetPeriod(days);
   };

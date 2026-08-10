@@ -29,6 +29,13 @@ var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker ne
 var _markersPlugin     = null;   // Chart-Primitive für die Trade-Pfeile
 var _tradeMarkerData   = [];     // [{date, isBuy, qty, price, label}] — je Tag+Richtung
 var _showTradeMarkers  = true;   // Toggle-Zustand
+var _earningsPlugin    = null;   // Chart-Primitive für die Earnings-Linien
+var _earningsData      = [];     // [{time, date, future, eps_est, eps_act}] — gesnappt, sichtbar
+var _earningsRaw       = [];     // Rohdaten vom Backend zum aktuellen Ticker
+var _earningsSym       = null;   // Ticker, zu dem _earningsRaw gehört
+var _earningsReq       = 0;      // Race-Schutz (nur letzte Anfrage zählt)
+var _showEarnings      = true;   // Toggle-Zustand Earnings-Linien
+var _ghostDates        = [];     // zuletzt erzeugte Zukunfts-Datumswerte (Snapping künftiger Termine)
 var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
 var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
 var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
@@ -642,6 +649,146 @@ function _drawTradeMarkers(target) {
     });
 }
 
+// ── Earnings-Linien ──────────────────────────────────────────────────────────────
+// Vertikale gestrichelte Linien an den Earnings-Terminen (Quartalszahlen). Nur bei
+// Einzelaktien. Vergangene Termine dezent, der nächste (künftige) in Akzentfarbe.
+// Gezeichnet über ein Chart-Primitive (wie die Trade-Marker), damit die Linien bei
+// jeder Chart-Änderung — auch Preisachsen-Ziehen — an der richtigen Stelle bleiben.
+
+/**
+ * Ordnet ein Earnings-Datum dem nächstgelegenen vorhandenen Achsenpunkt zu
+ * (Kerzen + Ghost-Zukunftstage). timeToCoordinate() liefert nur für tatsächliche
+ * Achsenpunkte etwas — Earnings fallen sonst auf Wochenenden/Feiertage oder hinter
+ * den letzten Balken in die Zukunft.
+ */
+function _snapEarningsTime(date) {
+    var bars = _lastCandles;
+    if (!bars || !bars.length) return null;
+    // Vergangenheit / innerhalb der Kerzen: Balken, in den der Termin fällt (wie Trades)
+    if (date <= bars[bars.length - 1].time) {
+        if (date < bars[0].time) return null;   // vor dem Chartbeginn
+        return _snapTradeTime(date);
+    }
+    // Zukunft: nächstgelegener Ghost-Tag
+    if (!_ghostDates.length || date > _ghostDates[_ghostDates.length - 1]) return null;
+    var best = _ghostDates[0], bestDiff = Infinity, tMs = new Date(date).getTime();
+    for (var i = 0; i < _ghostDates.length; i++) {
+        var diff = Math.abs(new Date(_ghostDates[i]).getTime() - tMs);
+        if (diff < bestDiff) { bestDiff = diff; best = _ghostDates[i]; }
+    }
+    return best;
+}
+
+/**
+ * Baut _earningsData (gesnappte, sichtbare Termine) neu auf und stößt das
+ * Neuzeichnen an. Bei Index-Ansicht oder ausgeschaltetem Toggle → leer.
+ */
+function refreshEarnings() {
+    if (!csSeries) return;
+    _earningsData = [];
+    var show = _showEarnings && currentView !== 'index' && _earningsSym === currentView;
+    if (show) {
+        _earningsRaw.forEach(function(e) {
+            var t = _snapEarningsTime(e.date);
+            if (t === null) return;
+            _earningsData.push({ time: t, date: e.date, future: !!e.future,
+                                 eps_est: e.eps_est, eps_act: e.eps_act });
+        });
+    }
+    try {
+        if (!_earningsPlugin) {
+            _earningsPlugin = _makeEarningsPrimitive();
+            csSeries.attachPrimitive(_earningsPlugin);
+        }
+        if (_earningsPlugin.requestUpdate) _earningsPlugin.requestUpdate();
+    } catch (e) {
+        logIt(1, 'Chart', 'Earnings-Linien fehlgeschlagen: ' + e.message);
+    }
+}
+
+function _makeEarningsPrimitive() {
+    var _update = null;
+    return {
+        attached: function(param) { _update = param.requestUpdate; },
+        detached: function() { _update = null; },
+        updateAllViews: function() {},
+        requestUpdate: function() { if (_update) _update(); },
+        paneViews: function() {
+            return [{
+                zOrder: function() { return 'normal'; },   // über den Kerzen, unter den Trade-Pfeilen
+                renderer: function() { return { draw: _drawEarnings }; }
+            }];
+        }
+    };
+}
+
+function _drawEarnings(target) {
+    if (!_earningsData.length || !csSeries || !chart) return;
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    target.useMediaCoordinateSpace(function(scope) {
+        var ctx = scope.context;
+        var ts  = chart.timeScale();
+        var H   = scope.mediaSize.height;
+        ctx.save();
+        ctx.font = '9px ui-monospace, Menlo, Consolas, monospace';
+        ctx.textAlign = 'center';
+
+        _earningsData.forEach(function(e) {
+            var x = ts.timeToCoordinate(e.time);
+            if (x === null) return;
+            if (x < -20 || x > scope.mediaSize.width + 20) return;   // außerhalb des Sichtbereichs
+
+            var col = e.future
+                ? (dark ? 'rgba(245,166,35,0.9)'  : 'rgba(214,137,0,0.95)')    // kommender Termin: Akzent
+                : (dark ? 'rgba(150,160,185,0.5)' : 'rgba(90,100,120,0.42)');  // vergangene: dezent
+
+            // Gestrichelte vertikale Linie (Label unten frei lassen)
+            ctx.strokeStyle = col;
+            ctx.lineWidth = e.future ? 1.4 : 1;
+            ctx.setLineDash(e.future ? [5, 3] : [3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H - 13);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Kleines "E"-Label unten knapp über der Zeitleiste, mit Hinterlegung
+            var label = 'E';
+            var w = ctx.measureText(label).width;
+            ctx.fillStyle = dark ? 'rgba(20,21,26,0.85)' : 'rgba(255,255,255,0.85)';
+            ctx.fillRect(x - w / 2 - 3, H - 12, w + 6, 12);
+            ctx.fillStyle = col;
+            ctx.fillText(label, x, H - 3);
+        });
+
+        ctx.restore();
+    });
+}
+
+/** Holt die Earnings-Termine (serverseitig gecacht) und zeichnet die Linien. */
+async function fetchEarnings(sym) {
+    var req = ++_earningsReq;
+    try {
+        var res = await fetch('/api/earnings/' + encodeURIComponent(sym))
+                        .then(function(r) { return r.json(); });
+        if (req !== _earningsReq || currentView !== sym) return;   // Ansicht hat gewechselt
+        _earningsRaw = (res && res.ok && res.earnings) ? res.earnings : [];
+        _earningsSym = sym;
+        refreshEarnings();
+    } catch (e) {
+        if (req === _earningsReq && currentView === sym) {
+            _earningsRaw = []; _earningsSym = sym; refreshEarnings();
+        }
+    }
+}
+
+/** Toolbar-Toggle: Earnings-Linien ein/ausblenden. */
+function toggleEarnings(btn) {
+    _showEarnings = !_showEarnings;
+    if (btn) btn.classList.toggle('active', _showEarnings);
+    refreshEarnings();
+}
+
 /**
  * Wird von shared.js applyPeriod() aufgerufen.
  * Rendert Kerzen, Volumen, Indikatoren, LogReg, Seit-Marker.
@@ -679,10 +826,14 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         var lastC    = colored[colored.length - 1];
         var count    = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
         var fDates   = generateFutureDates(lastC.time, currentTF, count);
+        _ghostDates  = fDates;   // für das Snapping künftiger Earnings-Termine
         try {
             ghostSeries.setData(fDates.map(function(d) { return { time: d, value: lastC.close }; }));
         } catch(e) {}
     }
+
+    // Earnings-Linien (nach Ghost-Daten: künftige Termine brauchen die Zukunftsachse)
+    refreshEarnings();
 
     // Volumen
     if (volSeries && volAgg.length) {
@@ -981,6 +1132,7 @@ function updateChartMeta() {
         setChartWatermark(name);
         renderTickerInfo(null);            // Stammdaten nur für Einzelaktien
         renderTickerTradesPane(null);
+        _earningsRaw = []; _earningsSym = null; refreshEarnings();   // keine Earnings im Index
     } else {
         setChartWatermark(currentView);
         renderTickerTradesPane(currentView);
@@ -990,6 +1142,9 @@ function updateChartMeta() {
             renderTickerInfo({ loading: true, symbol: currentView });
             fetchTickerInfo(currentView);
         }
+        // Earnings-Termine: aus Cache neu zeichnen oder frisch holen
+        if (_earningsSym === currentView) refreshEarnings();
+        else fetchEarnings(currentView);
     }
 }
 
@@ -4691,6 +4846,7 @@ async function screenerToBaskets() {
                 perfSinceDate: '',
                 indicators: { ma50: false, ma200: false, reg: false },
                 logScale: false,
+                showIndex: false,   // Screener-Baskets standardmäßig nicht als Index anzeigen
             };
             created++;
             if (!firstId) firstId = id;
