@@ -1477,6 +1477,49 @@ function ibkrPosYahoo(p) {
     return p.yahoo_symbol || p.symbol;
 }
 
+/**
+ * Aktien-Trades eines Tickers, aufsteigend nach Datum. Einzige Auswahlstelle für
+ * Chart-Pfeile UND Trade-Fenster — beide müssen dieselben Trades sehen, sonst
+ * widersprechen sich Pfeile und Tabelle.
+ * Nur `STK`: Optionen und Anleihen mischen sich sonst in die Stückzahlen.
+ */
+function ibkrStockTrades(sym) {
+    if (!sym || sym === 'index' || !ibkrTrades) return [];
+    return ibkrTrades.filter(function(t) {
+        return ibkrTradeYahoo(t) === sym && (t.asset_class || '').toUpperCase() === 'STK';
+    }).sort(function(a, b) {
+        return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0;
+    });
+}
+
+/**
+ * Aktueller IBKR-Bestand eines Tickers — der Anker jeder Bestandsrechnung.
+ * Nicht (mehr) im Depot ⇒ 0, die Position ist geschlossen.
+ *
+ * Warum überhaupt ein Anker: Die Flex-Historie reicht nur so weit zurück, wie die
+ * Query eingestellt ist. Käufe von davor fehlen, deshalb ergibt „Summe Käufe minus
+ * Summe Verkäufe" einen zu kleinen, oft negativen Bestand. Vom bekannten Endstand
+ * rückwärts gerechnet stimmt der Verlauf dagegen immer am rechten Rand.
+ */
+function ibkrCurrentQty(sym) {
+    var p = (ibkrPositions || []).find(function(x) {
+        return ibkrPosYahoo(x) === sym || x.symbol === sym;
+    });
+    return p ? (p.quantity || 0) : 0;
+}
+
+/**
+ * Bestand, mit dem die bekannte Historie *beginnt* — also das, was vor dem ersten
+ * bekannten Trade schon da war. 0 heißt: die Historie ist lückenlos.
+ */
+function ibkrCarryInQty(sym) {
+    var traded = ibkrStockTrades(sym).reduce(function(s, t) {
+        var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
+        return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
+    }, 0);
+    return ibkrCurrentQty(sym) - traded;
+}
+
 async function ibkrLoadPositions() {
     try {
         var r = await fetch('/api/ibkr/positions');

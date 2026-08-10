@@ -449,30 +449,15 @@ function refreshIbkrCostLine(colored) {
 function _tradeMarkerGroups() {
     var groups = [];
     if (_showTradeMarkers && currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        // Aktuelle IBKR-Position als Anker für die Rückwärtsrechnung des Bestands.
-        // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen). Diese 0 als Anker
-        // nutzen, statt den Bestand bei 0 vorwärts laufen zu lassen — sonst rutscht
-        // er bei unvollständiger Flex-Historie (fehlende frühe Käufe) ins Negative.
-        var ibkrPos = (ibkrPositions || []).find(function(p) {
-            return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
-        });
-        var currentQty = ibkrPos ? (ibkrPos.quantity || 0) : 0;
+        // Partial fills aggregieren: ein Marker pro Tag + Richtung.
+        // Auswahl und Bestandsanker kommen aus shared.js, damit die Pfeile im Chart
+        // und die Tabelle im Trade-Fenster nie auseinanderlaufen.
+        var relevantTrades = ibkrStockTrades(currentView);
 
-        // Partial fills aggregieren: ein Marker pro Tag + Richtung
-        // Matching via ISIN (Vorrang) bzw. Symbol-Fallback — siehe ibkrTradeYahoo()
-        var relevantTrades = ibkrTrades.filter(function(t) {
-            return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
-        }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
-
-        // Laufenden Bestand ab erster Transaktion berechnen.
-        // Startbestand = aktueller IBKR-Bestand minus aller bekannten Trades
-        // (rückwärts vom bekannten Endbestand — fängt fehlende frühe Käufe/Verkäufe
-        // in der Flex-Historie ab, sodass der Verlauf am Ende auf currentQty passt).
-        var totalTraded = relevantTrades.reduce(function(s, t) {
-            var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
-            return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
-        }, 0);
-        var runningQty = currentQty - totalTraded;
+        // Laufenden Bestand ab erster Transaktion berechnen — Startwert ist das,
+        // was vor dem ersten bekannten Trade schon im Depot lag (siehe
+        // ibkrCarryInQty). Dadurch endet der Verlauf immer auf dem echten Bestand.
+        var runningQty = ibkrCarryInQty(currentView);
 
         // Pro Tag laufenden Bestand ermitteln
         var dateRunning = {};
@@ -1099,11 +1084,8 @@ function renderTickerTradesPane(sym) {
  * Gibt '' zurück, wenn es zu diesem Ticker nichts zu zeigen gibt.
  */
 function renderTickerTrades(sym) {
-    if (!sym || sym === 'index') return '';
-    if (!ibkrTrades || !ibkrTrades.length) return '';
-
-    var mine = ibkrTrades.filter(function(t) { return ibkrTradeYahoo(t) === sym; })
-        .sort(function(a, b) { return a.trade_date < b.trade_date ? 1 : a.trade_date > b.trade_date ? -1 : 0; });
+    // Dieselbe Auswahl wie die Chart-Pfeile (shared.js), damit beide dasselbe zeigen.
+    var mine = ibkrStockTrades(sym).reverse();   // neueste zuerst
     if (!mine.length) return '';
 
     // Kennzahlen über alle Trades: Stückzahl, Volumen, Ø-Kurs je Richtung
@@ -1120,13 +1102,23 @@ function renderTickerTrades(sym) {
     var f2   = function(v) { return Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
     var fq   = function(v) { return v === Math.floor(v) ? String(v) : f2(v); };
 
+    // Bestand ist der echte IBKR-Stand, nicht „Käufe minus Verkäufe": reicht die
+    // Flex-Historie nicht weit genug zurück, ergäbe die Differenz Unsinn (z.B. -4
+    // für eine glatt geschlossene Position). carryIn ≠ 0 zeigt genau diese Lücke an.
+    var qty     = ibkrCurrentQty(sym);
+    var carryIn = ibkrCarryInQty(sym);
+
     var head = '<div class="tt-head">'
         + '<span class="tt-title">Eigene Trades (' + mine.length + ')</span>'
         + (buyQty  ? '<span class="tt-kpi"><b style="color:var(--green)">Kauf</b> ' + fq(buyQty)
                      + ' Ø ' + curS + f2(buyVal / buyQty) + '</span>' : '')
         + (sellQty ? '<span class="tt-kpi"><b style="color:var(--red)">Verkauf</b> ' + fq(sellQty)
                      + ' Ø ' + curS + f2(sellVal / sellQty) + '</span>' : '')
-        + '<span class="tt-kpi">Bestand ' + fq(buyQty - sellQty) + '</span>'
+        + '<span class="tt-kpi">Bestand ' + fq(qty) + '</span>'
+        + (Math.abs(carryIn) > 1e-9
+            ? '<span class="tt-kpi" title="Vor dem ältesten hier gelisteten Trade lagen bereits '
+              + fq(carryIn) + ' Stück im Depot — die Flex-Historie reicht nicht weiter zurück.">'
+              + '⚠ Vorbestand ' + fq(carryIn) + '</span>' : '')
         + (feeEur ? '<span class="tt-kpi">Gebühren ' + f2(feeEur) + ' €</span>' : '')
         + '</div>';
 
