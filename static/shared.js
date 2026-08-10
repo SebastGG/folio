@@ -30,7 +30,11 @@ var TICKERS       = [];  // Alle Ticker mit Daten in der DB
 var baskets       = {};  // { basket_id: { name, weights, period, tf, ... } }
 var currentBasket = '';  // Aktiver Basket-ID
 // Aussehen (pro Nutzer in der Config gespeichert). Defaults = bisheriges Aussehen.
+// chartBg (optional) = eigene Hintergrundfarbe des Charts, '' bedeutet „wie Theme".
 var appearance    = { theme: 'light', contrast: 'normal', fontSize: 'compact', accent: 'green' };
+// Fenstergrößen und geschlossene Fenster der Desktop-Oberfläche. Hier deklariert,
+// damit Mobile den Desktop-Stand beim Speichern durchreicht statt ihn zu löschen.
+var _layout       = {};
 var currentView   = 'index'; // 'index' oder Ticker-Symbol z.B. 'AAPL'
 
 // Chart-Einstellungen
@@ -805,11 +809,10 @@ async function loadConfig() {
         // Aussehen wiederherstellen und anwenden
         appearance    = Object.assign(appearance, cfg.appearance || {});
         if (typeof applyAppearance === 'function') applyAppearance();
-        // Layout wiederherstellen
-        if (typeof loadLayout === 'function' && cfg.layout) {
-            _layout = cfg.layout;
-            loadLayout();
-        }
+        // Layout merken (auch auf Mobile — sonst ginge der Desktop-Stand beim
+        // nächsten Speichern verloren) und, wenn vorhanden, anwenden.
+        if (cfg.layout) _layout = cfg.layout;
+        if (typeof loadLayout === 'function') loadLayout();
 
         // Erster Basket als Default
         if (!currentBasket || !baskets[currentBasket]) {
@@ -842,7 +845,7 @@ async function saveBasketsToServer() {
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance, layout: (typeof _layout !== 'undefined' ? _layout : {}) })
+            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance, layout: _layout || {} })
         });
     } catch (e) {
         console.warn('saveBasketsToServer failed:', e);
