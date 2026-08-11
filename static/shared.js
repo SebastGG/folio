@@ -897,6 +897,39 @@ async function loadDbTickers() {
 }
 
 /**
+ * Ermittelt die Wechselkurs-Paare, die die Baskets zum Umrechnen auf ihre
+ * Basiswährung brauchen (z.B. GBPUSD=X für eine Londoner Aktie im USD-Basket).
+ *
+ * Die Währung je Ticker kennt nur der Server (Tabelle ticker_currency, gefüllt
+ * beim Kurs-Update) — ein frisch angelegter Ticker liefert sein Paar deshalb
+ * erst beim nächsten Durchlauf nach. Das ist selbstheilend und billiger, als
+ * die Währung hier im Frontend zu spiegeln.
+ */
+async function neededFxPairs(tickers) {
+    var curr;
+    try {
+        var r = await fetch('/api/prices/currencies?tickers=' + encodeURIComponent(tickers.join(',')));
+        curr = await r.json();
+    } catch (e) {
+        logIt(2, 'Kurse', 'Währungen nicht abrufbar — Wechselkurse bleiben auf altem Stand: ' + e.message);
+        return [];
+    }
+    var pairs = new Set();
+    Object.values(baskets).forEach(function(b) {
+        var base = b.baseCurrency || 'USD';
+        Object.keys(b.weights || {}).forEach(function(s) {
+            if ((b.weights[s] || 0) === 0) return;
+            var c = curr[s] || curr[s.toUpperCase()];
+            if (!c) return;
+            if (c === 'GBp') c = 'GBP';   // Pence notiert, Kurs kommt über GBP
+            if (c === base) return;
+            pairs.add(c + base + '=X');
+        });
+    });
+    return Array.from(pairs);
+}
+
+/**
  * Aktualisiert alle Ticker-Preise via Yahoo Finance.
  */
 async function updateAllPrices() {
@@ -910,35 +943,43 @@ async function updateAllPrices() {
         return { ok: true, requested: 0, updated: 0, failed: {} };
     }
     logIt(6, 'Kurse', 'Yahoo-Update für ' + tickers.length + ' Ticker: ' + tickers.join(', '));
+
+    // Wechselkurs-Paare mit aktualisieren: loadIndexData() holt sie nur aus der
+    // Datenbank. Fehlt das Paar dort, bleibt die Fremdwährungs-Position still
+    // unkonvertiert im Index stehen — hier ist die einzige Stelle, die es füllt.
+    var fxPairs = await neededFxPairs(tickers);
+    if (fxPairs.length) logIt(6, 'Kurse', 'Wechselkurse mit aktualisieren: ' + fxPairs.join(', '));
+    var all = tickers.concat(fxPairs);
+
     try {
         var r = await fetch('/api/prices/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tickers: tickers })
+            body: JSON.stringify({ tickers: all })
         });
         var data = await r.json();
 
         if (r.status === 429) {
             logIt(2, 'Kurse', 'Rate-Limit — noch ' + (data.retry_after || 60) + ' s bis zum nächsten Update');
             return { ok: false, rateLimited: true, retryAfter: data.retry_after || 60,
-                     requested: tickers.length, updated: 0, failed: {} };
+                     requested: all.length, updated: 0, failed: {} };
         }
         var failed = data.failed || {};
         var nFailed = Object.keys(failed).length;
         if (nFailed) {
-            logIt(1, 'Kurse', nFailed + ' von ' + tickers.length + ' Tickern fehlgeschlagen');
+            logIt(1, 'Kurse', nFailed + ' von ' + all.length + ' Tickern fehlgeschlagen');
             Object.keys(failed).forEach(function(t) { logIt(2, 'Kurse', t + ': ' + failed[t]); });
         } else {
-            logIt(3, 'Kurse', 'Alle ' + tickers.length + ' Ticker aktualisiert');
+            logIt(3, 'Kurse', 'Alle ' + all.length + ' Ticker aktualisiert');
         }
         return {
-            ok: !!data.ok, requested: tickers.length,
-            updated: data.updated != null ? data.updated : tickers.length - nFailed,
+            ok: !!data.ok, requested: all.length,
+            updated: data.updated != null ? data.updated : all.length - nFailed,
             failed: failed
         };
     } catch (e) {
         logIt(1, 'Kurse', 'Update-Aufruf fehlgeschlagen: ' + e.message);
-        return { ok: false, requested: tickers.length, updated: 0,
+        return { ok: false, requested: all.length, updated: 0,
                  failed: {}, transport: e.message };
     }
 }
@@ -1008,12 +1049,17 @@ function setRefreshStatus(res) {
 /**
  * Lädt Kursdaten für einen einzelnen Ticker.
  */
-async function fetchTicker(sym) {
+async function fetchTicker(sym, ensure) {
     try {
-        var r    = await fetch('/api/prices/' + sym, { cache: 'no-store' });
+        // ensure=true: der Server holt fehlende/veraltete Tage vorher bei Yahoo
+        // (gedrosselt auf 1 Abruf pro Ticker und Minute). Sonst nur Datenbank.
+        var url  = ensure ? '/api/prices/ensure/' + encodeURIComponent(sym)
+                          : '/api/prices/' + sym;
+        var r    = await fetch(url, { cache: 'no-store' });
         var data = await r.json();
         if (!Array.isArray(data)) throw new Error('Unerwartete Antwort für ' + sym);
-        if (!data.length) logIt(2, 'Kurse', sym + ': keine Kursdaten in der Datenbank');
+        if (!data.length) logIt(2, 'Kurse', sym + (ensure ? ': auch bei Yahoo keine Kursdaten'
+                                                         : ': keine Kursdaten in der Datenbank'));
         else logIt(7, 'Kurse', sym + ': ' + data.length + ' Tage, letzter ' + data[data.length - 1].date);
         return data.map(function(d) {
             return {
@@ -1092,6 +1138,19 @@ async function loadIndexData() {
             }));
             fxResults.forEach(function(r) { if (r.data && r.data.length) _fxDataMap[r.sym] = r.data; });
             logIt(5, 'Index', 'Wechselkurse nach ' + baseCur + ': ' + fxPairs.join(', '));
+
+            // Paar noch nie geholt (neuer Ticker in fremder Währung, oder das Paar
+            // stand nie in einem Basket): einmal direkt bei Yahoo nachziehen. Ohne
+            // das bliebe die Position bis zum nächsten Refresh unkonvertiert im
+            // Index stehen — der Fehler war im Protokoll sichtbar, im Chart nicht.
+            var fxFehlt = fxPairs.filter(function(p) { return !_fxDataMap[p]; });
+            if (fxFehlt.length) {
+                logIt(5, 'Index', 'Wechselkurs fehlt in der Datenbank, hole nach: ' + fxFehlt.join(', '));
+                var fxNach = await Promise.all(fxFehlt.map(function(fx) {
+                    return fetchTicker(fx, true).then(function(data) { return { sym: fx, data: data }; });
+                }));
+                fxNach.forEach(function(r) { if (r.data && r.data.length) _fxDataMap[r.sym] = r.data; });
+            }
             var fxLeer = fxPairs.filter(function(p) { return !_fxDataMap[p]; });
             if (fxLeer.length) logIt(2, 'Index', 'Ohne Wechselkurs (Positionen bleiben in Fremdwährung): ' + fxLeer.join(', '));
         }

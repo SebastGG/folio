@@ -503,6 +503,43 @@ def _adjust_drawings_for_split(data_dir: str, view_key: str, factors: list):
         print(f"adjust_drawings_for_split {view_key}: {e}")
 
 # ── Yahoo Finance ──────────────────────────────────────────────────────────────
+_SYMBOL_HINT_CACHE: dict[str, str] = {}   # Ticker -> " — meintest du …" (auch leer)
+
+def _symbol_hint(ticker: str) -> str:
+    """Sucht bei Yahoo nach dem gemeinten Symbol und formuliert einen Vorschlag.
+
+    Ein nacktes „HTTP 404" sagt nicht, was zu tun ist — die Ursache ist fast immer
+    ein fehlendes Börsensuffix (CSU statt CSU.TO). Läuft nur im Fehlerfall und wird
+    prozessweit gemerkt, damit ein dauerhaft falscher Ticker nicht bei jedem
+    Kurs-Update erneut gesucht wird.
+    """
+    if ticker in _SYMBOL_HINT_CACHE:
+        return _SYMBOL_HINT_CACHE[ticker]
+    hint = ""
+    try:
+        import urllib.request, urllib.parse
+        url = ("https://query1.finance.yahoo.com/v1/finance/search?q="
+               + urllib.parse.quote(ticker) + "&quotesCount=6&newsCount=0")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            quotes = (json.loads(resp.read()) or {}).get("quotes") or []
+        base = ticker.upper()
+        for q in quotes:
+            sym = (q.get("symbol") or "").upper()
+            # Nur echte Wertpapiere und nur Treffer, die wie derselbe Ticker mit
+            # Börsensuffix aussehen — sonst schlägt die Suche wahllos ETFs vor.
+            if q.get("quoteType") != "EQUITY" or not sym.startswith(base + "."):
+                continue
+            name = q.get("shortname") or q.get("longname") or ""
+            exch = q.get("exchDisp") or ""
+            detail = " — ".join(x for x in (name, exch) if x)
+            hint = f" — meintest du {sym}?" + (f" ({detail})" if detail else "")
+            break
+    except Exception:
+        pass                       # Vorschlag ist Beiwerk, der 404 bleibt der Fehler
+    _SYMBOL_HINT_CACHE[ticker] = hint
+    return hint
+
 def _yahoo_chart(ticker: str, period1: int, period2: int) -> dict:
     """Holt die Yahoo-Chart-Antwort mit Retry.
 
@@ -536,7 +573,9 @@ def _yahoo_chart(ticker: str, period1: int, period2: int) -> dict:
             # 400/404 = Symbol gibt es nicht — sofort aufgeben statt 4,5 s zu warten.
             # 429/5xx dagegen sind genau die Fälle, für die der Retry da ist.
             if e.code in (400, 404):
-                raise RuntimeError(f"Unbekanntes Symbol (HTTP {e.code})")
+                raise RuntimeError(
+                    f"Unbekanntes Symbol (HTTP {e.code}){_symbol_hint(ticker)}"
+                )
             last_err = e
             if attempt < 2:
                 time_module.sleep(1.5 * (attempt + 1))   # 1,5 s / 3 s
