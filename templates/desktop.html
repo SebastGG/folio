@@ -692,6 +692,55 @@
         Gilt für die Fläche hinter dem Kurschart. Schrift- und Gitterfarbe im Chart passen sich
         automatisch an — bei dunklem Hintergrund wird hell beschriftet.
       </p>
+
+      <div class="settings-row ap-row">
+        <span class="settings-label">Volumenbalken</span>
+        <label class="ap-color">
+          <input type="color" id="ap-volUp" value="#2d8a4e"
+                 oninput="setChartColor('volUp', this.value, false)"
+                 onchange="setChartColor('volUp', this.value, true)">
+          <span>Steigend</span>
+        </label>
+        <label class="ap-color">
+          <input type="color" id="ap-volDown" value="#c0392b"
+                 oninput="setChartColor('volDown', this.value, false)"
+                 onchange="setChartColor('volDown', this.value, true)">
+          <span>Fallend</span>
+        </label>
+        <label class="ap-range">
+          <input type="range" id="ap-volAlpha" min="10" max="100" step="5" value="55"
+                 oninput="setChartColor('volAlpha', this.value / 100, false)"
+                 onchange="setChartColor('volAlpha', this.value / 100, true)">
+          <span>Deckkraft <b id="ap-volAlpha-val">55 %</b></span>
+        </label>
+      </div>
+
+      <div class="settings-row ap-row">
+        <span class="settings-label">Volumenprofil (VRVP)</span>
+        <label class="ap-color">
+          <input type="color" id="ap-vrvpBar" value="#c0392b"
+                 oninput="setChartColor('vrvpBar', this.value, false)"
+                 onchange="setChartColor('vrvpBar', this.value, true)">
+          <span>Zeilen</span>
+        </label>
+        <label class="ap-color">
+          <input type="color" id="ap-vrvpPoc" value="#27ae60"
+                 oninput="setChartColor('vrvpPoc', this.value, false)"
+                 onchange="setChartColor('vrvpPoc', this.value, true)">
+          <span>POC</span>
+        </label>
+        <label class="ap-range">
+          <input type="range" id="ap-vrvpAlpha" min="10" max="100" step="5" value="60"
+                 oninput="setChartColor('vrvpAlpha', this.value / 100, false)"
+                 onchange="setChartColor('vrvpAlpha', this.value / 100, true)">
+          <span>Deckkraft <b id="ap-vrvpAlpha-val">60 %</b></span>
+        </label>
+        <button class="btn" onclick="resetChartColors()" title="Volumen- und Profilfarben auf die Vorgabe zurücksetzen">Zurücksetzen</button>
+      </div>
+      <p class="settings-hint">
+        Die POC-Zeile (das meiste Volumen im sichtbaren Bereich) wird etwas kräftiger
+        gezeichnet als die übrigen Zeilen, damit sie sich abhebt.
+      </p>
     </div>
 
     <div class="settings-card">

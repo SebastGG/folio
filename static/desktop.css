@@ -95,6 +95,17 @@
   width: 28px; height: 22px; padding: 0; cursor: pointer;
   border: 1px solid var(--border); background: none;
 }
+/* Einstellungszeile mit mehreren Farbfeldern: Label links, Steller rechts,
+   bei schmalem Fenster umbrechend statt auseinandergezogen */
+.settings-row.ap-row { flex-wrap: wrap; gap: 6px 0; justify-content: flex-start; }
+.settings-row.ap-row .settings-label { margin-right: auto; }
+.settings-row.ap-row .btn { margin-left: 12px; }
+.ap-range {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 14px;
+  font-size: 11px; color: var(--muted);
+}
+.ap-range input[type="range"] { width: 90px; cursor: pointer; }
+.ap-range b { color: var(--text); font-weight: 600; }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
