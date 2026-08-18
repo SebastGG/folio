@@ -1184,7 +1184,12 @@ async function loadTickerData(sym) {
     if (typeof showLoading === 'function') showLoading('Lade ' + sym + '...');
     var done = logTimer(4, 'Chart', sym + ' laden');
     try {
-        var data    = await fetchTicker(sym);
+        // ensure=true: der Ticker in der Einzelansicht wird beim Öffnen nachgezogen.
+        // Vorher kam er nur aus der Datenbank — steht er in keinem Basket mit
+        // Gewicht ≠ 0, fasst ihn "Kurse aktualisieren" nie an, und man sah beliebig
+        // alte Kurse und ein während des Handels eingefrorenes Teilvolumen.
+        // Der Server drosselt selbst auf einen Yahoo-Abruf je Ticker und Minute.
+        var data    = await fetchTicker(sym, true);
         _dataMap[sym] = data;   // auch in _dataMap speichern für buildPerfData()
         allCandles  = data;
         _volumeData = data.map(function(c) { return { time: c.time, volume: c.volume }; });
