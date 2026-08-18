@@ -557,6 +557,8 @@
         Finviz-Screening je Index × Sektor mit frei wählbaren Filtern (Hochs, SMA, RSI, Performance,
         Fundamental — oder eigene Finviz-Codes), optional gefiltert nach MarktCap.
         Ergebnis als TradingView-Watchliste exportierbar.
+        Indizes, Filter und MarktCap werden automatisch gespeichert und beim nächsten Öffnen
+        wiederhergestellt.
       </p>
 
       <div class="scr-row">
@@ -594,6 +596,8 @@
         <button id="scr-btn-baskets" class="scr-btn scr-btn-baskets" onclick="screenerToBaskets()" disabled>＋ Baskets anlegen</button>
         <button id="scr-btn-export"  class="scr-btn scr-btn-export"  onclick="screenerExport()"    disabled>⬇ TradingView-Export</button>
         <span id="scr-msg" class="settings-msg"></span>
+        <button id="scr-btn-reset"   class="scr-btn"                 onclick="screenerResetSettings()"
+                title="Indizes, Filter und MarktCap zurück auf die Vorgaben. Die Einstellungen werden sonst automatisch gespeichert und beim nächsten Öffnen wiederhergestellt.">↺ Einstellungen zurücksetzen</button>
         <button id="scr-btn-clean"   class="scr-btn scr-btn-clean"   onclick="screenerDeleteBaskets()"
                 title="Entfernt NUR die vom Screener angelegten Baskets (Name beginnt mit „Screener "). Eigene Portfolios und IBKR-Baskets bleiben unberührt.">🗑 Screener-Baskets löschen</button>
       </div>
