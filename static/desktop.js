@@ -475,22 +475,25 @@ function _tradeMarkerGroups() {
         tradeDates.forEach(function(date) {
             relevantTrades.filter(function(t) { return t.trade_date === date; }).forEach(function(t) {
                 var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
-                runningQty += buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0);
+                runningQty += buy ? Math.abs(t.adj_quantity || 0) : -Math.abs(t.adj_quantity || 0);
             });
             dateRunning[date] = runningQty;
         });
 
         // Teilausführungen je Tag+Richtung zusammenfassen. Der Kurs wird dabei
         // mengengewichtet gemittelt — das ist die Höhe, auf der die Pfeilspitze sitzt.
+        // Gerechnet wird mit adj_price/adj_quantity: die Kerzen sind split-bereinigt,
+        // der Ausführungskurs aus dem Flex-Report ist es nicht. Ein Kauf vor einem
+        // 4:1-Split saß sonst viermal zu hoch — Chart richtig, Pfeil daneben.
         var agg = {};
         relevantTrades.forEach(function(t) {
             if (!t.trade_date) return;
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             var key = t.trade_date + (isBuy ? '_B' : '_S');
             if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0, notional: 0 };
-            var q = Math.abs(t.quantity || 0);
+            var q = Math.abs(t.adj_quantity || 0);
             agg[key].qty      += q;
-            agg[key].notional += q * (t.price || 0);
+            agg[key].notional += q * (t.adj_price || 0);
         });
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
@@ -1243,11 +1246,16 @@ function renderTickerTrades(sym) {
     var mine = ibkrStockTrades(sym).reverse();   // neueste zuerst
     if (!mine.length) return '';
 
-    // Kennzahlen über alle Trades: Stückzahl, Volumen, Ø-Kurs je Richtung
+    // Kennzahlen über alle Trades: Stückzahl, Volumen, Ø-Kurs je Richtung.
+    // Split-bereinigt (adj_*), damit Stückzahlen aus verschiedenen Epochen
+    // überhaupt addierbar sind und der Ø-Kurs auf derselben Skala liegt wie
+    // Chart und Einstandslinie. Der Gegenwert bleibt davon unberührt.
     var buyQty = 0, sellQty = 0, buyVal = 0, sellVal = 0, feeEur = 0;
+    var hasSplit = false;
     mine.forEach(function(t) {
-        var q = Math.abs(t.quantity || 0);
-        var p = t.price || 0;
+        var q = Math.abs(t.adj_quantity || 0);
+        var p = t.adj_price || 0;
+        if (Math.abs((t.split_factor || 1) - 1) > 1e-9) hasSplit = true;
         feeEur += Math.abs(t.commission || 0) * (t.fx_rate || 1);
         if ((t.action || '').toUpperCase().indexOf('BUY') >= 0) { buyQty += q; buyVal += q * p; }
         else { sellQty += q; sellVal += q * p; }
@@ -1263,8 +1271,17 @@ function renderTickerTrades(sym) {
     var qty     = ibkrCurrentQty(sym);
     var carryIn = ibkrCarryInQty(sym);
 
+    // Split-Verhältnis lesbar machen: 4 → „4:1", 0.1 → „1:10"
+    var splitLabel = function(f) {
+        return f >= 1 ? (Math.round(f * 100) / 100) + ':1' : '1:' + (Math.round(100 / f) / 100);
+    };
+
     var head = '<div class="tt-head">'
         + '<span class="tt-title">Eigene Trades (' + mine.length + ')</span>'
+        + (hasSplit ? '<span class="tt-kpi tt-adj" title="Dieser Ticker hatte einen Split. '
+                      + 'Stückzahlen und Ø-Kurse oben sind auf die heutige Skala gerechnet, '
+                      + 'die Tabelle unten zeigt die historisch gehandelten Werte.">'
+                      + '↕ split-bereinigt</span>' : '')
         + (buyQty  ? '<span class="tt-kpi"><b style="color:var(--green)">Kauf</b> ' + fq(buyQty)
                      + ' Ø ' + curS + f2(buyVal / buyQty) + '</span>' : '')
         + (sellQty ? '<span class="tt-kpi"><b style="color:var(--red)">Verkauf</b> ' + fq(sellQty)
@@ -1281,12 +1298,23 @@ function renderTickerTrades(sym) {
         var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
         var q     = Math.abs(t.quantity || 0);
         var valEur = Math.abs(t.value || 0) * (t.fx_rate || 1);
-        return '<tr>'
+        // Bei Trades von vor einem Split zusätzlich den Wert auf heutiger Skala
+        // zeigen — sonst widerspricht die Zeile scheinbar dem Chart.
+        var sf    = t.split_factor || 1;
+        var split = Math.abs(sf - 1) > 1e-9;
+        var tip   = split ? ' title="Nach ' + splitLabel(sf) + '-Split: heute '
+                            + fq(Math.abs(t.adj_quantity || 0)) + ' Stück zu '
+                            + curS + f2(t.adj_price || 0) + '"' : '';
+        return '<tr' + tip + '>'
             + '<td class="tt-date">' + escHtml((t.trade_date || '').slice(0, 10)) + '</td>'
             + '<td class="tt-act" style="color:' + (isBuy ? 'var(--green)' : 'var(--red)') + '">'
             +   (isBuy ? 'Kauf' : 'Verkauf') + '</td>'
-            + '<td class="tt-num">' + fq(q) + '</td>'
-            + '<td class="tt-num">' + curS + f2(t.price || 0) + '</td>'
+            + '<td class="tt-num">' + fq(q)
+            +   (split ? ' <span class="tt-adj">(' + fq(Math.abs(t.adj_quantity || 0)) + ')</span>' : '')
+            + '</td>'
+            + '<td class="tt-num">' + curS + f2(t.price || 0)
+            +   (split ? ' <span class="tt-adj">(' + curS + f2(t.adj_price || 0) + ')</span>' : '')
+            + '</td>'
             + '<td class="tt-num">' + f2(valEur) + ' €</td>'
             + '<td class="tt-sym">' + escHtml(t.symbol || '') + (cur ? ' · ' + escHtml(cur) : '') + '</td>'
             + '</tr>';

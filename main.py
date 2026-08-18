@@ -968,6 +968,34 @@ async def ensure_prices(ticker: str, request: Request):
         conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+@app.get("/api/splits")
+async def get_splits(request: Request):
+    """Alle bekannten Splits je Ticker: {"AAPL": [{"date": ..., "ratio": 4.0}, …]}.
+
+    Quelle ist `ticker_splits`, gefüllt von `_reconcile_splits` aus Yahoos
+    vollständiger Split-Historie (range=max). Das Frontend rechnet damit die
+    IBKR-Trades auf die heutige Kursskala um: Die Kurse in `prices` sind
+    split-bereinigt, die Ausführungskurse und Stückzahlen aus dem Flex-Report
+    dagegen die historisch echten. Ohne Umrechnung sitzt ein Kauf von vor einem
+    4:1-Split viermal zu hoch im Chart.
+
+    `applied` spielt dabei keine Rolle: es sagt nur, ob WIR die Altkurse noch
+    skalieren mussten oder Yahoo sie schon bereinigt geliefert hat — auf der
+    aktuellen Skala liegen sie in beiden Fällen.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    conn  = get_db(files["db"])
+    rows  = conn.execute(
+        "SELECT ticker, date, ratio FROM ticker_splits ORDER BY ticker, date"
+    ).fetchall()
+    conn.close()
+    out: dict[str, list] = {}
+    for r in rows:
+        out.setdefault(r["ticker"], []).append({"date": r["date"], "ratio": r["ratio"]})
+    return JSONResponse(content=out)
+
 # ── Ticker-Fundamentaldaten (Sektor, MarktCap, …) ───────────────────────────────
 # Holt Stammdaten via yfinance (kümmert sich um Yahoo-Crumb/Cookies). Persistiert in
 # der User-DB (Tabelle ticker_info), zusätzlich prozessweiter In-Memory-Cache. Strategie:

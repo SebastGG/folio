@@ -1525,6 +1525,7 @@ var ibkrTrades    = [];   // Geladene IBKR-Trades
 var ibkrLastSync  = null; // ISO-Timestamp des letzten Syncs
 var ibkrIsinMap   = {};   // ISIN → Yahoo-Symbol (persistentes Mapping)
 var ibkrSectors   = {};   // Yahoo-Symbol → GICS-Sektor (via /api/ticker/info, gecacht)
+var tickerSplits  = {};   // Yahoo-Symbol → [{date, ratio}] aufsteigend (via /api/splits)
 var ibkrIndustries= {};   // Yahoo-Symbol → Subsektor/Industry (via /api/ticker/info, gecacht)
 
 // Auflösung Trade/Position → Yahoo-Symbol des Charts.
@@ -1542,6 +1543,30 @@ function ibkrPosYahoo(p) {
 }
 
 /**
+ * Faktor, der einen historischen Trade auf die heutige Kursskala bringt:
+ * Kurs / f, Stückzahl * f. Produkt aller Splits NACH dem Handelstag.
+ *
+ * Warum das nötig ist: die Kurse in der Datenbank sind split-bereinigt (Yahoo
+ * liefert sie so, `_reconcile_splits` zieht Altdaten nach), die Ausführungskurse
+ * und Stückzahlen aus dem IBKR-Flex-Report sind dagegen die historisch echten.
+ * Ein Kauf vor einem 4:1-Split saß dadurch viermal zu hoch im Chart, und
+ * „Käufe minus Verkäufe" ergab einen Bestand auf zwei verschiedenen Skalen.
+ *
+ * Das Split-Datum ist der Ex-Tag, also der erste Handelstag auf der NEUEN Skala.
+ * Ein Trade an diesem Tag ist schon neu, deshalb strikt `>`.
+ */
+function splitFactorSince(sym, dateStr) {
+    var evs = tickerSplits[sym];
+    if (!evs || !evs.length || !dateStr) return 1;
+    var d = String(dateStr).slice(0, 10);
+    var f = 1;
+    for (var i = 0; i < evs.length; i++) {
+        if (evs[i].date > d && evs[i].ratio > 0) f *= evs[i].ratio;
+    }
+    return f;
+}
+
+/**
  * Aktien-Trades eines Tickers, aufsteigend nach Datum. Einzige Auswahlstelle für
  * Chart-Pfeile UND Trade-Fenster — beide müssen dieselben Trades sehen, sonst
  * widersprechen sich Pfeile und Tabelle.
@@ -1553,6 +1578,17 @@ function ibkrStockTrades(sym) {
         return ibkrTradeYahoo(t) === sym && (t.asset_class || '').toUpperCase() === 'STK';
     }).sort(function(a, b) {
         return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0;
+    }).map(function(t) {
+        // Kopie mit den Werten auf heutiger Skala. `price`/`quantity` bleiben
+        // unangetastet — die Trade-Tabelle zeigt, was wirklich gehandelt wurde.
+        // Alles, was mit dem Chart oder dem heutigen Bestand verrechnet wird,
+        // nimmt adj_price/adj_quantity.
+        var f = splitFactorSince(sym, t.trade_date);
+        var c = Object.assign({}, t);
+        c.split_factor = f;
+        c.adj_price    = (t.price    || 0) / f;
+        c.adj_quantity = (t.quantity || 0) * f;
+        return c;
     });
 }
 
@@ -1577,9 +1613,11 @@ function ibkrCurrentQty(sym) {
  * bekannten Trade schon da war. 0 heißt: die Historie ist lückenlos.
  */
 function ibkrCarryInQty(sym) {
+    // adj_quantity: der IBKR-Bestand steht auf heutiger Skala, die Trades nicht.
+    // Ohne Umrechnung wäre die Differenz bei jedem Split-Papier Unsinn.
     var traded = ibkrStockTrades(sym).reduce(function(s, t) {
         var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
-        return s + (buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
+        return s + (buy ? Math.abs(t.adj_quantity || 0) : -Math.abs(t.adj_quantity || 0));
     }, 0);
     return ibkrCurrentQty(sym) - traded;
 }
@@ -1660,8 +1698,30 @@ async function ibkrLoadCash() {
     }
 }
 
+/**
+ * Split-Historie aller Ticker (Ex-Datum + Faktor). Wird zusammen mit den Trades
+ * geladen: ohne sie stünden Pfeile und Stückzahlen bei Split-Papieren falsch.
+ */
+async function loadSplits() {
+    try {
+        var r = await fetch('/api/splits', { cache: 'no-store' });
+        tickerSplits = await r.json() || {};
+        var n = Object.keys(tickerSplits).length;
+        if (n) logIt(6, 'Kurse', 'Splits geladen für ' + n + ' Ticker: '
+            + Object.keys(tickerSplits).map(function(k) {
+                return k + '(' + tickerSplits[k].length + ')';
+              }).join(', '));
+        return tickerSplits;
+    } catch (e) {
+        logIt(2, 'Kurse', 'Splits laden fehlgeschlagen: ' + e.message);
+        tickerSplits = {};
+        return {};
+    }
+}
+
 async function ibkrLoadTrades() {
     try {
+        await loadSplits();
         var r = await fetch('/api/ibkr/trades');
         ibkrTrades = await r.json();
         logIt(3, 'IBKR', ibkrTrades.length + ' Trades geladen');
