@@ -786,6 +786,39 @@ function setTF(tf) {
  * Datenformat einen String, einen Unix-Zeitstempel oder ein BusinessDay-Objekt
  * zurück — wir füttern Strings, nehmen aber alle drei entgegen.
  */
+// ── Chart-Farben (Volumen + Volumenprofil) ────────────────────────────────────
+// Werden in `appearance` pro Benutzer gespeichert (config.json), damit sie auf
+// allen Geräten gelten. Die Vorgaben sind kräftiger als die früher fest
+// verdrahteten 0,4 — auf hellem Grund war davon kaum etwas zu sehen.
+var CHART_COLOR_DEFAULTS = {
+    volUp:     '#2d8a4e',   // Volumen an steigenden Tagen
+    volDown:   '#c0392b',   // Volumen an fallenden Tagen
+    volAlpha:  0.55,
+    vrvpBar:   '#c0392b',   // Zeilen des Volumenprofils
+    vrvpPoc:   '#27ae60',   // Zeile mit dem meisten Volumen (Point of Control)
+    vrvpAlpha: 0.6,
+};
+
+function hexToRgba(hex, alpha) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return 'rgba(120,120,120,' + alpha + ')';
+    var n = parseInt(m[1], 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+}
+
+/** Eingestellter Wert oder Vorgabe — roh, ohne Deckkraft. */
+function chartColorValue(key) {
+    var a = appearance || {};
+    var v = a[key];
+    if (key.slice(-5) === 'Alpha') return (v == null || isNaN(v)) ? CHART_COLOR_DEFAULTS[key] : Number(v);
+    return /^#[0-9a-f]{6}$/i.test(String(v || '')) ? v : CHART_COLOR_DEFAULTS[key];
+}
+
+/** Fertige rgba-Farbe für den Chart: Farbe aus `key`, Deckkraft aus `alphaKey`. */
+function chartColor(key, alphaKey) {
+    return hexToRgba(chartColorValue(key), chartColorValue(alphaKey));
+}
+
 function chartTimeToStr(t) {
     if (t == null) return null;
     if (typeof t === 'string') return t.slice(0, 10);

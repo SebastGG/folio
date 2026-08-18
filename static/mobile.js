@@ -244,7 +244,7 @@ function syncMobileChart() {
             mVol.setData(_volumeData.map(function(v) {
                 return {
                     time: v.time, value: v.volume || 0,
-                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                    color: cmap[v.time] === '#2d8a4e' ? chartColor('volUp', 'volAlpha') : chartColor('volDown', 'volAlpha'),
                 };
             }));
         } catch(e) {}
@@ -389,14 +389,14 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
             mVolData = volAgg.map(function(v) {
                 return {
                     time: v.time, value: (v.volume || 0) / mVolAvg * 100,
-                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                    color: cmap[v.time] === '#2d8a4e' ? chartColor('volUp', 'volAlpha') : chartColor('volDown', 'volAlpha'),
                 };
             });
         } else {
             mVolData = volAgg.map(function(v) {
                 return {
                     time: v.time, value: v.volume || 0,
-                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                    color: cmap[v.time] === '#2d8a4e' ? chartColor('volUp', 'volAlpha') : chartColor('volDown', 'volAlpha'),
                 };
             });
         }

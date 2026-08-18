@@ -114,6 +114,46 @@ function _timeToStr(t) {
     return '';
 }
 
+/**
+ * Volumenprofil über einen Satz Kerzen: das Volumen jeder Kerze wird linear über
+ * ihre High-Low-Spanne auf die Preiszeilen verteilt. Reines Rechnen, kein Zeichnen.
+ * Gibt null zurück, wenn sich kein Profil bilden lässt.
+ */
+function computeVolumeProfile(candles, numBuckets) {
+    if (!candles || !candles.length || !(numBuckets > 0)) return null;
+    var priceMin = Infinity, priceMax = -Infinity;
+    candles.forEach(function(c) {
+        if (c.low  < priceMin) priceMin = c.low;
+        if (c.high > priceMax) priceMax = c.high;
+    });
+    if (!(priceMin < priceMax)) return null;
+    var bucketSize = (priceMax - priceMin) / numBuckets;
+    var volumes = new Float64Array(numBuckets);
+    candles.forEach(function(c) {
+        var vol = c.volume || 0;
+        if (!vol) return;
+        var cRng = c.high - c.low;
+        if (!(cRng > 0)) {
+            // Kerze ohne Spanne (z.B. Handelsstopp): ganzes Volumen in ihre Zeile
+            var idx = Math.min(numBuckets - 1, Math.max(0, Math.floor((c.close - priceMin) / bucketSize)));
+            volumes[idx] += vol;
+            return;
+        }
+        for (var i = 0; i < numBuckets; i++) {
+            var bLow = priceMin + i * bucketSize, bHigh = bLow + bucketSize;
+            var oLow = Math.max(c.low, bLow), oHigh = Math.min(c.high, bHigh);
+            if (oHigh > oLow) volumes[i] += vol * (oHigh - oLow) / cRng;
+        }
+    });
+    var maxVol = 0, pocIdx = 0;
+    for (var j = 0; j < numBuckets; j++) {
+        if (volumes[j] > maxVol) { maxVol = volumes[j]; pocIdx = j; }
+    }
+    if (!maxVol) return null;
+    return { volumes: volumes, priceMin: priceMin, priceMax: priceMax,
+             bucketSize: bucketSize, maxVol: maxVol, pocIdx: pocIdx };
+}
+
 function _drawVRVP() {
     if (!_vrvpEnabled || !_vrvpCanvas || !csSeries || !chart || !_lastCandles || !_lastCandles.length) return;
     var canvas = _vrvpCanvas;
@@ -127,34 +167,43 @@ function _drawVRVP() {
     if (!visRange) return;
     var fromStr = _timeToStr(visRange.from), toStr = _timeToStr(visRange.to);
     if (!fromStr || !toStr) return;
-    var visCan = _lastCandles.filter(function(c) { return c.time >= fromStr && c.time <= toStr; });
+
+    // Datenbasis sind die TAGESKERZEN, nicht die aggregierten des Timeframes.
+    // Das Profil beschreibt den sichtbaren Preisbereich, nicht die Kerzenbreite:
+    // aus einer Wochenkerze wüsste man nur „irgendwo zwischen Wochenhoch und
+    // -tief", das Volumen würde über die ganze Spanne verschmiert und die POC
+    // sprang beim Umschalten des Timeframes. allCandles liegt ohnehin geladen vor.
+    var base = (typeof allCandles !== 'undefined' && allCandles && allCandles.length)
+        ? allCandles : _lastCandles;
+    var visCan = base.filter(function(c) { return c.time >= fromStr && c.time <= toStr; });
     if (!visCan.length) return;
+
+    // Zeilenauflösung an die Bildhöhe koppeln (~6 px je Zeile) statt fester 24.
+    // Sonst wird bei Wochen-/Monatskerzen — wo der Zeitraum und damit die
+    // Preisspanne viel grösser ist — jede Zeile zu einem fetten Klotz.
     var priceMin = Infinity, priceMax = -Infinity;
     visCan.forEach(function(c) {
         if (c.low  < priceMin) priceMin = c.low;
         if (c.high > priceMax) priceMax = c.high;
     });
-    if (priceMin >= priceMax) return;
-    var NUM_BUCKETS = 24;
-    var bucketSize = (priceMax - priceMin) / NUM_BUCKETS;
-    var volumes = new Float64Array(NUM_BUCKETS);
-    visCan.forEach(function(c) {
-        var vol = c.volume || 0;
-        var cRng = c.high - c.low || bucketSize;
-        for (var i = 0; i < NUM_BUCKETS; i++) {
-            var bLow = priceMin + i * bucketSize, bHigh = bLow + bucketSize;
-            var oLow = Math.max(c.low, bLow), oHigh = Math.min(c.high, bHigh);
-            if (oHigh > oLow) volumes[i] += vol * (oHigh - oLow) / cRng;
-        }
-    });
-    var maxVol = 0, pocIdx = 0;
-    for (var i = 0; i < NUM_BUCKETS; i++) {
-        if (volumes[i] > maxVol) { maxVol = volumes[i]; pocIdx = i; }
-    }
-    if (!maxVol) return;
+    if (!(priceMin < priceMax)) return;
+    var yTopPx = csSeries.priceToCoordinate(priceMax);
+    var yBotPx = csSeries.priceToCoordinate(priceMin);
+    var pxSpan = (yTopPx !== null && yBotPx !== null) ? Math.abs(yBotPx - yTopPx) : canvas.height;
+    var NUM_BUCKETS = Math.max(20, Math.min(100, Math.round(pxSpan / 6)));
+
+    var profile = computeVolumeProfile(visCan, NUM_BUCKETS);
+    if (!profile) return;
+    var volumes = profile.volumes, maxVol = profile.maxVol, pocIdx = profile.pocIdx;
+    var bucketSize = profile.bucketSize;
+    priceMin = profile.priceMin; priceMax = profile.priceMax;
+
     var priceScaleW = 58;
     var maxBarW = Math.min(canvas.width * 0.15, 120);
     var barRight = canvas.width - priceScaleW;
+    var barColor = chartColor('vrvpBar', 'vrvpAlpha');
+    var pocColor = hexToRgba(chartColorValue('vrvpPoc'),
+                             Math.min(1, chartColorValue('vrvpAlpha') + 0.25));
     for (var i = 0; i < NUM_BUCKETS; i++) {
         var bLow = priceMin + i * bucketSize, bHigh = bLow + bucketSize;
         var yTop    = csSeries.priceToCoordinate(bHigh);
@@ -162,13 +211,13 @@ function _drawVRVP() {
         if (yTop === null || yBottom === null) continue;
         var barH = Math.max(1, Math.abs(yBottom - yTop) - 1);
         var barW = (volumes[i] / maxVol) * maxBarW;
-        ctx.fillStyle = i === pocIdx ? 'rgba(39,174,96,0.85)' : 'rgba(220,53,69,0.45)';
+        ctx.fillStyle = i === pocIdx ? pocColor : barColor;
         ctx.fillRect(barRight - barW, Math.min(yTop, yBottom), barW, barH);
     }
     var pocMid = priceMin + (pocIdx + 0.5) * bucketSize;
     var pocY   = csSeries.priceToCoordinate(pocMid);
     if (pocY !== null) {
-        ctx.fillStyle = 'rgba(39,174,96,0.9)';
+        ctx.fillStyle = hexToRgba(chartColorValue('vrvpPoc'), 0.95);
         ctx.font = '10px monospace';
         ctx.textAlign = 'right';
         ctx.fillText('POC ' + pocMid.toFixed(2), barRight - 2, pocY + 3);
@@ -848,6 +897,9 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         colored.forEach(function(c) { cmap[c.time] = c.color; });
         // Index-View: normiert (Durchschnitt=100), da Volumen dort eine gewichtete Hilfsgröße ist.
         // Ticker-View: echtes Volumen in Stückzahl (wie TradingView).
+        var volUp   = chartColor('volUp',   'volAlpha');
+        var volDown = chartColor('volDown', 'volAlpha');
+        var volColor = function(t) { return cmap[t] === '#2d8a4e' ? volUp : volDown; };
         var volData;
         if (currentView === 'index') {
             var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
@@ -856,7 +908,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
                 return {
                     time:  v.time,
                     value: (v.volume || 0) / volAvg * 100,
-                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                    color: volColor(v.time),
                 };
             });
         } else {
@@ -864,7 +916,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
                 return {
                     time:  v.time,
                     value: v.volume || 0,
-                    color: cmap[v.time] === '#2d8a4e' ? 'rgba(45,138,78,0.4)' : 'rgba(192,57,43,0.4)',
+                    color: volColor(v.time),
                 };
             });
         }
@@ -3416,6 +3468,51 @@ function renderAppearanceControls() {
         pick.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur
             : (getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#ffffff');
     }
+    // Volumen- und Profilfarben (Vorgabe, wenn nichts gewählt wurde)
+    ['volUp', 'volDown', 'vrvpBar', 'vrvpPoc'].forEach(function(key) {
+        var el = document.getElementById('ap-' + key);
+        if (el) el.value = chartColorValue(key);
+    });
+    ['volAlpha', 'vrvpAlpha'].forEach(function(key) {
+        var el = document.getElementById('ap-' + key);
+        if (el) el.value = Math.round(chartColorValue(key) * 100);
+        var lab = document.getElementById('ap-' + key + '-val');
+        if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
+    });
+}
+
+/**
+ * Farbe oder Deckkraft für Volumen/Volumenprofil setzen.
+ * `commit=false` beim Ziehen des Reglers — nur anwenden, damit man das Ergebnis
+ * sofort sieht, ohne bei jedem Zwischenschritt zum Server zu schreiben.
+ * `commit=true` beim Loslassen speichert.
+ */
+async function setChartColor(key, value, commit) {
+    if (!appearance) appearance = {};
+    appearance[key] = (key.slice(-5) === 'Alpha') ? Number(value) : value;
+    var lab = document.getElementById('ap-' + key + '-val');
+    if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
+    refreshChartColors();
+    if (commit) await saveBasketsToServer();
+}
+
+/** Volumen- und Profilfarben zurück auf die Vorgaben. */
+async function resetChartColors() {
+    if (!appearance) appearance = {};
+    Object.keys(CHART_COLOR_DEFAULTS).forEach(function(k) { delete appearance[k]; });
+    renderAppearanceControls();
+    refreshChartColors();
+    await saveBasketsToServer();
+}
+
+/**
+ * Chart neu zeichnen, nachdem sich eine Farbe geändert hat. Die Volumenfarbe
+ * steckt in den Balkendaten selbst, deshalb muss die Reihe neu gesetzt werden —
+ * das erledigt applyPeriod(). Das VRVP-Overlay malt auf sein eigenes Canvas.
+ */
+function refreshChartColors() {
+    if (typeof applyPeriod === 'function') applyPeriod();
+    if (_vrvpEnabled) _scheduleVRVP();
 }
 
 // Einstellung ändern → anwenden + pro Nutzer speichern.
