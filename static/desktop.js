@@ -4720,6 +4720,18 @@ async function screenerInit() {
         if (el) el.addEventListener('input', updateHint);
         if (el) el.addEventListener('change', updateHint);
     });
+
+    // Zuletzt benutzte Einstellungen über die Vorauswahl legen (serverseitig je
+    // Benutzer), danach das automatische Speichern anhängen — in dieser
+    // Reihenfolge, sonst würde das Anwenden selbst als Änderung gespeichert.
+    try {
+        var saved = await fetch('/api/screener/settings').then(function (r) { return r.json(); });
+        if (_scrApplySettings(saved)) logIt(6, 'Screener', 'Gespeicherte Einstellungen geladen');
+    } catch (e) {
+        logIt(2, 'Screener', 'Einstellungen laden fehlgeschlagen: ' + e.message);
+    }
+    _scrWireSettingsAutosave();
+
     updateHint();
     screenerResume();
 }
@@ -4794,6 +4806,133 @@ function _scrSelectedFilters() {
     return out;
 }
 
+/** Katalog-Haken allein (ohne Eigenfilter) — so werden sie auch gespeichert. */
+function _scrCheckedCatalogFilters() {
+    var out = [];
+    document.querySelectorAll('#scr-filters input[type="checkbox"]').forEach(function (cb) {
+        if (cb.checked) out.push(cb.dataset.filter);
+    });
+    return out;
+}
+
+/** Eigenfilter-Feld als Liste. */
+function _scrCustomFilters() {
+    var inp = document.getElementById('scr-filters-custom');
+    if (!inp || !inp.value) return [];
+    var out = [];
+    inp.value.split(/[,\s]+/).forEach(function (c) {
+        c = c.trim().toLowerCase();
+        if (c && out.indexOf(c) < 0) out.push(c);
+    });
+    return out;
+}
+
+/** Aktueller Formularzustand als Objekt für /api/screener/settings. */
+function _scrCollectSettings() {
+    var num = function (id) { return parseFloat((document.getElementById(id) || {}).value) || 0; };
+    var unitEl = document.getElementById('scr-cap-unit');
+    return {
+        indexes: _scrSelectedIndexes(),
+        cap_min: num('scr-cap-min'),
+        cap_max: num('scr-cap-max'),
+        unit:    unitEl ? unitEl.value : 'Mrd $',
+        filters: _scrCheckedCatalogFilters(),
+        custom:  _scrCustomFilters(),
+    };
+}
+
+/**
+ * Gespeicherte Einstellungen ins Formular schreiben. Ein leeres Objekt (noch nie
+ * gespeichert) lässt die Vorauswahl aus screener.py stehen — deshalb wird jedes
+ * Feld einzeln geprüft und nicht pauschal überschrieben.
+ */
+function _scrApplySettings(st) {
+    if (!st || typeof st !== 'object' || !Object.keys(st).length) return false;
+    if (Array.isArray(st.indexes)) {
+        document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
+            cb.checked = st.indexes.indexOf(cb.dataset.idx) >= 0;
+        });
+    }
+    if (Array.isArray(st.filters)) {
+        document.querySelectorAll('#scr-filters input[type="checkbox"]').forEach(function (cb) {
+            cb.checked = st.filters.indexOf(cb.dataset.filter) >= 0;
+        });
+    }
+    var cust = document.getElementById('scr-filters-custom');
+    if (cust && Array.isArray(st.custom)) cust.value = st.custom.join(', ');
+    var mn = document.getElementById('scr-cap-min');
+    var mx = document.getElementById('scr-cap-max');
+    var un = document.getElementById('scr-cap-unit');
+    if (mn && st.cap_min != null) mn.value = st.cap_min;
+    if (mx && st.cap_max != null) mx.value = st.cap_max;
+    if (un && st.unit) un.value = st.unit;
+    return true;
+}
+
+var _scrSaveTimer = null;
+
+/**
+ * Speichert die Einstellungen kurz nach der letzten Änderung. Gesammelt, weil
+ * beim Tippen im Eigenfilter-Feld sonst pro Zeichen geschrieben würde.
+ */
+function _scrSettingsChanged() {
+    clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = setTimeout(_scrSaveSettings, 800);
+}
+
+async function _scrSaveSettings() {
+    try {
+        await fetch('/api/screener/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(_scrCollectSettings()),
+        });
+        logIt(7, 'Screener', 'Einstellungen gespeichert');
+    } catch (e) {
+        logIt(2, 'Screener', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+    }
+}
+
+/** Zurück auf die Vorgaben aus screener.py — gespeicherte Datei löschen und neu aufbauen. */
+async function screenerResetSettings() {
+    try {
+        await fetch('/api/screener/settings', { method: 'DELETE' });
+    } catch (e) { /* auch ohne Serverantwort das Formular zurücksetzen */ }
+    document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
+        cb.checked = _SCR.defaults.indexOf(cb.dataset.idx) >= 0;
+    });
+    document.querySelectorAll('#scr-filters input[type="checkbox"]').forEach(function (cb) {
+        cb.checked = _SCR.filterDefaults.indexOf(cb.dataset.filter) >= 0;
+    });
+    var cust = document.getElementById('scr-filters-custom');
+    if (cust) cust.value = '';
+    ['scr-cap-min', 'scr-cap-max'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.value = 0;
+    });
+    var un = document.getElementById('scr-cap-unit');
+    if (un) un.value = 'Mrd $';
+    var hintEl = document.getElementById('scr-cap-hint');
+    if (hintEl) { hintEl.textContent = '↳ 0 = keine Grenze → alle MarktCaps'; hintEl.style.color = ''; }
+    _scrMsg('Einstellungen auf die Vorgaben zurückgesetzt', 'ok');
+}
+
+/** Hängt das automatische Speichern an alle Eingabefelder des Screeners. */
+function _scrWireSettingsAutosave() {
+    ['scr-indexes', 'scr-filters'].forEach(function (id) {
+        var box = document.getElementById(id);
+        if (box) box.addEventListener('change', _scrSettingsChanged);
+    });
+    var cust = document.getElementById('scr-filters-custom');
+    if (cust) cust.addEventListener('input', _scrSettingsChanged);
+    ['scr-cap-min', 'scr-cap-max', 'scr-cap-unit'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', _scrSettingsChanged);
+        el.addEventListener('change', _scrSettingsChanged);
+    });
+}
+
 /** Hängt einen Finviz-Code an das Eigenfilter-Feld an (Klick aus der Legende). */
 function _scrAddCustomCode(code) {
     var inp = document.getElementById('scr-filters-custom');
@@ -4827,6 +4966,11 @@ async function screenerStart() {
     document.getElementById('scr-progress-wrap').style.display = '';
     document.getElementById('scr-progress-bar').style.width = '0%';
     _scrSetState('läuft …', 'run');
+
+    // Beim Start festhalten, was gerade eingestellt ist — sonst ginge eine
+    // Änderung verloren, die keine 800 ms alt ist (siehe _scrSettingsChanged).
+    clearTimeout(_scrSaveTimer);
+    _scrSaveSettings();
 
     var body = {
         indexes:  indexes,

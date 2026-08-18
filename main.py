@@ -2558,6 +2558,77 @@ async def screener_config(request: Request):
             "legend": screener.FILTER_LEGEND}
 
 
+# ── Screener-Einstellungen (pro Benutzer) ──────────────────────────────────────
+# Eigene Datei statt eines Schlüssels in config.json: `POST /api/config` schreibt
+# die Config als Ganzes: der Screener würde bei jedem Basket-Speichern
+# überschrieben, weil das Chart-Frontend den Schlüssel gar nicht kennt.
+
+def _screener_settings_path(user: str) -> str:
+    return os.path.join(get_user_dir(user), "screener_settings.json")
+
+
+def _sanitize_screener_settings(body: dict) -> dict:
+    """Nur bekannte Werte übernehmen — die Datei wird beim Start wieder in die
+    Oberfläche geschrieben, also nichts Ungeprüftes hineinlassen."""
+    idx = [n for n in (body.get("indexes") or []) if n in screener.INDEXES]
+    try:
+        cap_min = max(0.0, float(body.get("cap_min") or 0))
+        cap_max = max(0.0, float(body.get("cap_max") or 0))
+    except (TypeError, ValueError):
+        cap_min = cap_max = 0.0
+    unit = body.get("unit") if body.get("unit") in ("Mrd $", "Mio $") else "Mrd $"
+    return {
+        "indexes": idx,
+        "cap_min": cap_min,
+        "cap_max": cap_max,
+        "unit":    unit,
+        # Katalog-Haken und Eigenfilter getrennt: sonst wandern die Eigenen beim
+        # nächsten Laden in den Katalog und lassen sich nicht mehr abwählen.
+        "filters": screener.sanitize_filters(body.get("filters")),
+        "custom":  screener.sanitize_filters(body.get("custom")),
+    }
+
+
+@app.get("/api/screener/settings")
+async def screener_settings_get(request: Request):
+    """Zuletzt benutzte Screener-Einstellungen. Leeres Objekt = noch keine
+    gespeichert, dann gelten die Vorgaben aus screener.py."""
+    user = get_user(request)
+    path = _screener_settings_path(user)
+    if not os.path.exists(path):
+        return JSONResponse(content={})
+    try:
+        with open(path) as f:
+            return JSONResponse(content=_sanitize_screener_settings(json.load(f)))
+    except Exception:
+        return JSONResponse(content={})
+
+
+@app.post("/api/screener/settings")
+async def screener_settings_set(request: Request):
+    user = get_user(request)
+    data = _sanitize_screener_settings(await request.json())
+    path = _screener_settings_path(user)
+    tmp  = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    shutil.move(tmp, path)
+    return JSONResponse(content={"ok": True, "settings": data})
+
+
+@app.delete("/api/screener/settings")
+async def screener_settings_delete(request: Request):
+    """Zurück auf die Vorgaben — Datei weg, nicht leer schreiben."""
+    user = get_user(request)
+    path = _screener_settings_path(user)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse(content={"ok": True})
+
+
 @app.post("/api/screener/run")
 async def screener_run(request: Request):
     user = get_user(request)
