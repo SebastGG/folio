@@ -41,12 +41,16 @@ var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand ge
 var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
 var _etfCandles        = [];     // Tagesdaten des aktuellen ETFs (für Rebasing bei Zoom/Pan)
 var _sectorEtfReq      = 0;      // Race-Schutz für async ETF-Laden
-var _savedLogicalRange = null;   // Gespeicherter Zoom beim Ticker-Wechsel
+var _savedTimeRange    = null;   // Sichtbarer Zeitausschnitt beim Ticker-Wechsel
 
+// Als Datum merken, nicht als Balken-Index: Zeitraum und Kerzenbreite gelten
+// beim neuen Ticker sonst nur auf dem Papier (siehe clampVisibleRange).
 function saveChartRange() {
     if (!chart) return;
-    var r = chart.timeScale().getVisibleLogicalRange();
-    if (r) _savedLogicalRange = r;
+    var r = chart.timeScale().getVisibleRange();
+    if (!r) return;
+    var from = chartTimeToStr(r.from), to = chartTimeToStr(r.to);
+    if (from && to) _savedTimeRange = { from: from, to: to };
 }
 
 // ── VRVP ──────────────────────────────────────────────────────────────────────
@@ -890,12 +894,32 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Log-Skala
     chart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
 
-    // Zoom-Range wiederherstellen (Ticker-Wechsel) oder auf Inhalt fitten
-    if (_savedLogicalRange !== null) {
-        var _rangeToRestore = _savedLogicalRange;
-        _savedLogicalRange = null;
+    // Sichtbaren Zeitausschnitt wiederherstellen (Ticker-Wechsel) oder einpassen.
+    // Das Fenster wird auf die Daten des neuen Tickers begrenzt, inklusive der
+    // Ghost-Tage rechts — sonst rutscht der Ausschnitt beim Wechsel nach links.
+    if (_savedTimeRange !== null) {
+        var _want = _savedTimeRange;
+        _savedTimeRange = null;
+        var _last = (_ghostDates && _ghostDates.length)
+            ? _ghostDates[_ghostDates.length - 1]
+            : colored[colored.length - 1].time;
+        var _range = clampVisibleRange(_want, colored[0].time, _last);
+        // Preisachse für den neuen Ticker einmal neu einpassen. Ohne das bliebe die
+        // Skala des vorherigen stehen (autoScale wird nach jedem Einpassen wieder
+        // abgeschaltet, damit gezogene Achsen halten) — beim Sprung von einem
+        // 90-Dollar- auf einen 500-Dollar-Wert läge der Kurs dann ausserhalb des Bildes.
+        csSeries.priceScale().applyOptions({ autoScale: true });
+        if (etfSeries) { try { etfSeries.priceScale().applyOptions({ autoScale: true }); } catch(e) {} }
         requestAnimationFrame(function() {
-            if (chart) try { chart.timeScale().setVisibleLogicalRange(_rangeToRestore); } catch(e) { fitWithFuture(); }
+            if (!chart) return;
+            if (_range) {
+                try { chart.timeScale().setVisibleRange(_range); } catch(e) { fitWithFuture(); }
+            } else {
+                fitWithFuture();
+            }
+            requestAnimationFrame(function() {
+                if (csSeries) try { csSeries.priceScale().applyOptions({ autoScale: false }); } catch(e) {}
+            });
         });
     } else {
         fitWithFuture();
