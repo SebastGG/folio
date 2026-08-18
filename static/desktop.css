@@ -426,6 +426,8 @@ header {
 }
 .tt-kpi { font-size: 10px; color: var(--muted); }
 .tt-kpi b { font-weight: 700; }
+/* Wert auf heutiger, split-bereinigter Skala — steht neben dem historischen */
+.tt-adj { color: var(--muted); opacity: 0.75; font-size: 0.9em; white-space: nowrap; }
 .tt-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .tt-table th {
   position: sticky; top: 0; background: var(--surface); z-index: 1;

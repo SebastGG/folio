@@ -292,25 +292,18 @@ function refreshMobileTradeMarkers() {
     if (!mCs) return;
     var markers = [];
     if (currentView !== 'index' && ibkrTrades && ibkrTrades.length > 0) {
-        var relevantTrades = ibkrTrades.filter(function(t) {
-            return ibkrTradeYahoo(t) === currentView && (t.asset_class || '').toUpperCase() === 'STK';
-        }).sort(function(a, b) { return a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : 0; });
-        var posRow = ibkrPositions && ibkrPositions.find(function(p) {
-            return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
-        });
-        // Nicht (mehr) im Depot ⇒ Position ist 0 (geschlossen) — als Anker für die
-        // Rückwärtsrechnung nutzen, sonst fehlt der Verlauf bzw. läuft bei
-        // unvollständiger Flex-Historie ins Negative (siehe Desktop refreshTradeMarkers).
-        var currentQty = posRow ? posRow.quantity : 0;
-        var totalTraded = relevantTrades.reduce(function(s, t) {
-            return s + ((t.action || '').toUpperCase().indexOf('BUY') >= 0 ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0));
-        }, 0);
-        var runningQty = currentQty - totalTraded;
+        // Auswahl und Bestandsanker aus shared.js — dieselben Funktionen wie im
+        // Desktop, statt der früheren Kopie dieser Rechnung. Sie liefern die
+        // Stückzahlen split-bereinigt (adj_quantity); der IBKR-Bestand steht auf
+        // heutiger Skala, die Trades im Flex-Report nicht, und beides zu
+        // vermischen ergab bei Split-Papieren unsinnige Bestandslabels.
+        var relevantTrades = ibkrStockTrades(currentView);
+        var runningQty     = ibkrCarryInQty(currentView);
         var dateRunning = {};
         relevantTrades.forEach(function(t) {
             if (!t.trade_date) return;
             var buy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
-            runningQty += buy ? Math.abs(t.quantity || 0) : -Math.abs(t.quantity || 0);
+            runningQty += buy ? Math.abs(t.adj_quantity || 0) : -Math.abs(t.adj_quantity || 0);
             dateRunning[t.trade_date] = runningQty;
         });
         var agg = {};
@@ -319,7 +312,7 @@ function refreshMobileTradeMarkers() {
             var isBuy = (t.action || '').toUpperCase().indexOf('BUY') >= 0;
             var key = t.trade_date + (isBuy ? '_B' : '_S');
             if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0 };
-            agg[key].qty += Math.abs(t.quantity || 0);
+            agg[key].qty += Math.abs(t.adj_quantity || 0);
         });
         var fmt = function(n) { return n === Math.floor(n) ? n : n.toFixed(1); };
         Object.keys(agg).forEach(function(k) {
