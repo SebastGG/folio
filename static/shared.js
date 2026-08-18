@@ -781,6 +781,56 @@ function setTF(tf) {
     markUnsaved();
 }
 
+/**
+ * Zeitwert einer Chart-Achse als 'YYYY-MM-DD'. LightweightCharts gibt je nach
+ * Datenformat einen String, einen Unix-Zeitstempel oder ein BusinessDay-Objekt
+ * zurück — wir füttern Strings, nehmen aber alle drei entgegen.
+ */
+function chartTimeToStr(t) {
+    if (t == null) return null;
+    if (typeof t === 'string') return t.slice(0, 10);
+    if (typeof t === 'number') return new Date(t * 1000).toISOString().slice(0, 10);
+    if (t.year) {
+        var p = function(n) { return (n < 10 ? '0' : '') + n; };
+        return t.year + '-' + p(t.month) + '-' + p(t.day);
+    }
+    return null;
+}
+
+function _dayDiff(a, b) {
+    return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+}
+function _addDays(d, n) {
+    var t = new Date(d + 'T00:00:00Z');
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+}
+
+/**
+ * Legt den beim Ticker-Wechsel gemerkten Ausschnitt auf die Daten des neuen
+ * Tickers: gleiche Fensterbreite, am rechten Rand ausgerichtet, auf den
+ * verfügbaren Bereich begrenzt.
+ *
+ * Warum nicht die logische Range (Balken-Indizes) übernehmen, wie es vorher lief:
+ * die zählt Kerzen, nicht Zeit. Hat der neue Ticker eine kürzere Historie oder
+ * einen anderen Börsenkalender, zeigt derselbe Index-Bereich einen völlig anderen
+ * Zeitraum — bei einem jungen Papier landete man am Anfang der Reihe statt am
+ * rechten Rand, und die eingestellten „1 Jahr" waren weg.
+ *
+ * Reicht die Historie des neuen Tickers nicht so weit zurück, beginnt das Fenster
+ * am ersten verfügbaren Tag — das entspricht dann genau dem eingepassten Chart.
+ */
+function clampVisibleRange(saved, first, last) {
+    if (!saved || !saved.from || !saved.to || !first || !last) return null;
+    var width = _dayDiff(saved.from, saved.to);
+    if (!(width > 0)) return null;
+    var to   = saved.to > last ? last : saved.to;
+    var from = _addDays(to, -width);
+    if (from < first) from = first;
+    if (from >= to) return null;
+    return { from: from, to: to };
+}
+
 function togInd(name) {
     indicators[name] = !indicators[name];
     applyPeriod();
