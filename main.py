@@ -600,14 +600,27 @@ def update_ticker(ticker: str, conn: sqlite3.Connection):
         ).fetchone()
         last_date = row["last"] if row and row["last"] else "2020-01-01"
 
+        # Nachlauffenster: die letzten Tage werden bei JEDEM Update neu geschrieben,
+        # nicht nur der jüngste. Grund ist das Volumen: ein Tagesbalken, der während
+        # der Handelszeit geholt wurde, trägt nur das Volumen bis zu diesem Moment
+        # (IBKR am 2026-08-17 kurz nach der Eröffnung: 495 Tsd. statt 4,63 Mio zum
+        # Schluss). Wurde derselbe Ticker danach nicht mehr angefasst — weil er in
+        # keinem Basket mit Gewicht ≠ 0 steht —, blieb dieses Teilvolumen für immer
+        # stehen. Yahoo revidiert das konsolidierte Volumen ausserdem noch Stunden
+        # nach Handelsschluss. Ein paar Tage rückwärts kosten nichts: es ist derselbe
+        # Abruf, nur ein paar INSERT OR REPLACE mehr.
+        REWRITE_DAYS = 7
+
         # Historische Daten (1d interval) — liefert abgeschlossene Tage.
-        # calendar.timegm statt mktime: last_date/date_str sind UTC-Datumsangaben,
+        # calendar.timegm statt mktime: last_date/from_date sind UTC-Datumsangaben,
         # mktime hätte sie als Lokalzeit gelesen (auf UTC+X ein Tag Versatz).
         # Ein Tag Vorlauf als Puffer gegen Zeitzonen-Randfälle (Börsen östlich von UTC
         # haben ihren Balken-Zeitstempel genau auf Mitternacht UTC). Zusätzliche Tage
-        # kosten nichts: die Schleife unten überspringt alles vor last_date.
+        # kosten nichts: die Schleife unten überspringt alles vor from_date.
         import calendar
-        period1 = calendar.timegm(time_module.strptime(last_date, "%Y-%m-%d")) - 86400
+        from_date = (datetime.date.fromisoformat(last_date)
+                     - datetime.timedelta(days=REWRITE_DAYS)).isoformat()
+        period1 = calendar.timegm(time_module.strptime(from_date, "%Y-%m-%d")) - 86400
         period2 = int(time_module.time())
         chart = _yahoo_chart(ticker, period1, period2)
         # Yahoo kennt das Symbol, liefert aber keine Kerzen (ausgesetzt, delistet oder
@@ -626,7 +639,7 @@ def update_ticker(ticker: str, conn: sqlite3.Connection):
 
         for i, ts in enumerate(timestamps):
             date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-            if date_str < last_date:  # < statt <= damit heute immer neu geladen wird
+            if date_str < from_date:  # alles im Nachlauffenster wird neu geschrieben
                 continue
             o = ohlcv["open"][i]
             h = ohlcv["high"][i]
@@ -645,29 +658,37 @@ def update_ticker(ticker: str, conn: sqlite3.Connection):
         # Kein Eintrag für Wochenenden: regularMarketPrice wäre der letzte Schlusskurs und
         # würde als Samstag/Sonntag-Kerze in der DB landen.
         live_price = meta.get("regularMarketPrice")
+        # Volumen aus dem Kopfteil mitnehmen: es gehört zum selben Zeitpunkt wie der
+        # Live-Kurs und ist damit nie älter als der Tagesbalken. Nur nach oben
+        # korrigieren — ein Tagesvolumen kann im Lauf des Tages nicht schrumpfen,
+        # und ein leeres/veraltetes Meta-Feld soll den Balken nicht leerräumen.
+        live_vol = meta.get("regularMarketVolume") or 0
         market_time = meta.get("regularMarketTime") or 0
         market_date = datetime.datetime.utcfromtimestamp(market_time).strftime("%Y-%m-%d") if market_time else ""
         if live_price and live_price > 0 and today_obj.weekday() < 5 and market_date == today:
             existing = conn.execute(
-                "SELECT open, high, low FROM prices WHERE ticker=? AND date=?",
+                "SELECT open, high, low, volume FROM prices WHERE ticker=? AND date=?",
                 (ticker, today)
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE prices SET close=?, high=?, low=? WHERE ticker=? AND date=?",
+                    "UPDATE prices SET close=?, high=?, low=?, volume=? WHERE ticker=? AND date=?",
                     (live_price,
                      max(existing["high"], live_price),
                      min(existing["low"],  live_price),
+                     max(existing["volume"] or 0, live_vol),
                      ticker, today)
                 )
             else:
-                # Kein historischer Bar vorhanden (z.B. Feiertag) — Meta als Fallback
+                # Kein historischer Bar vorhanden (z.B. Feiertag) — Meta als Fallback.
+                # Früher stand hier hart 0 als Volumen: die Kerze sah aus wie ein
+                # Handelstag ohne jeden Umsatz.
                 o = meta.get("regularMarketOpen")    or live_price
                 h = meta.get("regularMarketDayHigh") or live_price
                 l = meta.get("regularMarketDayLow")  or live_price
                 conn.execute(
                     "INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)",
-                    (ticker, today, o, max(h, live_price), min(l, live_price), live_price, 0)
+                    (ticker, today, o, max(h, live_price), min(l, live_price), live_price, live_vol)
                 )
             count += 1
 
@@ -922,23 +943,23 @@ async def ensure_prices(ticker: str, request: Request):
     init_db(files["db"])
     conn   = get_db(files["db"])
     try:
-        import datetime
-        row   = conn.execute("SELECT MAX(date) AS last FROM prices WHERE ticker=?", (ticker,)).fetchone()
-        last  = row["last"] if row else None
-        today = datetime.datetime.utcnow().date().strftime("%Y-%m-%d")
-        if (not last) or (last < today):
-            with _last_ensure_lock:
-                key   = f"{user}:{ticker}"
-                stale = time.time() - _last_ensure.get(key, 0) >= 60
-                if stale:
-                    _last_ensure[key] = time.time()
+        # Kein Datums-Vorfilter mehr: früher wurde nur geholt, wenn der jüngste
+        # gespeicherte Tag vor heute lag. Existierte der heutige Balken schon, blieb
+        # er stehen, wie alt er auch war — samt des Volumens, das er in dem Moment
+        # hatte, in dem er zufällig geschrieben wurde. Die 60-s-Drossel je
+        # (Benutzer, Ticker) hält die Yahoo-Last trotzdem klein.
+        with _last_ensure_lock:
+            key   = f"{user}:{ticker}"
+            stale = time.time() - _last_ensure.get(key, 0) >= 60
             if stale:
-                try:
-                    _n, split_factors = update_ticker(ticker, conn)
-                    if split_factors:
-                        _adjust_drawings_for_split(files["data_dir"], "ticker:" + ticker, split_factors)
-                except Exception:
-                    pass
+                _last_ensure[key] = time.time()
+        if stale:
+            try:
+                _n, split_factors = update_ticker(ticker, conn)
+                if split_factors:
+                    _adjust_drawings_for_split(files["data_dir"], "ticker:" + ticker, split_factors)
+            except Exception:
+                pass
         rows = conn.execute(
             "SELECT date,open,high,low,close,volume FROM prices WHERE ticker=? ORDER BY date",
             (ticker,)
