@@ -472,11 +472,18 @@ def _shape_year(d: dict) -> dict:
     }
 
 
-def compute_tax_report_konvex(xml_texts: list[str], target_year: str | None = None) -> dict:
+def compute_tax_report_konvex(xml_texts: list[str], target_year: str | None = None,
+                              only_years=None) -> dict:
     """
     Nimmt mehrere IBKR-Flex-XML-Texte (alle Jahre seit Depoteröffnung), gruppiert
     sie nach Konto und rechnet je Steuerjahr mit voller Historie. Gibt eine
     Jahr→Ergebnis-Struktur für den Jahres-Selektor des Frontends zurück.
+
+    `only_years` (Liste/Menge von Jahren) beschränkt die *Berechnung* auf diese
+    Jahre — die Historie der Vorjahre wird trotzdem verwendet. Ein einzelnes Jahr
+    ist deutlich schneller als der volle Durchlauf über alle Jahre.
+    `available_years` listet immer alle Jahre, die die Dateien abdecken,
+    `computed_years` nur die tatsächlich gerechneten.
 
     Annahme: ein Konto. Bei mehreren unterschiedlichen Konten wird ein Fehler
     gemeldet (bitte pro Konto getrennt hochladen — wie in der Konvex-App).
@@ -504,7 +511,12 @@ def compute_tax_report_konvex(xml_texts: list[str], target_year: str | None = No
     files_years = [m['year'] for m in metas]
     years_out: dict[str, dict] = {}
 
-    for yr in years_present:
+    wanted = [y for y in years_present if (not only_years or y in set(only_years))]
+    if only_years and not wanted:
+        return {'year': None,
+                'error': f'Für {", ".join(sorted(set(only_years)))} liegt keine Flex-XML vor.'}
+
+    for yr in wanted:
         main = None
         for m in metas:
             if m['year'] == yr:
@@ -534,13 +546,14 @@ def compute_tax_report_konvex(xml_texts: list[str], target_year: str | None = No
     if not years_out:
         return {'year': None, 'error': 'Kein Steuerjahr aus den XMLs ableitbar.'}
 
-    available = sorted(years_out.keys())
+    computed = sorted(years_out.keys())
     if not target_year or target_year not in years_out:
-        target_year = available[-1]
+        target_year = computed[-1]
 
     return {
         'year': target_year,
-        'available_years': available,
+        'available_years': years_present,   # alle Jahre, die die Dateien abdecken
+        'computed_years': computed,         # davon jetzt gerechnet
         'years': years_out,
         'files_years': files_years,
         'account': metas[-1].get('account_name') or metas[-1].get('account_id'),

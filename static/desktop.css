@@ -206,13 +206,51 @@ header {
 #view-steuer4 .settings-wrap { align-items: stretch; }
 #view-steuer4 .settings-card { max-width: none; }
 
-/* Gespeicherte-Dateien-Liste (Server-Store) */
-.tax-file-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.tax-file-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 3px 8px 3px 10px; }
-.tax-file-x { color: var(--muted); text-decoration: none; font-weight: 700; line-height: 1;
-  border-radius: 50%; width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; }
-.tax-file-x:hover { color: #fff; background: var(--red); }
+/* Dateibaum der abgelegten Flex-XMLs (Jahr → Dateien) */
+.tax-tree { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: 11px; }
+.tax-tree-empty { padding: 10px 12px; color: var(--muted); }
+.tax-tree-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  border-bottom: 1px solid var(--border); color: var(--muted); }
+.tax-tree-clear { margin-left: auto; color: var(--red); font-size: 10px; text-decoration: none; }
+.tax-tree-clear:hover { text-decoration: underline; }
+.tax-tree-year > summary { display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 6px 12px; list-style: none; user-select: none; }
+.tax-tree-year > summary::-webkit-details-marker { display: none; }
+.tax-tree-year > summary::before { content: '▸'; color: var(--muted); font-size: 9px; }
+.tax-tree-year[open] > summary::before { content: '▾'; }
+.tax-tree-year + .tax-tree-year { border-top: 1px solid var(--border); }
+.tt-year { font-weight: 700; font-variant-numeric: tabular-nums; }
+.tt-count { color: var(--muted); }
+.tt-state { margin-left: auto; font-size: 10px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 10px; padding: 1px 7px; }
+.tt-state.ok { color: var(--green); border-color: var(--green); }
+.tax-file-row { display: flex; align-items: center; gap: 12px; padding: 4px 12px 4px 30px; }
+.tax-file-row:hover { background: var(--surface); }
+.tf-name { min-width: 210px; }
+.tf-meta { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.tf-del { margin-left: auto; color: var(--muted); text-decoration: none; font-weight: 700;
+  border-radius: 50%; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.tf-del:hover { color: #fff; background: var(--red); }
+
+/* PDF-Inhaltsauswahl (Klappmenü neben dem PDF-Knopf) */
+.pdf-opts { position: relative; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.pdf-opts > summary { cursor: pointer; list-style: none; font-size: 11px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; user-select: none; }
+.pdf-opts > summary::-webkit-details-marker { display: none; }
+.pdf-opts[open] > summary { color: var(--text); border-color: var(--accent); }
+.pdf-opts-body { position: absolute; right: 0; top: calc(100% + 4px); z-index: 40; width: 300px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.pdf-opts-title { font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: 6px; }
+.pdf-opt { display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 3px 2px; cursor: pointer; }
+.pdf-opts-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px;
+  padding-top: 8px; border-top: 1px solid var(--border); }
+.pdf-opts-foot a { font-size: 10px; color: var(--accent); text-decoration: none; }
+.pdf-opts-foot button { border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 4px 10px; font-family: inherit; font-size: 11px; cursor: pointer; border-radius: 4px; }
+.pdf-opts-foot button:hover { border-color: var(--accent); }
+
 .settings-h {
   font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
   margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
