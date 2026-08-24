@@ -4879,10 +4879,14 @@ async function screenerInit() {
     // Benutzer), danach das automatische Speichern anhängen — in dieser
     // Reihenfolge, sonst würde das Anwenden selbst als Änderung gespeichert.
     try {
-        var saved = await fetch('/api/screener/settings').then(function (r) { return r.json(); });
+        var sres = await fetch('/api/screener/settings');
+        if (!sres.ok) throw new Error('HTTP ' + sres.status);
+        var saved = await sres.json();
         if (_scrApplySettings(saved)) logIt(6, 'Screener', 'Gespeicherte Einstellungen geladen');
+        else logIt(6, 'Screener', 'Keine gespeicherten Einstellungen — Vorauswahl aktiv');
     } catch (e) {
-        logIt(2, 'Screener', 'Einstellungen laden fehlgeschlagen: ' + e.message);
+        logIt(1, 'Screener', 'Einstellungen laden fehlgeschlagen: ' + e.message);
+        _scrMsg('⚠ Gespeicherte Einstellungen konnten nicht geladen werden: ' + e.message, 'err');
     }
     _scrWireSettingsAutosave();
 
@@ -5034,24 +5038,72 @@ function _scrSettingsChanged() {
     _scrSaveTimer = setTimeout(_scrSaveSettings, 800);
 }
 
+/** Kurze Rückmeldung in der Screener-Statuszeile, die sich selbst wieder aufräumt. */
+function _scrFlash(text, cls, ms) {
+    _scrMsg(text, cls);
+    setTimeout(function () {
+        var el = document.getElementById('scr-msg');
+        if (el && el.textContent === text) _scrMsg('', '');
+    }, ms || 2500);
+}
+
 async function _scrSaveSettings() {
+    _scrSaveTimer = null;
     try {
-        await fetch('/api/screener/settings', {
+        var r = await fetch('/api/screener/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(_scrCollectSettings()),
         });
+        // fetch wirft bei 4xx/5xx NICHT — sonst meldet die Oberfläche „gespeichert",
+        // obwohl der Server nichts geschrieben hat.
+        if (!r.ok) {
+            var detail = '';
+            try { detail = (await r.json()).error || ''; } catch (e) { detail = ''; }
+            var msg = 'Einstellungen konnten nicht gespeichert werden (HTTP ' + r.status
+                + (detail ? ': ' + detail : '') + ')';
+            logIt(1, 'Screener', msg);
+            _scrMsg('⚠ ' + msg, 'err');
+            return;
+        }
         logIt(7, 'Screener', 'Einstellungen gespeichert');
+        _scrFlash('✓ Einstellungen gespeichert', 'ok');
     } catch (e) {
-        logIt(2, 'Screener', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+        logIt(1, 'Screener', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+        _scrMsg('⚠ Einstellungen speichern fehlgeschlagen: ' + e.message, 'err');
+    }
+}
+
+/**
+ * Noch offene Änderung sofort wegschreiben, wenn die Seite verlassen/versteckt
+ * wird — sonst geht verloren, was keine 800 ms alt ist (F5 direkt nach dem Klick).
+ * sendBeacon läuft auch noch, wenn das Dokument schon abgebaut wird.
+ */
+function _scrFlushSettings() {
+    if (!_scrSaveTimer) return;
+    clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
+    try {
+        var body = new Blob([JSON.stringify(_scrCollectSettings())], { type: 'application/json' });
+        if (!navigator.sendBeacon || !navigator.sendBeacon('/api/screener/settings', body)) {
+            _scrSaveSettings();
+        }
+    } catch (e) {
+        logIt(2, 'Screener', 'Einstellungen beim Verlassen nicht gesichert: ' + e.message);
     }
 }
 
 /** Zurück auf die Vorgaben aus screener.py — gespeicherte Datei löschen und neu aufbauen. */
 async function screenerResetSettings() {
+    // Eine noch offene Autosave-Änderung darf nach dem Löschen nicht nachträglich
+    // wieder auf den Server laufen.
+    clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
+    var failed = '';
     try {
-        await fetch('/api/screener/settings', { method: 'DELETE' });
-    } catch (e) { /* auch ohne Serverantwort das Formular zurücksetzen */ }
+        var r = await fetch('/api/screener/settings', { method: 'DELETE' });
+        if (!r.ok) failed = 'HTTP ' + r.status;
+    } catch (e) { failed = e.message; }
     document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
         cb.checked = _SCR.defaults.indexOf(cb.dataset.idx) >= 0;
     });
@@ -5068,7 +5120,13 @@ async function screenerResetSettings() {
     if (un) un.value = 'Mrd $';
     var hintEl = document.getElementById('scr-cap-hint');
     if (hintEl) { hintEl.textContent = '↳ 0 = keine Grenze → alle MarktCaps'; hintEl.style.color = ''; }
-    _scrMsg('Einstellungen auf die Vorgaben zurückgesetzt', 'ok');
+    if (failed) {
+        logIt(1, 'Screener', 'Gespeicherte Einstellungen konnten nicht gelöscht werden: ' + failed);
+        _scrMsg('⚠ Formular zurückgesetzt, aber der Server hat die gespeicherten '
+            + 'Einstellungen nicht gelöscht (' + failed + ')', 'err');
+    } else {
+        _scrMsg('Einstellungen auf die Vorgaben zurückgesetzt', 'ok');
+    }
 }
 
 /** Hängt das automatische Speichern an alle Eingabefelder des Screeners. */
@@ -5084,6 +5142,12 @@ function _scrWireSettingsAutosave() {
         if (!el) return;
         el.addEventListener('input', _scrSettingsChanged);
         el.addEventListener('change', _scrSettingsChanged);
+    });
+    // Offene Änderung sichern, bevor die Seite weg ist (Neuladen, Tab-Wechsel, Schließen)
+    window.addEventListener('pagehide', _scrFlushSettings);
+    window.addEventListener('beforeunload', _scrFlushSettings);
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') _scrFlushSettings();
     });
 }
 
@@ -5124,6 +5188,7 @@ async function screenerStart() {
     // Beim Start festhalten, was gerade eingestellt ist — sonst ginge eine
     // Änderung verloren, die keine 800 ms alt ist (siehe _scrSettingsChanged).
     clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
     _scrSaveSettings();
 
     var body = {
