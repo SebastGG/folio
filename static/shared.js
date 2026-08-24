@@ -241,6 +241,26 @@ function colorCandles(candles) {
 }
 
 /**
+ * Montag der Woche eines 'YYYY-MM-DD'-Datums, gerechnet in UTC.
+ * Bewusst UTC: `new Date('2026-08-24')` ist UTC-Mitternacht, `getDay()/getDate()`
+ * sind aber lokal. In Zeitzonen westlich von Greenwich fiel das Datum dadurch auf
+ * den Vortag zurück und eine Woche zerfiel in zwei Kerzen.
+ */
+function weekStartUTC(dateStr) {
+    var d = new Date(dateStr + 'T12:00:00Z');
+    var dow = d.getUTCDay();                     // 0 = Sonntag
+    d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+    return d.toISOString().slice(0, 10);
+}
+
+/** Beginn der Kerzenperiode, in die ein Datum fällt (1D: der Tag selbst). */
+function periodStartFor(dateStr, tf) {
+    if (tf === '1W') return weekStartUTC(dateStr);
+    if (tf === '1M') return dateStr.slice(0, 7) + '-01';
+    return dateStr;
+}
+
+/**
  * Aggregiert Tageskerzen auf Wochen- oder Monatsebene.
  * @param {Array} candles - Tageskerzen
  * @param {string} tf - '1D', '1W', '1M'
@@ -250,16 +270,7 @@ function aggregateCandles(candles, tf) {
     if (tf === '1D') return candles;
     var groups = {};
     candles.forEach(function(c) {
-        var d = new Date(c.time);
-        var key;
-        if (tf === '1W') {
-            var day = d.getDay();
-            var diff = d.getDate() - day + (day === 0 ? -6 : 1);
-            var mon = new Date(d.setDate(diff));
-            key = mon.toISOString().slice(0, 10);
-        } else { // 1M
-            key = c.time.slice(0, 7) + '-01';
-        }
+        var key = periodStartFor(c.time, tf);
         if (!groups[key]) {
             groups[key] = { time: key, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0 };
         } else {
@@ -723,6 +734,12 @@ function applyPeriod() {
         var cut = new Date();
         cut.setDate(cut.getDate() - currentPeriod);
         var cutStr = cut.toISOString().slice(0, 10);
+        // Bei Wochen-/Monatskerzen bis zum Anfang der angeschnittenen Periode
+        // zurückgehen. Sonst enthält die erste Kerze nur die Tage ab dem Schnitt
+        // (z. B. Mi–Fr), sitzt aber auf dem Montag und sieht aus wie eine volle
+        // Woche — mit falschem Open/High/Low. Fiel der Schnitt zufällig auf einen
+        // Montag, stimmte es; daher trat der Fehler nur manchmal auf.
+        cutStr = periodStartFor(cutStr, currentTF);
         filtered = allCandles.filter(function(c) { return c.time >= cutStr; });
     }
 
@@ -772,10 +789,9 @@ function setPeriod(days) {
 
 function setTF(tf) {
     currentTF = tf;
-    // Sinnvoller Standardzeitraum für Wochen/Monatskerzen
-    if (tf !== '1D' && currentPeriod < 365) {
-        currentPeriod = 0; // All
-    }
+    // Der gewählte Zeitraum bleibt stehen. Früher sprang er beim Umschalten auf
+    // Wochen-/Monatskerzen still auf „Alles" — aus 6 Monaten wurden plötzlich
+    // sechs Jahre, und beim Zurückschalten auf Tageskerzen blieb es dabei.
     applyPeriod();
     loadDrawings(); // Anker auf neue TF-Bars snappen
     markUnsaved();

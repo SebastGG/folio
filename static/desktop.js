@@ -1040,7 +1040,11 @@ function fitView() {
     if (currentPeriod > 0) {
         var cut = new Date();
         cut.setDate(cut.getDate() - currentPeriod);
-        fromDate = cut.toISOString().slice(0, 10);
+        // gleiche Kante wie applyPeriod(): bei Wochen-/Monatskerzen der Anfang der
+        // angeschnittenen Periode, sonst stünde die erste Kerze halb im Bild
+        fromDate = (typeof periodStartFor === 'function')
+            ? periodStartFor(cut.toISOString().slice(0, 10), currentTF)
+            : cut.toISOString().slice(0, 10);
         // nicht vor dem ersten verfügbaren Kerze
         if (fromDate < candles[0].time) fromDate = candles[0].time;
     } else {
