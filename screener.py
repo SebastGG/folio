@@ -386,7 +386,7 @@ def _filter_by_marketcap(tickers, cap_min, cap_max, marketcaps):
 
 # ── Worker ──────────────────────────────────────────────────
 def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
-             filters: list[str]):
+             filters: list[str], blacklist=None):
     try:
         active_indexes = [(n, INDEXES[n]) for n in index_names if n in INDEXES]
         if not active_indexes:
@@ -405,6 +405,9 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
         _log(job_id, f"  Indizes:  {', '.join(n for n, _ in active_indexes)}")
         _log(job_id, f"  Filter:   {', '.join(filters) if filters else 'keine (ganzer Index/Sektor)'}")
         _log(job_id, f"  MarktCap: {cap_label}")
+        gesperrt = set(blacklist or ())
+        if gesperrt:
+            _log(job_id, f"  Blacklist: {len(gesperrt)} Ticker werden ausgeblendet")
         _log(job_id, "═" * 50)
         _log(job_id, "")
         _log(job_id, "📡 Phase 1: Finviz Screening …")
@@ -458,12 +461,24 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
         # leere Sektoren raus
         final = {k: v for k, v in final.items() if v}
 
+        # Blacklist zuletzt: was hier wegfällt, hat der Benutzer beim letzten
+        # Chart-Durchgang aus seinen Screener-Baskets geworfen.
+        blockiert = []
+        if gesperrt:
+            final, blockiert = apply_blacklist(final, gesperrt)
+            _log(job_id, "")
+            if blockiert:
+                _log(job_id, f"🚫 Blacklist: {len(blockiert)} bereits aussortierte Ticker entfernt")
+                _log(job_id, "   " + ", ".join(blockiert))
+            else:
+                _log(job_id, "🚫 Blacklist: nichts zu entfernen")
+
         _log(job_id, "")
         _log(job_id, "═" * 50)
         _log(job_id, "✓ Screening komplett")
         _log(job_id, "═" * 50)
 
-        _set(job_id, status="done", results=final, progress=1.0)
+        _set(job_id, status="done", results=final, blocked=blockiert, progress=1.0)
 
     except Exception as e:
         _set(job_id, status="error", error=str(e))
@@ -472,7 +487,7 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
 
 # ── Öffentliche API ─────────────────────────────────────────
 def start_job(index_names: list[str], cap_min, cap_max, unit: str,
-              filters: list[str] | None = None) -> str:
+              filters: list[str] | None = None, blacklist=None) -> str:
     _gc_old_jobs()
     job_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
@@ -480,13 +495,15 @@ def start_job(index_names: list[str], cap_min, cap_max, unit: str,
             "status":     "running",
             "log":        [],
             "results":    {},
+            "blocked":    [],
             "error":      None,
             "progress":   0.0,
             "created_at": time.time(),
         }
     t = threading.Thread(
         target=_run_job,
-        args=(job_id, index_names, cap_min, cap_max, unit, filters or []),
+        args=(job_id, index_names, cap_min, cap_max, unit, filters or [],
+              set(blacklist or ())),
         daemon=True,
     )
     t.start()
@@ -503,6 +520,7 @@ def get_status(job_id: str) -> dict | None:
             "progress": j["progress"],
             "log":      list(j["log"]),
             "results":  dict(j["results"]),
+            "blocked":  list(j.get("blocked") or []),
             "error":    j["error"],
         }
 
@@ -515,3 +533,31 @@ def format_tradingview(results: dict) -> str:
         if tickers:
             lines.append(f"###{sector}:," + ",".join(tickers) + ",")
     return "\n".join(lines) + "\n"
+
+
+# ── Blacklist (Phase 2) ─────────────────────────────────────
+# Der Durchgang findet in der App selbst statt: das Screening schreibt seine
+# Treffer in Baskets, der Benutzer geht die Charts durch und wirft heraus, was
+# ihm nicht gefällt. Was er herauswirft, merkt sich der Server (main.py:
+# _screener_protokolliere_entfernte) — und beim nächsten Screening taucht es
+# nicht wieder auf, bis die eingestellte Sperrzeit abgelaufen ist.
+
+
+def apply_blacklist(results: dict, blacklist) -> tuple[dict, list[str]]:
+    """Entfernt gesperrte Symbole aus dem Ergebnis.
+
+    → (gefiltertes Ergebnis, sortierte Liste der entfernten Ticker). Die
+    entfernten Ticker kommen mit zurück und nicht nur ihre Anzahl: die
+    Oberfläche zeigt sie an, sonst wäre der Unterschied zwischen „Finviz
+    findet nichts" und „alles schon aussortiert" nicht zu sehen.
+    """
+    gesperrt = set(blacklist or ())
+    if not gesperrt:
+        return dict(results or {}), []
+    gefiltert, raus = {}, set()
+    for sektor, tickers in (results or {}).items():
+        behalten = [t for t in tickers if t not in gesperrt]
+        raus.update(t for t in tickers if t in gesperrt)
+        if behalten:
+            gefiltert[sektor] = behalten
+    return gefiltert, sorted(raus)

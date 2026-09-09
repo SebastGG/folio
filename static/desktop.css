@@ -864,3 +864,32 @@ footer {
 
 .settings-badge.run { background: rgba(45,107,62,.12); color: var(--accent); }
 .settings-badge.err { background: rgba(192,57,43,.10); color: var(--red); }
+
+/* ── Screener: Blacklist ─────────────────────────────────────────────────── */
+.scr-blocked {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  margin-bottom: 10px; padding: 7px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+}
+.scr-blocked-head { font-size: 11px; font-weight: 700; color: var(--muted); }
+.scr-blocked-list {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; color: var(--muted);
+}
+
+.scr-bl-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; }
+.scr-bl-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 4px 2px 7px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+}
+.scr-bl-tick {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.scr-bl-age { font-size: 9px; color: var(--muted); }
+.scr-bl-x {
+  border: none; background: none; cursor: pointer; padding: 0 3px;
+  font-size: 13px; line-height: 1; color: var(--muted);
+}
+.scr-bl-x:hover { color: var(--red); }

@@ -4733,6 +4733,7 @@ async function screenerInit() {
     _scrWireSettingsAutosave();
 
     updateHint();
+    screenerBlacklistLoad();
     screenerResume();
 }
 
@@ -4962,6 +4963,7 @@ async function screenerStart() {
     document.getElementById('scr-btn-baskets').disabled = true;
     document.getElementById('scr-log-card').style.display = '';
     document.getElementById('scr-results-card').style.display = 'none';
+    _scrRenderBlocked(null);            // Hinweis des letzten Laufs wegräumen
     document.getElementById('scr-log').textContent = '';
     document.getElementById('scr-progress-wrap').style.display = '';
     document.getElementById('scr-progress-bar').style.width = '0%';
@@ -5051,6 +5053,7 @@ async function _scrPoll() {
         document.getElementById('scr-btn-export').disabled = false;
         document.getElementById('scr-btn-baskets').disabled = false;
         _scrRenderResults(_SCR.results);
+        _scrRenderBlocked(s.blocked);
     } catch (e) {
         _SCR.pollTimer = setTimeout(_scrPoll, 3000);
     }
@@ -5147,7 +5150,9 @@ async function screenerToBaskets() {
     });
 
     try {
-        await saveBasketsToServer();
+        // 'screener' = kein Blacklist-Protokoll für diesen Schreibvorgang,
+        // siehe saveBasketsToServer() in shared.js.
+        await saveBasketsToServer('screener');
         if (typeof renderBasketSelect === 'function') renderBasketSelect();
         var summary = [];
         if (created) summary.push(created + ' neu');
@@ -5215,4 +5220,137 @@ async function screenerDeleteBaskets() {
         logIt(1, 'Screener', 'Löschen konnte nicht gespeichert werden: ' + e.message);
         _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
     }
+}
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+ *  SCREENER — Blacklist
+ *
+ *  Die Einträge entstehen nicht hier, sondern serverseitig beim Speichern der
+ *  Config: was aus einem Screener-Basket verschwindet, hat der Benutzer beim
+ *  Chart-Durchgang aussortiert (main.py: _screener_protokolliere_entfernte).
+ *  Diese Seite zeigt das Ergebnis und gibt einzelne Werte wieder frei.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* Kleiner Bauhelfer — folio hat keinen globalen, und der Abschnitt braucht ein
+   Dutzend Elemente. Gleiche Machart wie _scrRenderResults(). */
+function _scrEl(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+}
+
+function _scrBlMsg(text, art) {
+    var el = document.getElementById('scr-bl-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'settings-msg' + (art ? ' ' + art : '');
+}
+
+async function screenerBlacklistLoad() {
+    var liste = document.getElementById('scr-bl-list');
+    if (!liste) return;
+    try {
+        var d = await fetch('/api/screener/blacklist').then(function (r) { return r.json(); });
+    } catch (e) {
+        _scrBlMsg('Blacklist nicht erreichbar', 'err');
+        return;
+    }
+    var cd = document.getElementById('scr-bl-cooldown');
+    var ak = document.getElementById('scr-bl-active');
+    if (cd) cd.value = d.cooldown_months || 6;
+    if (ak) ak.checked = d.active !== false;
+
+    document.getElementById('scr-bl-count').textContent =
+        (d.count || 0) + (d.count === 1 ? ' Wert' : ' Werte');
+
+    liste.innerHTML = '';
+    if (!d.count) {
+        liste.appendChild(_scrEl('div', 'settings-hint',
+            'Noch nichts gesperrt. Entferne einen Wert aus einem Screener-Basket — '
+            + 'er steht dann hier.'));
+        return;
+    }
+    (d.entries || []).forEach(function (e) {
+        var alter = (e.age_days === null || e.age_days === undefined) ? ''
+            : (e.age_days < 30 ? e.age_days + ' Tage'
+                               : Math.floor(e.age_days / 30) + ' Mon.');
+        var item = _scrEl('span', 'scr-bl-item');
+        item.title = (e.from ? 'entfernt aus: ' + e.from + '\n' : '') + 'gesperrt seit ' + e.date;
+        item.appendChild(_scrEl('span', 'scr-bl-tick', e.ticker));
+        item.appendChild(_scrEl('span', 'scr-bl-age', alter));
+        var x = _scrEl('button', 'scr-bl-x', '×');
+        x.type  = 'button';
+        x.title = e.ticker + ' wieder zulassen';
+        x.onclick = function () { screenerBlacklistFree(e.ticker); };
+        item.appendChild(x);
+        liste.appendChild(item);
+    });
+}
+
+/** Sperrzeit und Ein/Aus — wird bei jeder Änderung der beiden Felder gerufen. */
+async function screenerBlacklistSave() {
+    var cd = document.getElementById('scr-bl-cooldown');
+    var ak = document.getElementById('scr-bl-active');
+    var body = {
+        cooldown_months: Math.max(1, Math.min(parseInt(cd && cd.value, 10) || 6, 120)),
+        active: !!(ak && ak.checked),
+    };
+    try {
+        var r = await fetch('/api/screener/blacklist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(function (r) { return r.json(); });
+        if (!r.ok) { _scrBlMsg(r.error || 'Speichern fehlgeschlagen', 'err'); return; }
+        if (cd) cd.value = r.cooldown_months;      // serverseitig begrenzt
+        _scrBlMsg('gespeichert', 'ok');
+        // Die Sperrzeit entscheidet, was noch wirksam ist — Liste neu holen.
+        screenerBlacklistLoad();
+    } catch (e) {
+        _scrBlMsg('Speichern fehlgeschlagen: ' + e, 'err');
+    }
+}
+
+/** Einen Wert wieder zulassen (Whitelist). */
+async function screenerBlacklistFree(ticker) {
+    try {
+        var r = await fetch('/api/screener/blacklist/' + encodeURIComponent(ticker),
+                            { method: 'DELETE' }).then(function (r) { return r.json(); });
+        if (!r.ok) { _scrBlMsg(r.error || 'Freigeben fehlgeschlagen', 'err'); return; }
+        logIt(3, 'Screener', ticker + ' wieder zugelassen');
+        _scrBlMsg(ticker + ' wieder zugelassen', 'ok');
+        screenerBlacklistLoad();
+    } catch (e) {
+        _scrBlMsg('Freigeben fehlgeschlagen: ' + e, 'err');
+    }
+}
+
+async function screenerBlacklistClear() {
+    var anzahl = (document.getElementById('scr-bl-count') || {}).textContent || '';
+    if (!confirm('Alle gesperrten Werte wieder zulassen (' + anzahl + ')?\n\n'
+               + 'Beim nächsten Screening können sie wieder in den Baskets landen.')) return;
+    try {
+        var r = await fetch('/api/screener/blacklist', { method: 'DELETE' })
+                        .then(function (r) { return r.json(); });
+        if (!r.ok) { _scrBlMsg(r.error || 'Leeren fehlgeschlagen', 'err'); return; }
+        logIt(3, 'Screener', 'Blacklist geleert (' + r.removed + ')');
+        _scrBlMsg(r.removed + ' wieder zugelassen', 'ok');
+        screenerBlacklistLoad();
+    } catch (e) {
+        _scrBlMsg('Leeren fehlgeschlagen: ' + e, 'err');
+    }
+}
+
+/** Hinweis über den Ergebnissen: was die Blacklist aus diesem Lauf ferngehalten hat. */
+function _scrRenderBlocked(blocked) {
+    var box = document.getElementById('scr-blocked');
+    if (!box) return;
+    if (!blocked || !blocked.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.innerHTML = '';
+    box.appendChild(_scrEl('span', 'scr-blocked-head',
+        '🚫 ' + blocked.length + ' gesperrt, nicht in den Baskets:'));
+    box.appendChild(_scrEl('span', 'scr-blocked-list', blocked.join(', ')));
+    box.style.display = '';
 }

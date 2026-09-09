@@ -923,13 +923,26 @@ async function loadConfig() {
 /**
  * Speichert Konfiguration auf Server (atomar via main.py).
  */
-async function saveBasketsToServer() {
+async function saveBasketsToServer(quelle) {
     try {
-        await fetch('/api/config', {
+        // quelle='screener': der Screener schreibt seine Baskets selbst neu.
+        // Der Server protokolliert dann nicht, was dabei aus einem Basket
+        // verschwindet — das wären keine Absagen des Benutzers, sondern Werte,
+        // die diesmal einfach kein Treffer mehr waren.
+        var url = '/api/config' + (quelle ? '?quelle=' + encodeURIComponent(quelle) : '');
+        var r = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance, layout: _layout || {} })
         });
+        // Aus einem Screener-Basket entfernte Werte wandern serverseitig auf die
+        // Blacklist. Ins Protokoll, damit das nicht unsichtbar passiert.
+        var res = await r.json();
+        var gesperrt = (res && res.blacklisted) || [];
+        if (gesperrt.length && typeof logIt === 'function') {
+            logIt(3, 'Screener', gesperrt.length + ' aussortiert und gesperrt: ' + gesperrt.join(', '));
+        }
+        return res;
     } catch (e) {
         console.warn('saveBasketsToServer failed:', e);
     }
