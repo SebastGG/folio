@@ -616,7 +616,40 @@
       <h2 class="settings-h">Ergebnisse
         <span id="scr-result-count" class="settings-badge">—</span>
       </h2>
+      <div id="scr-blocked" class="scr-blocked" style="display:none;"></div>
       <div id="scr-results" class="scr-results"></div>
+    </div>
+
+    <div class="settings-card scr-card" id="scr-bl-card">
+      <h2 class="settings-h">Blacklist
+        <span id="scr-bl-count" class="settings-badge">—</span>
+      </h2>
+      <p class="settings-hint">
+        Was du aus einem Screener-Basket entfernst, wird hier vermerkt — und beim nächsten
+        Screening nicht wieder in die Baskets geschrieben, solange die Sperrzeit läuft.
+        Gezählt wird nur das Entfernen einzelner Werte: löschst du einen ganzen Basket,
+        ist das Aufräumen und keine Absage. Über das × bekommt ein Wert seine Chance zurück.
+      </p>
+
+      <div class="scr-row">
+        <span class="scr-label">Sperrzeit</span>
+        <div class="scr-cap">
+          <label><input type="number" id="scr-bl-cooldown" min="1" max="120" step="1" value="6"
+                        onchange="screenerBlacklistSave()"> Monate</label>
+          <label><input type="checkbox" id="scr-bl-active" checked onchange="screenerBlacklistSave()">
+            beim Screening anwenden</label>
+          <span class="settings-hint">↳ ein Monat = 30 Tage · danach darf der Wert wieder auftauchen</span>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button class="scr-btn" onclick="screenerBlacklistLoad()">↻ Aktualisieren</button>
+        <button class="scr-btn scr-btn-clean" onclick="screenerBlacklistClear()"
+                title="Gibt alle gesperrten Werte wieder frei. Die Sperrzeit-Einstellung bleibt.">🗑 Blacklist leeren</button>
+        <span id="scr-bl-msg" class="settings-msg"></span>
+      </div>
+
+      <div id="scr-bl-list" class="scr-bl-list"></div>
     </div>
 
     </div><!-- end .scr-main -->

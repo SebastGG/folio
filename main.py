@@ -1282,10 +1282,24 @@ async def get_config(request: Request):
 
 @app.post("/api/config")
 async def set_config(request: Request):
-    user = get_user(request)
+    """Speichert die Config und merkt sich nebenbei, was aus Screener-Baskets
+    verschwunden ist (→ Blacklist, siehe _screener_protokolliere_entfernte).
+
+    `?quelle=screener` schaltet das Protokoll für diesen Aufruf ab: wenn der
+    Screener seine Baskets selbst neu schreibt, fehlen dort Werte, die diesmal
+    schlicht kein Treffer mehr waren — das ist keine Absage des Benutzers.
+    """
+    user  = get_user(request)
     files = get_user_files(user)
-    save_config_data(files["config"], await request.json())
-    return JSONResponse(content={"ok": True})
+    neu   = await request.json()
+    gesperrt = []
+    if request.query_params.get("quelle") != "screener":
+        try:
+            gesperrt = _screener_protokolliere_entfernte(user, load_config(files["config"]), neu)
+        except Exception as e:
+            print(f"Blacklist-Protokoll fehlgeschlagen: {e}")   # Speichern geht trotzdem weiter
+    save_config_data(files["config"], neu)
+    return JSONResponse(content={"ok": True, "blacklisted": gesperrt})
 
 @app.get("/api/notes")
 async def get_notes(request: Request):
@@ -2629,6 +2643,216 @@ async def screener_settings_delete(request: Request):
     return JSONResponse(content={"ok": True})
 
 
+# ── Screener-Blacklist (pro Benutzer) ─────────────────────────────────────────
+# Der Ablauf: Screening → Treffer landen in Baskets → der Benutzer geht die
+# Charts durch und wirft heraus, was ihm nicht gefällt → beim nächsten
+# Screening kommt das Herausgeworfene nicht wieder, bis die Sperrzeit um ist.
+#
+# Erfasst wird das Herauswerfen **beim Speichern der Config** und nicht über
+# einen eigenen Knopf: gelöscht wird mal in der Stammdatenliste, mal über das
+# Chart, und jeder dieser Wege endet in POST /api/config. Ein Knopf müsste an
+# jedem einzelnen davon hängen und würde beim nächsten Weg vergessen.
+#
+# Eigene Datei aus demselben Grund wie die Screener-Einstellungen: POST
+# /api/config schreibt die Config als Ganzes und kennt den Screener nicht.
+
+SCREENER_BASKET_PREFIX     = "Screener "   # Präfix aus screenerToBaskets()
+BLACKLIST_COOLDOWN_DEFAULT = 6             # Monate
+BLACKLIST_COOLDOWN_MAX     = 120
+_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
+
+def _screener_ticker(roh) -> str | None:
+    """Symbol aus einer Basket-Angabe — oder None, wenn es keins ist."""
+    t = str(roh or "").strip().upper()
+    return t if _TICKER_RE.match(t) else None
+
+
+def _screener_blacklist_path(user: str) -> str:
+    return os.path.join(get_user_dir(user), "screener_blacklist.json")
+
+
+def _screener_blacklist_load(user: str) -> dict:
+    """Datei lesen und auf die bekannte Form bringen. Fehlt sie, gelten die Vorgaben."""
+    daten = {"cooldown_months": BLACKLIST_COOLDOWN_DEFAULT, "active": True, "entries": {}}
+    path = _screener_blacklist_path(user)
+    if not os.path.exists(path):
+        return daten
+    try:
+        with open(path) as f:
+            roh = json.load(f)
+    except (OSError, ValueError):
+        return daten
+    try:
+        cd = int(roh.get("cooldown_months", BLACKLIST_COOLDOWN_DEFAULT))
+    except (TypeError, ValueError):
+        cd = BLACKLIST_COOLDOWN_DEFAULT
+    daten["cooldown_months"] = max(1, min(cd, BLACKLIST_COOLDOWN_MAX))
+    daten["active"] = bool(roh.get("active", True))
+    for t, e in (roh.get("entries") or {}).items():
+        sym = _screener_ticker(t)
+        if not sym:
+            continue
+        if isinstance(e, str):          # knappe Form: nur das Datum
+            e = {"date": e}
+        if not isinstance(e, dict):
+            continue
+        daten["entries"][sym] = {"date": str(e.get("date") or "")[:10],
+                                 "from":  str(e.get("from") or "")[:120]}
+    return daten
+
+
+def _screener_blacklist_save(user: str, daten: dict):
+    path = _screener_blacklist_path(user)
+    tmp  = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"cooldown_months": daten.get("cooldown_months", BLACKLIST_COOLDOWN_DEFAULT),
+                   "active":  bool(daten.get("active", True)),
+                   "entries": daten.get("entries") or {}}, f, indent=2)
+    shutil.move(tmp, path)
+
+
+def _datum_ts(datum):
+    """„YYYY-MM-DD" → Zeitstempel. None, wenn das Feld leer oder unlesbar ist."""
+    try:
+        return time.mktime(time.strptime(str(datum)[:10], "%Y-%m-%d"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _screener_aktive_sperren(daten: dict) -> dict:
+    """Die noch wirksamen Einträge. Ein Monat zählt als 30 Tage — die Sperrzeit
+    ist eine Hausnummer und keine Frist, auf die es taggenau ankäme. Einträge
+    ohne lesbares Datum bleiben wirksam, statt still zu verfallen."""
+    monate = int(daten.get("cooldown_months") or BLACKLIST_COOLDOWN_DEFAULT)
+    grenze = time.time() - monate * 30 * 86400
+    aktiv = {}
+    for sym, e in (daten.get("entries") or {}).items():
+        ts = _datum_ts(e.get("date"))
+        if ts is None or ts > grenze:
+            aktiv[sym] = e
+    return aktiv
+
+
+def _screener_basket_inhalte(cfg: dict) -> dict:
+    """{basket_id: (Name, set(Ticker))} für alle Baskets mit dem Screener-Präfix."""
+    out = {}
+    for bid, b in ((cfg or {}).get("baskets") or {}).items():
+        if not isinstance(b, dict):
+            continue
+        name = str(b.get("name") or "")
+        if not name.startswith(SCREENER_BASKET_PREFIX):
+            continue
+        out[bid] = (name, {t for t in (b.get("weights") or {}) if _screener_ticker(t)})
+    return out
+
+
+def _screener_protokolliere_entfernte(user: str, alt: dict, neu: dict) -> list[str]:
+    """Vergleicht die Screener-Baskets vor und nach dem Speichern und schreibt
+    jedes entfernte Symbol mit dem heutigen Datum in die Blacklist.
+
+    Nur Baskets, die es **vorher und nachher** gibt: wer einen ganzen Basket
+    löscht (oder den Knopf „Screener-Baskets löschen" drückt), sortiert nicht
+    hundert Werte aus, sondern räumt auf. Ein bereits gesperrtes Symbol behält
+    sein altes Datum — sonst verlängerte jedes erneute Aufräumen die Sperre.
+    """
+    vorher, nachher = _screener_basket_inhalte(alt), _screener_basket_inhalte(neu)
+    entfernt = {}
+    for bid, (name, tickers) in vorher.items():
+        if bid not in nachher:
+            continue
+        for t in tickers - nachher[bid][1]:
+            entfernt.setdefault(t, name)
+    if not entfernt:
+        return []
+
+    daten = _screener_blacklist_load(user)
+    # Abgelaufene fallen beim Schreiben heraus: sie wirken ohnehin nicht mehr.
+    daten["entries"] = _screener_aktive_sperren(daten)
+    heute = time.strftime("%Y-%m-%d")
+    neu_gesperrt = []
+    for sym, basket in sorted(entfernt.items()):
+        if sym in daten["entries"]:
+            continue
+        daten["entries"][sym] = {"date": heute, "from": basket}
+        neu_gesperrt.append(sym)
+    _screener_blacklist_save(user, daten)
+    return neu_gesperrt
+
+
+@app.get("/api/screener/blacklist")
+async def screener_blacklist_get(request: Request):
+    """Die wirksamen Sperren, neueste zuerst. Abgelaufene stehen nicht drin."""
+    user  = get_user(request)
+    daten = _screener_blacklist_load(user)
+    jetzt = time.time()
+    liste = []
+    for sym, e in _screener_aktive_sperren(daten).items():
+        ts = _datum_ts(e.get("date"))
+        liste.append({
+            "ticker":   sym,
+            "date":     e.get("date") or "",
+            "from":     e.get("from") or "",
+            "age_days": int((jetzt - ts) // 86400) if ts else None,
+        })
+    liste.sort(key=lambda x: (x["date"], x["ticker"]), reverse=True)
+    return {"ok": True,
+            "cooldown_months": daten["cooldown_months"],
+            "active":          daten["active"],
+            "count":           len(liste),
+            "entries":         liste}
+
+
+@app.post("/api/screener/blacklist")
+async def screener_blacklist_set(request: Request):
+    """Sperrzeit und Ein/Aus. Die Einträge selbst entstehen beim Aufräumen der
+    Baskets, nicht hier."""
+    user  = get_user(request)
+    body  = await request.json()
+    daten = _screener_blacklist_load(user)
+    if "cooldown_months" in body:
+        try:
+            cd = int(body.get("cooldown_months"))
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "Sperrzeit muss eine Zahl sein"},
+                                status_code=400)
+        daten["cooldown_months"] = max(1, min(cd, BLACKLIST_COOLDOWN_MAX))
+    if "active" in body:
+        daten["active"] = bool(body.get("active"))
+    _screener_blacklist_save(user, daten)
+    return {"ok": True,
+            "cooldown_months": daten["cooldown_months"],
+            "active":          daten["active"]}
+
+
+@app.delete("/api/screener/blacklist")
+async def screener_blacklist_clear(request: Request):
+    """Alles freigeben. Die Einstellungen bleiben, nur die Einträge gehen weg."""
+    user   = get_user(request)
+    daten  = _screener_blacklist_load(user)
+    anzahl = len(_screener_aktive_sperren(daten))
+    daten["entries"] = {}
+    _screener_blacklist_save(user, daten)
+    return {"ok": True, "removed": anzahl}
+
+
+@app.delete("/api/screener/blacklist/{ticker}")
+async def screener_blacklist_free(ticker: str, request: Request):
+    """Einen einzelnen Wert wieder zulassen. Fliegt er erneut aus einem
+    Screener-Basket, steht er mit neuem Datum wieder hier."""
+    user = get_user(request)
+    sym  = _screener_ticker(ticker)
+    if not sym:
+        return JSONResponse({"ok": False, "error": "Kein gültiges Symbol"}, status_code=400)
+    daten = _screener_blacklist_load(user)
+    if sym not in daten["entries"]:
+        return JSONResponse({"ok": False, "error": f"{sym} steht nicht auf der Blacklist"},
+                            status_code=404)
+    daten["entries"].pop(sym)
+    _screener_blacklist_save(user, daten)
+    return {"ok": True, "ticker": sym}
+
+
 @app.post("/api/screener/run")
 async def screener_run(request: Request):
     user = get_user(request)
@@ -2659,9 +2883,15 @@ async def screener_run(request: Request):
         raw_filters = []
     filters = screener.sanitize_filters(raw_filters)
 
-    job_id = screener.start_job(index_names, cap_min, cap_max, unit, filters)
+    # Gesperrte Werte gar nicht erst ausliefern: sie hat der Benutzer beim
+    # letzten Durchgang aus den Baskets geworfen.
+    bl = _screener_blacklist_load(user)
+    gesperrt = set(_screener_aktive_sperren(bl)) if bl.get("active", True) else set()
+
+    job_id = screener.start_job(index_names, cap_min, cap_max, unit, filters,
+                                blacklist=gesperrt)
     _save_last_screener_job(user, job_id)
-    return {"ok": True, "job_id": job_id}
+    return {"ok": True, "job_id": job_id, "blacklist": len(gesperrt)}
 
 
 @app.get("/api/screener/last")
