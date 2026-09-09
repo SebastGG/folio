@@ -30,7 +30,7 @@ var PAGES = [
     {
         id: 'steuer4', label: 'IBKR Steuer Report', icon: '🏛️',
         // Gespeicherte XMLs beim Öffnen automatisch auswerten (einmal/Session)
-        onShow: function () { if (typeof taxAutoload === 'function') taxAutoload('steuer4'); }
+        onShow: function () { if (typeof taxStoreInit === 'function') taxStoreInit(); }
     },
     {
         id: 'screener', label: 'Screener', icon: '🔍',

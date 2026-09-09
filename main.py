@@ -24,6 +24,7 @@ import os
 import re
 import json
 import time
+import hashlib
 import sqlite3
 import shutil
 import tempfile
@@ -248,6 +249,123 @@ async def _tax_collect_texts(user: str, kind: str, files):
         _tax_store_add(user, kind, items)
         return _tax_store_load(user, kind), "upload"
     return _tax_store_load(user, kind), "stored"
+
+
+# ── Steuer-Dateien: Kopfdaten für den Dateibaum + Ergebnis-Cache ────────────────
+# Die Engine rechnet jedes Steuerjahr mit voller Historie durch und braucht dafür
+# Sekunden bis Minuten. Deshalb: (1) die XMLs liegen einfach im Bestand und werden
+# nur auf Knopfdruck ausgewertet, (2) jedes gerechnete Jahr landet als JSON im
+# Cache. Cache-Schlüssel ist ein Fingerabdruck des GESAMTEN Bestands (Name+Größe+
+# mtime) — jedes Jahr hängt über die Historie an allen älteren Dateien, eine neue
+# Datei macht also alle Jahre neu.
+
+def _flex_xml_head_meta(text: str) -> dict:
+    """Konto/Zeitraum/Jahr aus dem Kopf einer Flex-XML (ohne vollen Parse).
+    Verträgt beide IBKR-Datumsformate: 20250131 und 2025-01-31."""
+    head = text[:200_000]
+    def _d(attr):
+        m = re.search(attr + r'="?(\d{4})-?(\d{2})-?(\d{2})', head)
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
+    frm, to = _d("fromDate"), _d("toDate")
+    acct = re.search(r'accountId="([^"]*)"', head)
+    name = re.search(r'<AccountInformation[^>]*\bname="([^"]*)"', head)
+    year = (to or frm)[:4]
+    if not year:
+        m = re.search(r'period="?(\d{4})', head)
+        year = m.group(1) if m else ""
+    return {"account_id": acct.group(1) if acct else "",
+            "account_name": name.group(1) if name else "",
+            "from_date": frm, "to_date": to, "year": year}
+
+
+def _tax_store_entries(user: str, kind: str = "xml") -> list[dict]:
+    """Dateibaum-Daten: je gespeicherter Datei Name, Größe, Zeitstempel, Konto, Zeitraum."""
+    d = _tax_store_dir(user, kind)
+    out = []
+    for name in _tax_store_list(user, kind):
+        p = os.path.join(d, name)
+        st = os.stat(p)
+        meta = {}
+        if kind == "xml":
+            try:
+                with open(p, "rb") as fh:
+                    meta = _flex_xml_head_meta(fh.read(200_000).decode("utf-8-sig", errors="replace"))
+            except OSError:
+                meta = {}
+        out.append({"name": name, "size": st.st_size, "mtime": st.st_mtime, **meta})
+    return out
+
+
+def _tax_store_fingerprint(user: str, kind: str = "xml") -> str:
+    """Kurzer Hash über den kompletten Bestand — ändert sich bei jeder Änderung."""
+    d = _tax_store_dir(user, kind)
+    parts = []
+    for name in _tax_store_list(user, kind):
+        st = os.stat(os.path.join(d, name))
+        parts.append(f"{name}:{st.st_size}:{int(st.st_mtime)}")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _tax_cache_dir(user: str, fp: str) -> str:
+    d = os.path.join(get_user_dir(user), "tax_files", "cache", fp)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _tax_cache_get(user: str, fp: str, year: str):
+    p = os.path.join(_tax_cache_dir(user, fp), f"{year}.json")
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _tax_cache_put(user: str, fp: str, year: str, data: dict) -> None:
+    d = _tax_cache_dir(user, fp)
+    try:
+        with open(os.path.join(d, f"{year}.json"), "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"tax cache write failed ({year}): {e}")
+    # Caches vergangener Bestände wegräumen
+    root = os.path.dirname(d)
+    for other in os.listdir(root):
+        if other != fp:
+            shutil.rmtree(os.path.join(root, other), ignore_errors=True)
+
+
+def _tax_cache_years(user: str, fp: str) -> list[str]:
+    d = _tax_cache_dir(user, fp)
+    return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".json"))
+
+
+def _tax_konvex_years(user: str, targets: list[str], fp: str) -> dict:
+    """{Jahr: Ergebnis} für die gewünschten Jahre — aus dem Cache, Fehlendes wird
+    gerechnet (ein Engine-Lauf für alle fehlenden Jahre) und gecacht. Blockierend."""
+    import tax_engine_konvex
+    out, missing = {}, []
+    for y in targets:
+        hit = _tax_cache_get(user, fp, y)
+        if hit:
+            out[y] = hit
+        else:
+            missing.append(y)
+    meta = {}
+    if missing:
+        texts = _tax_store_load(user, "xml")
+        res = tax_engine_konvex.compute_tax_report_konvex(
+            texts, target_year=missing[-1], only_years=missing)
+        if res.get("error"):
+            raise ValueError(res["error"])
+        for y, data in (res.get("years") or {}).items():
+            _tax_cache_put(user, fp, y, data)
+            out[y] = data
+        meta = {"account": res.get("account", ""), "base_currency": res.get("base_currency", "EUR")}
+    return {"years": out, "computed": sorted(missing), "meta": meta}
+
 
 # ── Auth-Middleware + OAuth-Routen ──────────────────────────────────────────────
 _AUTH_PUBLIC = ("/health", "/login", "/callback", "/logout", "/favicon.ico")
@@ -2362,36 +2480,86 @@ async def tax_report_xml(request: Request, files: list[UploadFile] = File(defaul
 # prinzip (Cross-Year), offizielle Anlage-KAP-Zeilennummern. Je Steuerjahr mit voller
 # Historie gerechnet. Stateless.
 
+def _tax_targets(user: str, year: str) -> tuple[list[str], list[str]]:
+    """(verfügbare Jahre, zu rechnende Jahre) aus dem Bestand ableiten.
+    year = "all" → alle, "2024" → nur dieses, "" → das jüngste."""
+    available = sorted({e["year"] for e in _tax_store_entries(user, "xml") if e.get("year")})
+    if not available:
+        return [], []
+    if year == "all":
+        return available, available
+    if year and year in available:
+        return available, [year]
+    return available, available[-1:]
+
+
 @app.post("/api/tax/report-konvex")
-async def tax_report_konvex(request: Request, files: list[UploadFile] = File(default=[]), year: str = ""):
-    import asyncio
-    import tax_engine_konvex
+async def tax_report_konvex(request: Request, year: str = ""):
+    """Rechnet den Steuerreport aus dem gespeicherten XML-Bestand — auf Knopfdruck,
+    für ein Jahr (year=YYYY), alle Jahre (year=all) oder das jüngste (year leer).
+    Bereits gerechnete Jahre kommen aus dem Cache, solange der Bestand unverändert ist."""
     user = get_user(request)
 
-    # Sorte "xml" wird mit Steuer ++ geteilt; ohne Upload Auto-Laden des Bestands.
-    texts, source = await _tax_collect_texts(user, "xml", files)
-    if not texts:
+    available, targets = _tax_targets(user, year)
+    if not targets:
         return JSONResponse({"ok": False, "no_files": True,
                              "error": "Keine gespeicherten Dateien — bitte Flex-XML hochladen."})
 
-    def _run():
-        return tax_engine_konvex.compute_tax_report_konvex(texts, target_year=(year or None))
-
+    fp = _tax_store_fingerprint(user, "xml")
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _run)   # CPU-/IO-lastig → Threadpool
-        if result.get("error"):
-            return JSONResponse({"ok": False, "error": result["error"]}, status_code=422)
-        if not result.get("year"):
-            return JSONResponse(
-                {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
-                                       "Statements (XML) seit Depoteröffnung?"},
-                status_code=422)
-        return JSONResponse({"ok": True, "source": source,
-                             "stored_files": _tax_store_list(user, "xml"), **result})
+        res = await run_in_threadpool(_tax_konvex_years, user, targets, fp)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=422)
     except Exception as e:
         print(f"tax_report_konvex error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    years_out = res["years"]
+    if not years_out:
+        return JSONResponse(
+            {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
+                                   "Statements (XML) seit Depoteröffnung?"}, status_code=422)
+    sel = targets[-1] if targets[-1] in years_out else sorted(years_out)[-1]
+    entries = _tax_store_entries(user, "xml")
+    account = res["meta"].get("account") or next(
+        (e.get("account_name") or e.get("account_id") for e in reversed(entries)
+         if e.get("account_name") or e.get("account_id")), "")
+    return JSONResponse({
+        "ok": True,
+        "source": "stored",
+        "year": sel,
+        "years": years_out,
+        "available_years": available,
+        "computed_years": sorted(years_out),
+        "recomputed": res["computed"],          # tatsächlich neu gerechnet (Rest: Cache)
+        "cached_years": _tax_cache_years(user, fp),
+        "account": account,
+        "base_currency": res["meta"].get("base_currency")
+                         or years_out[sel].get("base_currency", "EUR"),
+        "stored_files": _tax_store_list(user, "xml"),
+        "files": entries,
+    })
+
+
+@app.post("/api/tax/upload")
+async def tax_upload(request: Request, files: list[UploadFile] = File(default=[]), kind: str = "xml"):
+    """Legt hochgeladene Statements im Bestand ab — ohne zu rechnen. Gleichnamige
+    Dateien werden ersetzt, andere bleiben; gerechnet wird erst auf Knopfdruck."""
+    user = get_user(request)
+    if kind not in _TAX_STORE_KINDS:
+        return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
+    items = []
+    for f in (files or []):
+        raw = await f.read()
+        if raw:
+            items.append((f.filename or "datei", raw))
+    if not items:
+        return JSONResponse({"ok": False, "error": "Keine Dateien empfangen."}, status_code=422)
+    _tax_store_add(user, kind, items)
+    return JSONResponse({"ok": True, "kind": kind, "added": len(items),
+                         "files": _tax_store_entries(user, kind),
+                         "stored_files": _tax_store_list(user, kind),
+                         "cached_years": _tax_cache_years(user, _tax_store_fingerprint(user, kind))})
 
 
 # ── Steuer +++ : Flex-XML automatisch von IBKR holen ────────────────────────────
@@ -2410,7 +2578,6 @@ def _flex_stmt_year(xml_text: str) -> str | None:
 @app.post("/api/tax/fetch-flex")
 async def tax_fetch_flex(request: Request, year: str = ""):
     import asyncio
-    import tax_engine_konvex
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
@@ -2441,25 +2608,36 @@ async def tax_fetch_flex(request: Request, year: str = ""):
             status_code=422)
 
     # Als Jahres-XML ablegen (gleicher Name je Jahr → erneutes Holen überschreibt)
-    stmt_year = _flex_stmt_year(xml_text) or str(time.localtime().tm_year)
+    stmt_year = (_flex_xml_head_meta(xml_text).get("year")
+                 or _flex_stmt_year(xml_text) or str(time.localtime().tm_year))
     _tax_store_add(user, "xml", [(f"IBKR_Flex_{stmt_year}.xml", xml_text.encode("utf-8"))])
 
-    texts = _tax_store_load(user, "xml")
+    # Nur das geholte Jahr rechnen (der Bestand hat sich geändert → Cache ist neu).
     target = (year or stmt_year)
-
-    def _run():
-        return tax_engine_konvex.compute_tax_report_konvex(texts, target_year=target)
-
+    available, _ = _tax_targets(user, target)
+    fp = _tax_store_fingerprint(user, "xml")
     try:
-        result = await loop.run_in_executor(None, _run)
-        if result.get("error"):
-            return JSONResponse({"ok": False, "error": result["error"]}, status_code=422)
-        if not result.get("year"):
+        res = await run_in_threadpool(_tax_konvex_years, user, [target], fp)
+        years_out = res["years"]
+        if not years_out:
             return JSONResponse(
                 {"ok": False, "error": "Kein Steuerjahr erkannt — sind das IBKR Flex "
                                        "Statements (XML)?"}, status_code=422)
-        return JSONResponse({"ok": True, "source": "ibkr", "fetched_year": stmt_year,
-                             "stored_files": _tax_store_list(user, "xml"), **result})
+        entries = _tax_store_entries(user, "xml")
+        return JSONResponse({
+            "ok": True, "source": "ibkr", "fetched_year": stmt_year,
+            "year": target if target in years_out else sorted(years_out)[-1],
+            "years": years_out,
+            "available_years": available,
+            "computed_years": sorted(years_out),
+            "cached_years": _tax_cache_years(user, fp),
+            "account": res["meta"].get("account", ""),
+            "base_currency": res["meta"].get("base_currency", "EUR"),
+            "stored_files": [e["name"] for e in entries],
+            "files": entries,
+        })
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=422)
     except Exception as e:
         print(f"tax_fetch_flex error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -2469,11 +2647,17 @@ async def tax_fetch_flex(request: Request, year: str = ""):
 
 @app.get("/api/tax/files")
 async def tax_files_status(request: Request, kind: str = "xml"):
-    """Listet die serverseitig gespeicherten Steuer-Dateien einer Sorte (xml|csv)."""
+    """Listet die serverseitig gespeicherten Steuer-Dateien einer Sorte (xml|csv)
+    mit Kopfdaten (Konto, Zeitraum, Jahr, Größe) für den Dateibaum — plus die
+    Jahre, für die bereits ein gerechnetes Ergebnis im Cache liegt."""
     user = get_user(request)
     if kind not in _TAX_STORE_KINDS:
         return JSONResponse({"ok": False, "error": "Unbekannte Sorte"}, status_code=422)
-    return JSONResponse({"ok": True, "kind": kind, "files": _tax_store_list(user, kind)})
+    entries = _tax_store_entries(user, kind)
+    return JSONResponse({"ok": True, "kind": kind,
+                         "stored_files": [e["name"] for e in entries],
+                         "files": entries,
+                         "cached_years": _tax_cache_years(user, _tax_store_fingerprint(user, kind))})
 
 @app.delete("/api/tax/files")
 async def tax_files_clear(request: Request, kind: str = "xml", name: str = ""):
@@ -2485,43 +2669,64 @@ async def tax_files_clear(request: Request, kind: str = "xml", name: str = ""):
         _tax_store_delete_one(user, kind, name)
     else:
         _tax_store_clear(user, kind)
-    return JSONResponse({"ok": True, "kind": kind, "files": _tax_store_list(user, kind)})
+    entries = _tax_store_entries(user, kind)
+    return JSONResponse({"ok": True, "kind": kind,
+                         "stored_files": [e["name"] for e in entries],
+                         "files": entries,
+                         "cached_years": _tax_cache_years(user, _tax_store_fingerprint(user, kind))})
 
 
 # ── Steuer +++ : PDF-Steuerbericht je Jahr ──────────────────────────────────────
 # Rechnet aus den gespeicherten XMLs (Sorte xml) und liefert einen mehrseitigen
 # PDF-Bericht (Zusammenfassung + vollständiges Trade-Journal) für das gewählte Jahr.
 
+@app.get("/api/tax/pdf-sections")
+async def tax_pdf_sections(request: Request):
+    """Die wählbaren PDF-Abschnitte (Schlüssel + Beschriftung) für das Frontend."""
+    import tax_pdf_konvex
+    get_user(request)
+    return JSONResponse({"ok": True,
+                         "sections": [{"key": k, "label": l} for k, l in tax_pdf_konvex.SECTIONS],
+                         "defaults": tax_pdf_konvex.DEFAULT_SECTIONS})
+
+
 @app.get("/api/tax/report-konvex-pdf")
-async def tax_report_konvex_pdf(request: Request, year: str = ""):
-    import asyncio
-    import tax_engine_konvex
+async def tax_report_konvex_pdf(request: Request, year: str = "", sections: str = ""):
+    """PDF für ein Jahr. `sections` = kommagetrennte Abschnitts-Schlüssel (leer = alle).
+    Das Jahr kommt aus dem Cache, wenn es schon gerechnet wurde."""
     import tax_pdf_konvex
     user = get_user(request)
 
-    texts = _tax_store_load(user, "xml")
-    if not texts:
+    _, targets = _tax_targets(user, year)
+    if not targets:
         return JSONResponse({"ok": False, "no_files": True,
                              "error": "Keine gespeicherten XML-Dateien."}, status_code=422)
+    want = [s.strip() for s in (sections or "").split(",") if s.strip()]
+    fp = _tax_store_fingerprint(user, "xml")
 
     def _run():
-        res = tax_engine_konvex.compute_tax_report_konvex(texts, target_year=(year or None))
-        if res.get("error") or not res.get("year"):
-            return None, res
-        yr = year if (year and year in res.get("years", {})) else res["year"]
-        pdf = tax_pdf_konvex.build_pdf(res["years"][yr], account=res.get("account", ""))
-        return (pdf, yr), res
+        res = _tax_konvex_years(user, targets[-1:], fp)
+        yr = targets[-1]
+        data = res["years"].get(yr)
+        if not data:
+            return None, None
+        entries = _tax_store_entries(user, "xml")
+        account = res["meta"].get("account") or next(
+            (e.get("account_name") or e.get("account_id") for e in reversed(entries)
+             if e.get("account_name") or e.get("account_id")), "")
+        # sections-Parameter angegeben → genau diese Auswahl (auch wenn sie leer ist)
+        return tax_pdf_konvex.build_pdf(data, account=account,
+                                        sections=(want if sections else None)), yr
 
     try:
-        loop = asyncio.get_running_loop()
-        result, res = await loop.run_in_executor(None, _run)
-        if result is None:
-            return JSONResponse({"ok": False, "error": res.get("error", "Kein Steuerjahr")},
-                                status_code=422)
-        pdf_bytes, yr = result
+        pdf_bytes, yr = await run_in_threadpool(_run)
+        if pdf_bytes is None:
+            return JSONResponse({"ok": False, "error": "Kein Steuerjahr"}, status_code=422)
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition":
                                  f'attachment; filename="IBKR-Steuer-Report_{yr}.pdf"'})
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=422)
     except Exception as e:
         print(f"tax_report_konvex_pdf error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

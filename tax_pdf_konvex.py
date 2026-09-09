@@ -16,6 +16,22 @@ from datetime import datetime
 from fpdf import FPDF
 
 
+# Wählbare Abschnitte (Reihenfolge = Reihenfolge im PDF). Der Schlüssel wird vom
+# Frontend als sections=… an den PDF-Endpoint übergeben; ohne Angabe = alle.
+SECTIONS: list[tuple[str, str]] = [
+    ("methodik", "Berechnungsgrundlagen, Formeln & Rechtsgrundlagen"),
+    ("ergebnis", "Ergebnis (Abgeltungsteuer)"),
+    ("zeilen",   "Anlage-KAP-Zeilen (7/19/20/22/23/37/38/41)"),
+    ("toepfe",   "Verlustverrechnung (§20 Abs. 6)"),
+    ("steuer",   "Steuerberechnung"),
+    ("kapinv",   "KAP-INV — Investmentfonds/ETF"),
+    ("devisen",  "Devisen (Regel F)"),
+    ("ertraege", "Erträge & Quellensteuer"),
+    ("journal",  "Prüffähiges Trade-Journal"),
+]
+DEFAULT_SECTIONS: list[str] = [k for k, _ in SECTIONS]
+
+
 def _s(v) -> str:
     """latin-1-sicherer String (Helvetica-Kernschrift kann kein €/→)."""
     if v is None:
@@ -67,8 +83,7 @@ class _PDF(FPDF):
         self.set_y(-10)
         self.set_font("Helvetica", "", 7)
         self.set_text_color(150, 150, 150)
-        self.cell(0, 4, _s("IBKR Steuer Report (Folio · Engine KonvexInvestment/ibkr-steuer) — "
-                           "ohne Gewähr, keine Steuerberatung"), align="L")
+        self.cell(0, 4, _s("IBKR Steuer Report — ohne Gewähr, keine Steuerberatung"), align="L")
         self.cell(0, 4, f"Seite {self.page_no()}", align="R")
 
 
@@ -152,7 +167,7 @@ def _formula_block(pdf: _PDF, lines):
     pdf.set_text_color(40, 40, 40)
 
 
-def _methodik(pdf: _PDF, yd: dict):
+def _methodik(pdf: _PDF, yd: dict, show_kapinv: bool = True):
     _section(pdf, "Berechnungsgrundlagen, Formeln & Rechtsgrundlagen")
     t = yd.get("tax", {})
     tp = yd.get("toepfe", {})
@@ -166,7 +181,7 @@ def _methodik(pdf: _PDF, yd: dict):
                "(\"first in, first out\") und wird direkt IBKRs autoritativem Lot-Matching aus der Flex-XML "
                "(\"Closed Lots\") entnommen - nicht eigenstaendig nachgerechnet. Damit entfallen eigene "
                "FIFO-, Split- und Spinoff-Naeherungen; jede Veraeusserung ist im Trade-Journal nachvollziehbar.")
-    _para(pdf, "Angewandte Standardannahmen (wie offizieller Konvex-Report): Tageskurs-Methode AN, "
+    _para(pdf, "Angewandte Standardannahmen: Tageskurs-Methode AN, "
                "InvStG-Teilfreistellung AN, Zuflussprinzip bei Vorjahres-Praemien, DE-KESt-Variante B AUS. "
                "Nicht beruecksichtigt (Sache des Finanzamts): Sparer-Pauschbetrag, Kirchensteuer, Guenstigerpruefung.")
 
@@ -186,28 +201,36 @@ def _methodik(pdf: _PDF, yd: dict):
     _para(pdf, "IBKRs realisiertes Fremdwaehrungsergebnis je FX-Lot (ebenfalls FIFO aus der XML) in EUR. "
                "Jede Einzahlung gilt als Anschaffung, jede Ausgabe als Veraeusserung des Fremdwaehrungsbestands.")
 
-    _sub(pdf, "4) Investmentfonds (§20 InvStG — Teilfreistellung, Anlage KAP-INV)")
-    _para(pdf, "Fonds werden getrennt auf Anlage KAP-INV ausgewiesen. Steuerpflichtig ist der Bruttobetrag nach Teilfreistellung:")
-    _formula_block(pdf, "steuerpflichtig  =  Brutto × (1 - Teilfreistellungssatz)")
-    _para(pdf, "Saetze: Aktienfonds 30 %, Mischfonds 15 %, Immobilienfonds 60 % (Auslands-Immobilienfonds 80 %), sonstige Fonds 0 %.")
+    if show_kapinv:
+        _sub(pdf, "4) Investmentfonds (§20 InvStG — Teilfreistellung, Anlage KAP-INV)")
+        _para(pdf, "Fonds werden getrennt auf Anlage KAP-INV ausgewiesen. Steuerpflichtig ist der Bruttobetrag nach Teilfreistellung:")
+        _formula_block(pdf, "steuerpflichtig  =  Brutto × (1 - Teilfreistellungssatz)")
+        _para(pdf, "Saetze: Aktienfonds 30 %, Mischfonds 15 %, Immobilienfonds 60 % (Auslands-Immobilienfonds 80 %), sonstige Fonds 0 %.")
 
-    _sub(pdf, "5) Verlustverrechnung (§20 Abs. 6 EStG)")
+    _sub(pdf, ("5" if show_kapinv else "4") + ") Verlustverrechnung (§20 Abs. 6 EStG)")
     _para(pdf, "Aktien-Topf (S. 4): Aktienverluste nur gegen Aktiengewinne; ein verbleibender Verlust ist gefangener "
                "Verlustvortrag (nur ggue. kuenftigen Aktiengewinnen). Allgemeiner Topf: Termingeschaefte, Devisen, "
                "Dividenden, Zinsen. Ueberlauf: verbleibende allgemeine Verluste mindern zusaetzlich den Aktiengewinn "
-               "(guenstigste, zwingende Reihenfolge); umgekehrt nicht. KAP-INV: eigener Verrechnungskreis.")
+               "(guenstigste, zwingende Reihenfolge); umgekehrt nicht."
+               + (" KAP-INV: eigener Verrechnungskreis." if show_kapinv else ""))
     vrows = [(f"Saldo Aktien-Topf   =  {_eur(ak.get('netto'))}", False),
              (f"Saldo allg. Topf    =  {_eur(al.get('netto'))}", False)]
     if (tp.get("spillover") or 0) > 0:
         vrows.append((f"Ueberlauf (allg. -> Aktien)  =  {_eur(tp.get('spillover'))}", False))
-    vrows.append((f"Saldo KAP-INV       =  {_eur(ki.get('netto'))}", False))
+    if show_kapinv:
+        vrows.append((f"Saldo KAP-INV       =  {_eur(ki.get('netto'))}", False))
     _formula_block(pdf, vrows)
 
-    _sub(pdf, "6) Steuerermittlung")
-    _formula_block(pdf, [
-        ("Bemessungsgrundlage  =  Aktien_stpfl + Allg_stpfl + KAP-INV_stpfl", False),
-        (f"                     =  {_eur(ak.get('steuerbar'))}  +  {_eur(al.get('steuerbar'))}  +  {_eur(ki.get('steuerbar'))}", False),
-        (f"                     =  {_eur(t.get('bemessungsgrundlage'))}", True),
+    # KAP-INV taucht in der Bemessungsgrundlage nur auf, wenn es dort auch wirkt
+    # (bei reinen Fondsverlusten ist der Beitrag 0 — dann bleibt die Formel ohne).
+    ki_stpfl = ki.get("steuerbar") or 0
+    _sub(pdf, ("6" if show_kapinv else "5") + ") Steuerermittlung")
+    bmg_rows = ([("Bemessungsgrundlage  =  Aktien_stpfl + Allg_stpfl + KAP-INV_stpfl", False),
+                 (f"                     =  {_eur(ak.get('steuerbar'))}  +  {_eur(al.get('steuerbar'))}  +  {_eur(ki_stpfl)}", False)]
+                if (show_kapinv or ki_stpfl) else
+                [("Bemessungsgrundlage  =  Aktien_stpfl + Allg_stpfl", False),
+                 (f"                     =  {_eur(ak.get('steuerbar'))}  +  {_eur(al.get('steuerbar'))}", False)])
+    _formula_block(pdf, bmg_rows + [
         ("", False),
         (f"Abgeltungsteuer       =  BMG × 25 %                 =  {_eur(t.get('abgeltungsteuer'))}", False),
         (f"Solidaritaetszuschlag =  Abgeltungsteuer × 5,5 %    =  {_eur(t.get('soli'))}", False),
@@ -251,10 +274,11 @@ def _jhead(pdf: _PDF, widths):
     pdf.set_text_color(30, 30, 30)
 
 
-def _journal(pdf: _PDF, journal: dict):
-    _section(pdf, "Prueffaehiges Trade-Journal je Veraeusserung (= Konvex-Excel-Export)")
+def _journal(pdf: _PDF, journal: dict, show_kapinv: bool = True):
+    _section(pdf, "Prueffaehiges Trade-Journal je Veraeusserung")
     widths = _jcol_widths(pdf)
-    for topf_key in ("Topf1", "Topf2", "KAP-INV"):
+    blocks = ("Topf1", "Topf2", "KAP-INV") if show_kapinv else ("Topf1", "Topf2")
+    for topf_key in blocks:
         blk = journal.get(topf_key)
         if not blk or not blk.get("groups"):
             continue
@@ -316,10 +340,22 @@ def _journal(pdf: _PDF, journal: dict):
             pdf.ln(1)
 
 
-def build_pdf(year_data: dict, account: str = "", created_at: str | None = None) -> bytes:
+def build_pdf(year_data: dict, account: str = "", created_at: str | None = None,
+              sections=None) -> bytes:
+    """`sections` = Liste der gewünschten Abschnitts-Schlüssel (siehe SECTIONS);
+    None/leer → alle. Ist KAP-INV abgewählt, verschwinden auch die KAP-INV-Zeilen
+    aus Eintragungshilfe, Töpfen, Methodik und Journal."""
+    # None = alle Abschnitte; eine (auch leere) Liste = genau diese Auswahl.
+    want = {s for s in (DEFAULT_SECTIONS if sections is None else sections)
+            if s in DEFAULT_SECTIONS}
+    if not want:
+        want = {"ergebnis"}
+    has = want.__contains__
+    show_kapinv = has("kapinv")
+
     yr = year_data.get("tax_year", "")
     created = created_at or datetime.now().strftime("%d.%m.%Y %H:%M")
-    sub = f"Anlage KAP / KAP-INV  ·  Konto {account or '-'}  ·  " \
+    sub = f"Anlage KAP{' / KAP-INV' if show_kapinv else ''}  ·  Konto {account or '-'}  ·  " \
           f"Basiswaehrung {year_data.get('base_currency', 'EUR')}  ·  erstellt {created}"
     pdf = _PDF(f"IBKR Steuer Report {yr}", sub)
 
@@ -335,96 +371,118 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
     fx = year_data.get("fx", {})
 
     # ── Berechnungsgrundlagen & Formeln — am Anfang, eigene Seite ──
-    pdf.add_page()
-    _methodik(pdf, year_data)
+    if has("methodik"):
+        pdf.add_page()
+        _methodik(pdf, year_data, show_kapinv=show_kapinv)
 
     # ── Ergebnisse — auf neuer Seite ──
-    pdf.add_page()
+    if any(has(k) for k in ("ergebnis", "zeilen", "toepfe", "steuer",
+                            "kapinv", "devisen", "ertraege")):
+        pdf.add_page()
 
     # ── Kennzahlen ──
-    _section(pdf, "Ergebnis (Abgeltungsteuer)")
-    _kv_rows(pdf, [
-        ("Bemessungsgrundlage", _eur(t.get("bemessungsgrundlage")), True),
-        ("Abgeltungsteuer 25 % + Solidaritaetszuschlag 5,5 %", _eur(t.get("steuer_brutto")), False, _RED),
-        ("abzgl. anrechenbare auslaendische Quellensteuer (Z.41)", _eur(t.get("qst_anrechenbar")), False, _GREEN),
-        ("Verbleibende Steuer", _eur(t.get("steuer_netto")), True, _RED),
-    ])
+    if has("ergebnis"):
+        _section(pdf, "Ergebnis (Abgeltungsteuer)")
+        _kv_rows(pdf, [
+            ("Bemessungsgrundlage", _eur(t.get("bemessungsgrundlage")), True),
+            ("Abgeltungsteuer 25 % + Solidaritaetszuschlag 5,5 %", _eur(t.get("steuer_brutto")), False, _RED),
+            ("abzgl. anrechenbare auslaendische Quellensteuer (Z.41)", _eur(t.get("qst_anrechenbar")), False, _GREEN),
+            ("Verbleibende Steuer", _eur(t.get("steuer_netto")), True, _RED),
+        ])
 
     # ── Anlage-KAP Zeilen ──
-    _section(pdf, "Anlage KAP / KAP-INV — Eintragungshilfe")
-    _kv_rows(pdf, [
-        ("Zeile 7  — Inlaendische Kapitalertraege mit Steuerabzug", _eur(z.get("z7"))),
-        ("Zeile 19 — Auslaendische Kapitalertraege (Netto-Saldo)", _eur(z.get("z19")), True, _signed(z.get("z19"))),
-        ("Zeile 20 — darin: Gewinne aus Aktienveraeusserungen", _eur(z.get("z20")), False, _GREEN),
-        ("Zeile 22 — Verluste ohne Aktien (Termingeschaefte etc.)", _eur(z.get("z22")), False, _RED),
-        ("Zeile 23 — Verluste aus Aktienveraeusserungen", _eur(z.get("z23")), False, _RED),
-        ("Zeile 37 — Kapitalertragsteuer (inlaendisch)", _eur(z.get("z37"))),
-        ("Zeile 38 — Solidaritaetszuschlag (inlaendisch)", _eur(z.get("z38"))),
-        ("Zeile 41 — Anrechenbare auslaendische Quellensteuer", _eur(z.get("z41")), False, _GREEN),
-        ("KAP-INV — Investmentertraege netto (nach Teilfreistellung)", _eur(z.get("kap_inv_net")), False, _signed(z.get("kap_inv_net"))),
-    ])
-    if (z22.get("termingeschaefte") or 0) + (z22.get("waehrung") or 0) > 0:
-        pdf.set_font("Helvetica", "I", 7.5)
-        pdf.set_text_color(110, 110, 110)
-        pdf.multi_cell(0, 4, _s(
-            "Zeile 22 = Termingeschaefte " + _eur(z22.get("termingeschaefte")) +
-            " + Devisen (Regel F) " + _eur(z22.get("waehrung")) +
-            ((" + Sonstige " + _eur(z22.get("sonstige"))) if z22.get("sonstige") else "") +
-            " = " + _eur(z22.get("total"))))
-        pdf.set_text_color(40, 40, 40)
+    if has("zeilen"):
+        _section(pdf, "Anlage KAP" + (" / KAP-INV" if show_kapinv else "") + " — Eintragungshilfe")
+        zrows = [
+            ("Zeile 7  — Inlaendische Kapitalertraege mit Steuerabzug", _eur(z.get("z7"))),
+            ("Zeile 19 — Auslaendische Kapitalertraege (Netto-Saldo)", _eur(z.get("z19")), True, _signed(z.get("z19"))),
+            ("Zeile 20 — darin: Gewinne aus Aktienveraeusserungen", _eur(z.get("z20")), False, _GREEN),
+            ("Zeile 22 — Verluste ohne Aktien (Termingeschaefte etc.)", _eur(z.get("z22")), False, _RED),
+            ("Zeile 23 — Verluste aus Aktienveraeusserungen", _eur(z.get("z23")), False, _RED),
+            ("Zeile 37 — Kapitalertragsteuer (inlaendisch)", _eur(z.get("z37"))),
+            ("Zeile 38 — Solidaritaetszuschlag (inlaendisch)", _eur(z.get("z38"))),
+            ("Zeile 41 — Anrechenbare auslaendische Quellensteuer", _eur(z.get("z41")), False, _GREEN),
+        ]
+        if show_kapinv:
+            zrows.append(("KAP-INV — Investmentertraege netto (nach Teilfreistellung)",
+                          _eur(z.get("kap_inv_net")), False, _signed(z.get("kap_inv_net"))))
+        _kv_rows(pdf, zrows)
+        if (z22.get("termingeschaefte") or 0) + (z22.get("waehrung") or 0) > 0:
+            pdf.set_font("Helvetica", "I", 7.5)
+            pdf.set_text_color(110, 110, 110)
+            pdf.multi_cell(0, 4, _s(
+                "Zeile 22 = Termingeschaefte " + _eur(z22.get("termingeschaefte")) +
+                " + Devisen (Regel F) " + _eur(z22.get("waehrung")) +
+                ((" + Sonstige " + _eur(z22.get("sonstige"))) if z22.get("sonstige") else "") +
+                " = " + _eur(z22.get("total"))))
+            pdf.set_text_color(40, 40, 40)
 
     # ── Beide Toepfe ──
-    _section(pdf, "Verlustverrechnung (§20 Abs. 6 EStG)")
-    rows = [
-        ("AKTIEN-TOPF (§20 Abs. 6 S. 4 — nur untereinander verrechenbar)", "", True),
-        ("  Aktiengewinne (Z.20)", _eur(ak.get("gewinn")), False, _GREEN),
-        ("  Aktienverluste (Z.23)", _eur(-(ak.get("verlust") or 0)), False, _RED),
-    ]
-    if ak.get("tageskurs_korrektur"):
-        rows.append(("  darin Tageskurs-Korrektur §20 Abs. 4 (IBKR-Roh-Saldo "
-                     + _eur((ak.get("netto") or 0) - (ak.get("tageskurs_korrektur") or 0)) + ")",
-                     _eur(ak.get("tageskurs_korrektur")), False, (110, 110, 110)))
-    rows += [
-        ("  Netto Aktien-Topf", _eur(ak.get("netto")), True, _signed(ak.get("netto"))),
-    ]
-    if (ak.get("verlustvortrag") or 0) > 0:
-        rows.append(("  -> Verlustvortrag (nur ggue. Aktiengewinnen)", _eur(ak.get("verlustvortrag")), False, _RED))
-    rows += [
-        ("ALLGEMEINER TOPF (ohne Investmentfonds)", "", True),
-        ("  Termingeschaefte (Optionen + Futures)", _eur(al.get("termingeschaefte")), False, _signed(al.get("termingeschaefte"))),
-        ("  Devisen (Regel F)", _eur(al.get("waehrung")), False, _signed(al.get("waehrung"))),
-    ]
-    if al.get("sonstige"):
-        rows.append(("  Sonstige (T-Bills, Anleihen ...)", _eur(al.get("sonstige")), False, _signed(al.get("sonstige"))))
-    rows += [
-        ("  Auslaendische Dividenden (Z.19)", _eur(al.get("dividenden"))),
-        ("  Inlaendische Dividenden (auch Z.7)", _eur(al.get("dividenden_de")), False, (110, 110, 110)),
-        ("  Zinsen", _eur(al.get("zinsen"))),
-        ("  Netto allg. Topf", _eur(al.get("netto")), True, _signed(al.get("netto"))),
-    ]
-    if (al.get("verlustvortrag") or 0) > 0:
-        rows.append(("  -> Verlustvortrag (frei verrechenbar)", _eur(al.get("verlustvortrag")), False, _RED))
-    rows += [
-        ("ANLAGE KAP-INV (eigener Verrechnungskreis, §20 InvStG)", "", True),
-        ("  Netto KAP-INV (nach Teilfreistellung)", _eur(ki.get("netto")), False, _signed(ki.get("netto"))),
-    ]
-    if (ki.get("verlustvortrag") or 0) > 0:
-        rows.append(("  -> Verlustvortrag KAP-INV", _eur(ki.get("verlustvortrag")), False, _RED))
-    _kv_rows(pdf, rows)
+    if has("toepfe"):
+        _section(pdf, "Verlustverrechnung (§20 Abs. 6 EStG)")
+        rows = [
+            ("AKTIEN-TOPF (§20 Abs. 6 S. 4 — nur untereinander verrechenbar)", "", True),
+            ("  Aktiengewinne (Z.20)", _eur(ak.get("gewinn")), False, _GREEN),
+            ("  Aktienverluste (Z.23)", _eur(-(ak.get("verlust") or 0)), False, _RED),
+        ]
+        if ak.get("tageskurs_korrektur"):
+            rows.append(("  darin Tageskurs-Korrektur §20 Abs. 4 (IBKR-Roh-Saldo "
+                         + _eur((ak.get("netto") or 0) - (ak.get("tageskurs_korrektur") or 0)) + ")",
+                         _eur(ak.get("tageskurs_korrektur")), False, (110, 110, 110)))
+        rows += [
+            ("  Netto Aktien-Topf", _eur(ak.get("netto")), True, _signed(ak.get("netto"))),
+        ]
+        if (ak.get("verlustvortrag") or 0) > 0:
+            rows.append(("  -> Verlustvortrag (nur ggue. Aktiengewinnen)", _eur(ak.get("verlustvortrag")), False, _RED))
+        rows += [
+            ("ALLGEMEINER TOPF (ohne Investmentfonds)", "", True),
+            ("  Termingeschaefte (Optionen + Futures)", _eur(al.get("termingeschaefte")), False, _signed(al.get("termingeschaefte"))),
+            ("  Devisen (Regel F)", _eur(al.get("waehrung")), False, _signed(al.get("waehrung"))),
+        ]
+        if al.get("sonstige"):
+            rows.append(("  Sonstige (T-Bills, Anleihen ...)", _eur(al.get("sonstige")), False, _signed(al.get("sonstige"))))
+        rows += [
+            ("  Auslaendische Dividenden (Z.19)", _eur(al.get("dividenden"))),
+            ("  Inlaendische Dividenden (auch Z.7)", _eur(al.get("dividenden_de")), False, (110, 110, 110)),
+            ("  Zinsen", _eur(al.get("zinsen"))),
+            ("  Netto allg. Topf", _eur(al.get("netto")), True, _signed(al.get("netto"))),
+        ]
+        if (al.get("verlustvortrag") or 0) > 0:
+            rows.append(("  -> Verlustvortrag (frei verrechenbar)", _eur(al.get("verlustvortrag")), False, _RED))
+        if show_kapinv:
+            rows += [
+                ("ANLAGE KAP-INV (eigener Verrechnungskreis, §20 InvStG)", "", True),
+                ("  Netto KAP-INV (nach Teilfreistellung)", _eur(ki.get("netto")), False, _signed(ki.get("netto"))),
+            ]
+            if (ki.get("verlustvortrag") or 0) > 0:
+                rows.append(("  -> Verlustvortrag KAP-INV", _eur(ki.get("verlustvortrag")), False, _RED))
+        _kv_rows(pdf, rows)
 
     # ── Steuerberechnung ──
-    _section(pdf, "Steuerberechnung (ohne Sparer-Pauschbetrag, ohne KiSt)")
-    _kv_rows(pdf, [
-        ("Bemessungsgrundlage (Aktien + Allg. + KAP-INV)", _eur(t.get("bemessungsgrundlage")), True),
-        ("Abgeltungsteuer 25 %", _eur(t.get("abgeltungsteuer"))),
-        ("Solidaritaetszuschlag 5,5 %", _eur(t.get("soli"))),
-        ("Steuer brutto", _eur(t.get("steuer_brutto")), True, _RED),
-        ("abzgl. anrechenbare auslaendische Quellensteuer (Z.41)", _eur(t.get("qst_anrechenbar")), False, _GREEN),
-        ("Verbleibende Steuer", _eur(t.get("steuer_netto")), True, _RED),
-    ])
+    if has("steuer"):
+        ki_stpfl = ki.get("steuerbar") or 0
+        _section(pdf, "Steuerberechnung (ohne Sparer-Pauschbetrag, ohne KiSt)")
+        _kv_rows(pdf, [
+            ("Bemessungsgrundlage (Aktien + Allg."
+             + (" + KAP-INV)" if (show_kapinv or ki_stpfl) else ")"),
+             _eur(t.get("bemessungsgrundlage")), True),
+            ("Abgeltungsteuer 25 %", _eur(t.get("abgeltungsteuer"))),
+            ("Solidaritaetszuschlag 5,5 %", _eur(t.get("soli"))),
+            ("Steuer brutto", _eur(t.get("steuer_brutto")), True, _RED),
+            ("abzgl. anrechenbare auslaendische Quellensteuer (Z.41)", _eur(t.get("qst_anrechenbar")), False, _GREEN),
+            ("Verbleibende Steuer", _eur(t.get("steuer_netto")), True, _RED),
+        ])
+        # Ehrlichkeitshinweis: KAP-INV ist abgewählt, wirkt aber in der Bemessungsgrundlage.
+        if not show_kapinv and ki_stpfl:
+            pdf.set_font("Helvetica", "I", 7.5)
+            pdf.set_text_color(110, 110, 110)
+            pdf.multi_cell(0, 4, _s("Hinweis: In der Bemessungsgrundlage sind "
+                                    + _eur(ki_stpfl) + " steuerpflichtige Investmentertraege "
+                                    "(KAP-INV) enthalten; die Einzelaufstellung wurde abgewaehlt."))
+            pdf.set_text_color(40, 40, 40)
 
     # ── KAP-INV je Fonds ──
-    if kap.get("by_isin"):
+    if show_kapinv and kap.get("by_isin"):
         _section(pdf, "Anlage KAP-INV — Investmentfonds (InvStG-Teilfreistellung)")
         pdf.set_font("Helvetica", "B", 7.5)
         for name, w, al_ in (("ISIN", 40, "L"), ("Klasse", 55, "L"), ("TFS", 20, "R"),
@@ -445,7 +503,7 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
             pdf.set_text_color(40, 40, 40)
 
     # ── Devisen ──
-    if fx.get("results"):
+    if has("devisen") and fx.get("results"):
         _section(pdf, "Devisen (Regel F) je Waehrung — IBKR-realisiert, FIFO")
         pdf.set_font("Helvetica", "B", 7.5)
         for name, w, al_ in (("Waehrung", 30, "L"), ("Gewinn EUR", 40, "R"), ("Verlust EUR", 40, "R"),
@@ -464,22 +522,27 @@ def build_pdf(year_data: dict, account: str = "", created_at: str | None = None)
             pdf.cell(25, 4.6, str(r.get("days_negative", 0)), align="R", ln=1)
 
     # ── Ertraege ──
-    _section(pdf, "Ertraege & Quellensteuer")
-    _kv_rows(pdf, [
-        ("Dividenden gesamt", _eur(inc.get("dividends"))),
-        ("  davon inlaendisch (Z.7)", _eur(inc.get("dividends_de")), False, (110, 110, 110)),
-        ("  davon auslaendisch (Z.19)", _eur(inc.get("dividends_foreign")), False, (110, 110, 110)),
-        ("Zinsen", _eur(inc.get("interest"))),
-        ("gezahlte Zinsen (nicht abzugsfaehig §20 Abs. 9)", _eur(inc.get("interest_paid")), False, (110, 110, 110)),
-        ("Auslaendische Quellensteuer (anrechenbar)", _eur(inc.get("wht_foreign")), False, _GREEN),
-        ("Inlaendische Quellensteuer", _eur(inc.get("wht_domestic")), False, (110, 110, 110)),
-    ])
+    if has("ertraege"):
+        _section(pdf, "Ertraege & Quellensteuer")
+        _kv_rows(pdf, [
+            ("Dividenden gesamt", _eur(inc.get("dividends"))),
+            ("  davon inlaendisch (Z.7)", _eur(inc.get("dividends_de")), False, (110, 110, 110)),
+            ("  davon auslaendisch (Z.19)", _eur(inc.get("dividends_foreign")), False, (110, 110, 110)),
+            ("Zinsen", _eur(inc.get("interest"))),
+            ("gezahlte Zinsen (nicht abzugsfaehig §20 Abs. 9)", _eur(inc.get("interest_paid")), False, (110, 110, 110)),
+            ("Auslaendische Quellensteuer (anrechenbar)", _eur(inc.get("wht_foreign")), False, _GREEN),
+            ("Inlaendische Quellensteuer", _eur(inc.get("wht_domestic")), False, (110, 110, 110)),
+        ])
 
     # ── Journal — immer auf neuer Seite ──
     journal = year_data.get("journal", {})
-    if journal:
+    if has("journal") and journal:
         pdf.add_page()
-        _journal(pdf, journal)
+        _journal(pdf, journal, show_kapinv=show_kapinv)
+
+    if pdf.page_no() == 0:      # nichts ausgewählt → leeres PDF vermeiden
+        pdf.add_page()
+        _section(pdf, "Kein Abschnitt ausgewaehlt")
 
     out = pdf.output()
     return bytes(out)

@@ -485,7 +485,7 @@
         ondragleave="this.classList.remove('over')"
         ondrop="event.preventDefault();this.classList.remove('over');taxKonvexUpload(event.dataTransfer.files)"
         onclick="document.getElementById('tax4File').click()">
-        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl)</div>
+        <div style="font-size:11px;color:var(--muted);">📄 Alle Jahres-XMLs hierher ziehen oder klicken (Mehrfachauswahl) — wird nur abgelegt, nicht gerechnet</div>
         <input type="file" id="tax4File" accept=".xml" multiple style="display:none" onchange="taxKonvexUpload(this.files)">
       </div>
       <div class="settings-actions" style="margin-top:10px;">
@@ -494,7 +494,21 @@
         <span style="font-size:10px;color:var(--muted);">nutzt die konfigurierte Steuer-Flex-Query · kann ~30 s dauern</span>
       </div>
       <div id="tax4-msg" class="settings-msg" style="margin-top:8px;"></div>
-      <div id="tax4-stored" class="settings-hint" style="margin-top:6px;display:none;"></div>
+
+      <!-- Dateibaum der serverseitig abgelegten Flex-XMLs (Jahr → Dateien) -->
+      <div id="tax4-tree" class="tax-tree" style="margin-top:10px;"></div>
+
+      <!-- Rechnen nur auf Knopfdruck: ein Jahr oder alle -->
+      <div class="settings-actions" style="margin-top:12px;align-items:center;">
+        <label style="font-size:11px;color:var(--muted);">
+          Berechnen für
+          <select id="tax4-run-year"
+            style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
+        </label>
+        <button id="tax4-run-btn" class="refresh-btn" onclick="taxKonvexRun(this)"
+          title="Steuerreport aus dem abgelegten Bestand rechnen">▶ Report erstellen</button>
+        <span id="tax4-run-hint" style="font-size:10px;color:var(--muted);"></span>
+      </div>
     </div>
 
     <div class="settings-card" id="tax4-result" style="display:none;">
@@ -505,8 +519,21 @@
           <select id="tax4-year-select" onchange="taxKonvexSelectYear(this.value)"
             style="border:1px solid var(--border);background:var(--bg);color:var(--text);padding:3px 6px;margin-left:4px;font-family:inherit;font-size:12px;"></select>
         </label>
-        <button id="tax4-pdf-btn" onclick="taxKonvexPdf()" title="Vollständigen PDF-Bericht für das gewählte Jahr herunterladen"
+        <button id="tax4-pdf-btn" onclick="taxKonvexPdf()" title="PDF-Bericht für das gewählte Jahr herunterladen"
           style="margin-left:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:4px 12px;font-family:inherit;font-size:12px;cursor:pointer;border-radius:4px;">📄 PDF</button>
+        <details id="tax4-pdf-opts" class="pdf-opts">
+          <summary title="Auswählen, welche Abschnitte im PDF stehen">⚙ PDF-Inhalt</summary>
+          <div class="pdf-opts-body">
+            <div class="pdf-opts-title">Diese Abschnitte ins PDF übernehmen</div>
+            <div id="tax4-pdf-sections"></div>
+            <div class="pdf-opts-foot">
+              <a href="#" onclick="taxPdfSectionsAll(true);return false;">alle</a>
+              <a href="#" onclick="taxPdfSectionsAll(false);return false;">keine</a>
+              <span style="flex:1"></span>
+              <button onclick="taxKonvexPdf();return false;">📄 PDF erstellen</button>
+            </div>
+          </div>
+        </details>
       </h2>
       <div id="tax4-warn"></div>
       <div class="tax4-layout">

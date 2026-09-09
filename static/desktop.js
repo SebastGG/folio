@@ -1040,7 +1040,11 @@ function fitView() {
     if (currentPeriod > 0) {
         var cut = new Date();
         cut.setDate(cut.getDate() - currentPeriod);
-        fromDate = cut.toISOString().slice(0, 10);
+        // gleiche Kante wie applyPeriod(): bei Wochen-/Monatskerzen der Anfang der
+        // angeschnittenen Periode, sonst stünde die erste Kerze halb im Bild
+        fromDate = (typeof periodStartFor === 'function')
+            ? periodStartFor(cut.toISOString().slice(0, 10), currentTF)
+            : cut.toISOString().slice(0, 10);
         // nicht vor dem ersten verfügbaren Kerze
         if (fromDate < candles[0].time) fromDate = candles[0].time;
     } else {
@@ -3582,11 +3586,8 @@ async function settingsSaveIbkr(btn) {
 // ║ 14. STEUER-REPORT (IBKR Activity CSV → Anlage KAP)        ║
 // ╚══════════════════════════════════════════════════════════╝
 
-/** Lädt alle IBKR Activity CSVs hoch (Multi-File) und rendert das Ergebnis. Stateless. */
-function taxUpload(fileList) {
-    if (!fileList || !fileList.length) return;
-    _taxRun('tax', fileList);
-}
+/* Die Upload-Funktion dieser Seite ist entfallen — die Seite „Steuer" gibt es
+   nicht mehr (Nachfolger: IBKR Steuer Report). Der Rest ist toter Code. */
 
 /** Speichert die Mehrjahres-Antwort, füllt das Jahres-Dropdown, rendert das Default-Jahr. */
 var _taxData = null;
@@ -3729,11 +3730,6 @@ function _taxRenderYearTable() {
 // ╚══════════════════════════════════════════════════════════╝
 
 var _taxData2 = null;
-
-function taxFullUpload(fileList) {
-    if (!fileList || !fileList.length) return;
-    _taxRun('steuer2', fileList);
-}
 
 function taxFullRender(data) {
     _taxData2 = data;
@@ -3880,11 +3876,6 @@ function _taxFullRenderJournal(d) {
 // ╚══════════════════════════════════════════════════════════╝
 
 var _taxData3 = null;
-
-function taxXmlUpload(fileList) {
-    if (!fileList || !fileList.length) return;
-    _taxRun('steuer3', fileList);
-}
 
 function taxXmlRender(data) {
     _taxData3 = data;
@@ -4080,9 +4071,160 @@ function _taxXmlRenderIncome(d) {
 
 var _taxData4 = null;
 
-function taxKonvexUpload(fileList) {
+/* Zustand der Steuer-Seite: abgelegte Dateien, Jahre, PDF-Abschnittsauswahl.
+   Gerechnet wird NUR auf Knopfdruck — beim Öffnen der Seite wird lediglich der
+   Dateibestand geladen (die Engine braucht je Jahr einige Sekunden). */
+var _TAX4 = { files: [], available: [], cached: [], inited: false,
+              sections: [], selSections: null };
+
+function _taxEsc(s) {
+    return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Lädt beim Öffnen der Seite nur den Dateibestand + die PDF-Abschnittsliste. */
+async function taxStoreInit(force) {
+    if (_TAX4.inited && !force) return;
+    _TAX4.inited = true;
+    try {
+        var r = await fetch('/api/tax/files?kind=xml').then(function (x) { return x.json(); });
+        if (r && r.ok) _taxApplyStore(r);
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Bestand konnte nicht geladen werden: ' + e.message, 'err');
+    }
+    _taxLoadPdfSections();
+}
+
+/** Übernimmt Dateiliste + gecachte Jahre aus einer Server-Antwort und rendert. */
+function _taxApplyStore(r) {
+    if (r.files) _TAX4.files = r.files;
+    if (r.cached_years) _TAX4.cached = r.cached_years;
+    _TAX4.available = _TAX4.files.map(function (f) { return f.year; })
+        .filter(function (y, i, a) { return y && a.indexOf(y) === i; }).sort();
+    _taxRenderTree();
+    _taxRenderRunYears();
+}
+
+function _taxFmtSize(b) {
+    if (b == null) return '';
+    return b > 1048576 ? (b / 1048576).toFixed(1).replace('.', ',') + ' MB'
+                       : Math.max(1, Math.round(b / 1024)) + ' KB';
+}
+
+/** Dateibaum: Jahr → abgelegte XMLs (mit Zeitraum, Größe, Ablagedatum, Löschen). */
+function _taxRenderTree() {
+    var el = document.getElementById('tax4-tree');
+    if (!el) return;
+    if (!_TAX4.files.length) {
+        el.innerHTML = '<div class="tax-tree-empty">Noch keine Statements abgelegt — '
+            + 'XMLs hochladen oder von IBKR holen.</div>';
+        return;
+    }
+    var byYear = {};
+    _TAX4.files.forEach(function (f) {
+        var y = f.year || 'ohne Jahr';
+        (byYear[y] = byYear[y] || []).push(f);
+    });
+    var years = Object.keys(byYear).sort().reverse();
+    var acct = '';
+    _TAX4.files.forEach(function (f) { acct = acct || f.account_name || f.account_id || ''; });
+    var html = '<div class="tax-tree-head">🗂️ <b>' + _TAX4.files.length + '</b> Statement(s) auf dem Server'
+        + (acct ? ' · Konto ' + _taxEsc(acct) : '')
+        + '<a href="#" class="tax-tree-clear" onclick="_taxClearStored(\'xml\');return false;">alle löschen</a></div>';
+    years.forEach(function (y) {
+        var done = _TAX4.cached.indexOf(y) >= 0;
+        html += '<details class="tax-tree-year" open><summary>'
+            + '<span class="tt-year">' + _taxEsc(y) + '</span>'
+            + '<span class="tt-count">' + byYear[y].length + ' Datei(en)</span>'
+            + '<span class="tt-state ' + (done ? 'ok' : '') + '">' + (done ? '✓ gerechnet' : 'nicht gerechnet') + '</span>'
+            + '</summary>';
+        byYear[y].forEach(function (f) {
+            var zeit = (f.from_date && f.to_date) ? (f.from_date + ' – ' + f.to_date) : '';
+            var abg = f.mtime ? new Date(f.mtime * 1000).toLocaleDateString('de-DE') : '';
+            html += '<div class="tax-file-row">'
+                + '<span class="tf-name">📄 ' + _taxEsc(f.name) + '</span>'
+                + '<span class="tf-meta">' + _taxEsc(zeit) + '</span>'
+                + '<span class="tf-meta">' + _taxFmtSize(f.size) + '</span>'
+                + '<span class="tf-meta">abgelegt ' + abg + '</span>'
+                + '<a href="#" class="tf-del" title="Diese Datei vom Server löschen" '
+                + 'onclick="_taxDeleteFile(\'xml\',\'' + _taxEsc(f.name) + '\');return false;">✕</a>'
+                + '</div>';
+        });
+        html += '</details>';
+    });
+    el.innerHTML = html;
+}
+
+/** Jahres-Auswahl für „Report erstellen" (alle Jahre + jedes einzelne Jahr). */
+function _taxRenderRunYears() {
+    var sel = document.getElementById('tax4-run-year');
+    if (!sel) return;
+    var prev = sel.value;
+    var years = _TAX4.available.slice().reverse();
+    sel.innerHTML = years.map(function (y) {
+        return '<option value="' + y + '">' + y + (_TAX4.cached.indexOf(y) >= 0 ? ' ✓' : '') + '</option>';
+    }).join('') + '<option value="all">alle Jahre' + (years.length ? ' (' + years.length + ')' : '') + '</option>';
+    if (prev && Array.prototype.some.call(sel.options, function (o) { return o.value === prev; })) sel.value = prev;
+    var hint = document.getElementById('tax4-run-hint');
+    if (hint) hint.textContent = years.length
+        ? 'bereits gerechnete Jahre (✓) kommen sofort aus dem Zwischenspeicher'
+        : '';
+    var btn = document.getElementById('tax4-run-btn');
+    if (btn) btn.disabled = !years.length;
+}
+
+/** Upload: Dateien nur ablegen — die Berechnung startest du danach selbst. */
+async function taxKonvexUpload(fileList) {
     if (!fileList || !fileList.length) return;
-    _taxRun('steuer4', fileList);
+    var files = Array.prototype.slice.call(fileList);
+    var fd = new FormData();
+    files.forEach(function (f) { fd.append('files', f); });
+    _taxSetMsg('tax4-msg', 'Lege ' + files.length + ' Datei(en) ab …', '');
+    try {
+        var res = await fetch('/api/tax/upload?kind=xml', { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); });
+        if (res && res.ok) {
+            _taxApplyStore(res);
+            _taxSetMsg('tax4-msg', '✓ ' + res.added + ' Datei(en) abgelegt — jetzt „Report erstellen" wählen.', 'ok');
+        } else {
+            _taxSetMsg('tax4-msg', 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Fehler: ' + e.message, 'err');
+    }
+}
+
+/** Rechnet den Report — für das gewählte Jahr oder alle Jahre. */
+async function taxKonvexRun(btn) {
+    var sel = document.getElementById('tax4-run-year');
+    var y = sel ? sel.value : '';
+    if (!_TAX4.files.length) {
+        _taxSetMsg('tax4-msg', 'Keine abgelegten Dateien — bitte XML hochladen.', '');
+        return;
+    }
+    var label = (y === 'all') ? 'alle Jahre' : ('Jahr ' + y);
+    var old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ rechne …'; }
+    _taxSetMsg('tax4-msg', 'Rechne ' + label + ' … (beim ersten Mal einige Sekunden je Jahr, '
+        + 'danach aus dem Zwischenspeicher)', '');
+    try {
+        var res = await fetch('/api/tax/report-konvex?year=' + encodeURIComponent(y), { method: 'POST' })
+            .then(function (r) { return r.json(); });
+        if (res && res.ok) {
+            _taxKonvexApply(res);
+            var neu = (res.recomputed || []).length;
+            _taxSetMsg('tax4-msg', '✓ ' + (res.computed_years || []).join(', ') + ' ausgewertet'
+                + (neu ? ' (' + neu + ' neu gerechnet)' : ' (aus dem Zwischenspeicher)')
+                + (res.account ? ' · Konto ' + res.account : ''), 'ok');
+        } else if (res && res.no_files) {
+            _taxSetMsg('tax4-msg', 'Keine abgelegten Dateien — bitte XML hochladen.', '');
+        } else {
+            _taxSetMsg('tax4-msg', 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Fehler: ' + e.message, 'err');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    }
 }
 
 /**
@@ -4097,12 +4239,9 @@ async function taxKonvexFetchFlex(btn) {
     try {
         var res = await fetch('/api/tax/fetch-flex', { method: 'POST' }).then(function (r) { return r.json(); });
         if (res && res.ok) {
-            var years = (res.available_years || []).filter(Boolean).join(', ');
-            _taxSetMsg('tax4-msg', '✓ IBKR-Abruf · Jahr ' + (res.fetched_year || '') + ' aktualisiert · '
-                + years + ' ausgewertet' + (res.account ? ' · Konto ' + res.account : ''), 'ok');
-            _TAX_CFG.steuer4.loaded = true;
-            taxKonvexRender(res);
-            _taxIndicator(_TAX_CFG.steuer4, res.stored_files);
+            _taxKonvexApply(res);
+            _taxSetMsg('tax4-msg', '✓ IBKR-Abruf · Jahr ' + (res.fetched_year || '') + ' aktualisiert und gerechnet'
+                + (res.account ? ' · Konto ' + res.account : ''), 'ok');
         } else {
             _taxSetMsg('tax4-msg', 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
         }
@@ -4113,25 +4252,108 @@ async function taxKonvexFetchFlex(btn) {
     }
 }
 
-function taxKonvexRender(data) {
-    _taxData4 = data;
+/**
+ * Übernimmt ein Rechen-Ergebnis: gerechnete Jahre werden gesammelt (bereits
+ * gerechnete bleiben erhalten), Dateibaum/Jahresauswahl aktualisiert, Jahr gerendert.
+ */
+function _taxKonvexApply(res) {
+    if (!_taxData4) _taxData4 = { years: {} };
+    var ys = res.years || {};
+    Object.keys(ys).forEach(function (y) { _taxData4.years[y] = ys[y]; });
+    if (res.account) _taxData4.account = res.account;
+    if (res.available_years) _TAX4.available = res.available_years;
+    if (res.cached_years) _TAX4.cached = res.cached_years;
+    if (res.files) _TAX4.files = res.files;
+    _taxRenderTree();
+    _taxRenderRunYears();
     var box = document.getElementById('tax4-result');
     if (box) box.style.display = '';
-    var sel = document.getElementById('tax4-year-select');
-    if (sel) {
-        sel.innerHTML = (data.available_years || []).map(function(y) {
-            return '<option value="' + y + '"' + (y === data.year ? ' selected' : '') + '>' + y + '</option>';
-        }).join('');
+    _taxRenderYearSelect(res.year);
+    if (_taxData4.years[res.year]) _taxKonvexRenderYear(_taxData4.years[res.year]);
+}
+
+/** Jahres-Selektor über dem Ergebnis — noch nicht gerechnete Jahre sind markiert. */
+function _taxRenderYearSelect(sel) {
+    var el = document.getElementById('tax4-year-select');
+    if (!el) return;
+    var years = (_TAX4.available.length ? _TAX4.available
+                                        : Object.keys((_taxData4 || {}).years || {})).slice().reverse();
+    el.innerHTML = years.map(function (y) {
+        var have = _taxData4 && _taxData4.years && _taxData4.years[y];
+        return '<option value="' + y + '"' + (y === sel ? ' selected' : '') + '>'
+            + y + (have ? '' : ' · noch nicht gerechnet') + '</option>';
+    }).join('');
+}
+
+/** Jahreswechsel: schon gerechnet → sofort rendern, sonst nachrechnen (meist Cache). */
+async function taxKonvexSelectYear(year) {
+    if (!year) return;
+    if (_taxData4 && _taxData4.years && _taxData4.years[year]) {
+        _taxRenderYearSelect(year);
+        _taxKonvexRenderYear(_taxData4.years[year]);
+        return;
     }
-    taxKonvexSelectYear(data.year);
+    _taxSetMsg('tax4-msg', 'Rechne Jahr ' + year + ' …', '');
+    try {
+        var res = await fetch('/api/tax/report-konvex?year=' + encodeURIComponent(year), { method: 'POST' })
+            .then(function (r) { return r.json(); });
+        if (res && res.ok) {
+            _taxKonvexApply(res);
+            _taxSetMsg('tax4-msg', '✓ ' + year + ' ausgewertet'
+                + ((res.recomputed || []).length ? '' : ' (aus dem Zwischenspeicher)'), 'ok');
+        } else {
+            _taxSetMsg('tax4-msg', 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
+        }
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Fehler: ' + e.message, 'err');
+    }
 }
 
-function taxKonvexSelectYear(year) {
-    if (!_taxData4 || !_taxData4.years || !_taxData4.years[year]) return;
-    _taxKonvexRenderYear(_taxData4.years[year]);
+/* ── PDF-Abschnitte (welche Teile der Bericht enthalten soll) ───────────────── */
+
+var _TAX_PDF_LS = 'folio.tax4.pdfSections';
+
+async function _taxLoadPdfSections() {
+    if (!_TAX4.sections.length) {
+        try {
+            var r = await fetch('/api/tax/pdf-sections').then(function (x) { return x.json(); });
+            if (!r || !r.ok) return;
+            _TAX4.sections = r.sections || [];
+            var saved = null;
+            try { saved = JSON.parse(localStorage.getItem(_TAX_PDF_LS) || 'null'); } catch (e) { saved = null; }
+            _TAX4.selSections = (saved && saved.length) ? saved : (r.defaults || []).slice();
+        } catch (e) { return; }
+    }
+    _taxRenderPdfSections();
 }
 
-/** Lädt den vollständigen PDF-Steuerbericht für das gewählte Jahr (serverseitig erzeugt). */
+function _taxRenderPdfSections() {
+    var el = document.getElementById('tax4-pdf-sections');
+    if (!el) return;
+    var sel = _TAX4.selSections || [];
+    el.innerHTML = _TAX4.sections.map(function (s) {
+        return '<label class="pdf-opt"><input type="checkbox" value="' + _taxEsc(s.key) + '"'
+            + (sel.indexOf(s.key) >= 0 ? ' checked' : '')
+            + ' onchange="taxPdfSectionToggle(this)"> ' + _taxEsc(s.label) + '</label>';
+    }).join('');
+}
+
+function taxPdfSectionToggle(cb) {
+    var sel = (_TAX4.selSections || []).slice();
+    var i = sel.indexOf(cb.value);
+    if (cb.checked && i < 0) sel.push(cb.value);
+    if (!cb.checked && i >= 0) sel.splice(i, 1);
+    _TAX4.selSections = sel;
+    try { localStorage.setItem(_TAX_PDF_LS, JSON.stringify(sel)); } catch (e) { /* egal */ }
+}
+
+function taxPdfSectionsAll(on) {
+    _TAX4.selSections = on ? _TAX4.sections.map(function (s) { return s.key; }) : [];
+    try { localStorage.setItem(_TAX_PDF_LS, JSON.stringify(_TAX4.selSections)); } catch (e) { /* egal */ }
+    _taxRenderPdfSections();
+}
+
+/** Lädt den PDF-Steuerbericht für das gewählte Jahr (serverseitig erzeugt). */
 async function taxKonvexPdf() {
     var sel = document.getElementById('tax4-year-select');
     var year = sel ? sel.value : (_taxData4 && _taxData4.year);
@@ -4140,7 +4362,10 @@ async function taxKonvexPdf() {
     var old = btn ? btn.innerHTML : '';
     if (btn) { btn.disabled = true; btn.innerHTML = '⏳ erstelle …'; }
     try {
-        var resp = await fetch('/api/tax/report-konvex-pdf?year=' + encodeURIComponent(year));
+        // leere Auswahl bewusst als "-" senden (sonst würde der Server alles nehmen)
+        var secs = _TAX4.selSections ? (_TAX4.selSections.join(',') || '-') : '';
+        var resp = await fetch('/api/tax/report-konvex-pdf?year=' + encodeURIComponent(year)
+            + (secs ? '&sections=' + encodeURIComponent(secs) : ''));
         if (!resp.ok) {
             var e = await resp.json().catch(function() { return {}; });
             throw new Error(e.error || ('HTTP ' + resp.status));
@@ -4502,122 +4727,55 @@ function _taxRenderYear(d, filesYears) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  Gespeicherte Steuer-Dateien — Auto-Laden beim Öffnen + Verwaltung
+ *  Abgelegte Steuer-Dateien — Verwaltung (Dateibaum)
  *  ----------------------------------------------------------------------------
- *  Hochgeladene IBKR-Statements werden serverseitig pro User gespeichert (Sorte
- *  "csv" für Steuer/Steuer +, "xml" für Steuer ++/Steuer +++). Beim Öffnen einer
- *  Seite (onShow) wird der gespeicherte Bestand automatisch ausgewertet, sodass
- *  kein erneuter Upload nötig ist. Upload und Auto-Laden teilen sich _taxRun().
+ *  Die IBKR-Statements liegen serverseitig pro User (Sorte "xml"). Beim Öffnen
+ *  der Seite wird NUR der Bestand geladen (taxStoreInit); gerechnet wird auf
+ *  Knopfdruck über taxKonvexRun() — je Jahr oder für alle Jahre.
  * ═══════════════════════════════════════════════════════════════════════════ */
-
-var _TAX_CFG = {
-    steuer4: { ep: '/api/tax/report-konvex', kind: 'xml', msg: 'tax4-msg', ind: 'tax4-stored', render: taxKonvexRender, loaded: false }
-};
 
 function _taxSetMsg(id, t, c) {
     var m = document.getElementById(id);
     if (m) { m.textContent = t; m.className = 'settings-msg ' + (c || ''); }
 }
 
-/** Zeigt „💾 N gespeicherte Datei(en) … · löschen" oder blendet aus. */
-function _taxIndicator(cfg, files) {
-    var el = document.getElementById(cfg.ind);
-    if (!el) return;
-    if (!files || !files.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
-    el.style.display = '';
-    var esc = function (s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
-    var chips = files.map(function (f) {
-        return '<span class="tax-file-chip">📄 ' + esc(f)
-            + '<a href="#" title="Diese Datei vom Server löschen" '
-            + 'onclick="_taxDeleteFile(\'' + cfg.kind + '\',\'' + esc(f) + '\');return false;" '
-            + 'class="tax-file-x">✕</a></span>';
-    }).join('');
-    el.innerHTML = '<div style="margin-bottom:4px">💾 <b>' + files.length
-        + '</b> gespeicherte XML-Datei(en) auf dem Server '
-        + '<a href="#" onclick="_taxClearStored(\'' + cfg.kind + '\');return false;" '
-        + 'style="color:var(--red);font-size:10px;margin-left:6px">alle löschen</a></div>'
-        + '<div class="tax-file-list">' + chips + '</div>'
-        + '<div style="font-size:10px;color:var(--muted);margin-top:4px">Einzelne Jahres-XML zum '
-        + 'Aktualisieren einfach neu hochladen (gleicher Name wird überschrieben, andere bleiben).</div>';
-}
-
-/** Sorten-Schwestern (gleiche Sorte) finden — für gemeinsame Indikator-/Status-Updates. */
-function _taxSiblings(kind) {
-    return Object.keys(_TAX_CFG).filter(function (k) { return _TAX_CFG[k].kind === kind; });
-}
-
-/**
- * Wertet aus. fileList = FileList → Upload (speichert serverseitig);
- * null → gespeicherten Bestand laden (Auto-Laden beim Öffnen).
- */
-async function _taxRun(key, fileList) {
-    var cfg = _TAX_CFG[key];
-    if (!cfg) return;
-    var files = fileList ? Array.prototype.slice.call(fileList) : [];
-    var fd = new FormData();
-    files.forEach(function (f) { fd.append('files', f); });
-    _taxSetMsg(cfg.msg, files.length ? ('Verarbeite ' + files.length + ' Datei(en) …')
-                                     : 'Lade gespeicherte Dateien … (kann kurz dauern)', '');
-    try {
-        var res = await fetch(cfg.ep, { method: 'POST', body: fd }).then(function (r) { return r.json(); });
-        if (res && res.ok) {
-            var src = res.source === 'upload' ? 'hochgeladen' : 'Server-Speicher';
-            var years = (res.available_years || res.files_years || []).filter(Boolean).join(', ');
-            _taxSetMsg(cfg.msg, '✓ ' + years + ' ausgewertet (' + src + ')'
-                + (res.account ? ' · Konto ' + res.account : ''), 'ok');
-            cfg.loaded = true;
-            cfg.render(res);
-            // Indikator auf allen Schwester-Seiten der Sorte aktualisieren
-            _taxSiblings(cfg.kind).forEach(function (k) { _taxIndicator(_TAX_CFG[k], res.stored_files); });
-        } else if (res && res.no_files) {
-            _taxSetMsg(cfg.msg, 'Keine gespeicherten Dateien — bitte XML hochladen.', '');
-            _taxSiblings(cfg.kind).forEach(function (k) {
-                _TAX_CFG[k].loaded = false;
-                _taxIndicator(_TAX_CFG[k], []);
-                var box = document.getElementById(_TAX_CFG[k].ind.replace('-stored', '-result'));
-                if (box) box.style.display = 'none';
-            });
-        } else {
-            _taxSetMsg(cfg.msg, 'Fehler: ' + ((res && res.error) || 'unbekannt'), 'err');
-        }
-    } catch (e) {
-        _taxSetMsg(cfg.msg, 'Fehler: ' + e.message, 'err');
-    }
-}
-
-/** onShow-Hook: lädt den gespeicherten Bestand einmal pro Session automatisch. */
-function taxAutoload(key) {
-    var cfg = _TAX_CFG[key];
-    if (!cfg || cfg.loaded) return;
-    _taxRun(key, null);
-}
-
-/** Löscht den gespeicherten Bestand einer Sorte (xml|csv) → betrifft beide Seiten. */
+/** Löscht den gesamten abgelegten Bestand (inkl. gerechneter Ergebnisse). */
 async function _taxClearStored(kind) {
-    if (!window.confirm('Alle gespeicherten ' + kind.toUpperCase() + '-Dateien auf dem Server löschen?')) return;
-    try { await fetch('/api/tax/files?kind=' + encodeURIComponent(kind), { method: 'DELETE' }); }
-    catch (e) { /* still UI zurücksetzen */ }
-    _taxSiblings(kind).forEach(function (k) {
-        var c = _TAX_CFG[k];
-        c.loaded = false;
-        _taxIndicator(c, []);
-        _taxSetMsg(c.msg, 'Gespeicherte Dateien gelöscht.', '');
-        var box = document.getElementById(c.ind.replace('-stored', '-result'));
-        if (box) box.style.display = 'none';
-    });
+    if (!window.confirm('Alle abgelegten ' + kind.toUpperCase() + '-Dateien auf dem Server löschen?')) return;
+    try {
+        var res = await fetch('/api/tax/files?kind=' + encodeURIComponent(kind), { method: 'DELETE' })
+            .then(function (r) { return r.json(); });
+        _TAX4.files = (res && res.files) || [];
+        _TAX4.cached = (res && res.cached_years) || [];
+    } catch (e) {
+        _TAX4.files = []; _TAX4.cached = [];
+    }
+    _taxData4 = null;
+    _TAX4.available = [];
+    _taxRenderTree();
+    _taxRenderRunYears();
+    var box = document.getElementById('tax4-result');
+    if (box) box.style.display = 'none';
+    _taxSetMsg('tax4-msg', 'Abgelegte Dateien gelöscht.', '');
 }
 
-/** Löscht eine einzelne gespeicherte Datei und rechnet aus dem Rest neu. */
+/** Löscht eine einzelne abgelegte Datei (ohne neu zu rechnen). */
 async function _taxDeleteFile(kind, name) {
     if (!window.confirm('Datei „' + name + '" vom Server löschen?')) return;
     try {
-        await fetch('/api/tax/files?kind=' + encodeURIComponent(kind) + '&name=' + encodeURIComponent(name),
-                    { method: 'DELETE' });
-    } catch (e) { /* weiter, UI aktualisiert über _taxRun */ }
-    var keys = _taxSiblings(kind);
-    keys.forEach(function (k) { _TAX_CFG[k].loaded = false; });
-    // Neu auswerten aus dem verbleibenden Bestand (aktualisiert Liste + Ergebnisse)
-    _taxRun(keys[0] || 'steuer4', null);
+        var res = await fetch('/api/tax/files?kind=' + encodeURIComponent(kind)
+            + '&name=' + encodeURIComponent(name), { method: 'DELETE' })
+            .then(function (r) { return r.json(); });
+        if (res && res.ok) _taxApplyStore(res);
+    } catch (e) {
+        _taxSetMsg('tax4-msg', 'Fehler beim Löschen: ' + e.message, 'err');
+        return;
+    }
+    // Der Bestand hat sich geändert → bisherige Ergebnisse gelten nicht mehr.
+    _taxData4 = null;
+    var box = document.getElementById('tax4-result');
+    if (box) box.style.display = 'none';
+    _taxSetMsg('tax4-msg', 'Datei gelöscht — Report bei Bedarf neu erstellen.', '');
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -4725,10 +4883,14 @@ async function screenerInit() {
     // Benutzer), danach das automatische Speichern anhängen — in dieser
     // Reihenfolge, sonst würde das Anwenden selbst als Änderung gespeichert.
     try {
-        var saved = await fetch('/api/screener/settings').then(function (r) { return r.json(); });
+        var sres = await fetch('/api/screener/settings');
+        if (!sres.ok) throw new Error('HTTP ' + sres.status);
+        var saved = await sres.json();
         if (_scrApplySettings(saved)) logIt(6, 'Screener', 'Gespeicherte Einstellungen geladen');
+        else logIt(6, 'Screener', 'Keine gespeicherten Einstellungen — Vorauswahl aktiv');
     } catch (e) {
-        logIt(2, 'Screener', 'Einstellungen laden fehlgeschlagen: ' + e.message);
+        logIt(1, 'Screener', 'Einstellungen laden fehlgeschlagen: ' + e.message);
+        _scrMsg('⚠ Gespeicherte Einstellungen konnten nicht geladen werden: ' + e.message, 'err');
     }
     _scrWireSettingsAutosave();
 
@@ -4881,24 +5043,72 @@ function _scrSettingsChanged() {
     _scrSaveTimer = setTimeout(_scrSaveSettings, 800);
 }
 
+/** Kurze Rückmeldung in der Screener-Statuszeile, die sich selbst wieder aufräumt. */
+function _scrFlash(text, cls, ms) {
+    _scrMsg(text, cls);
+    setTimeout(function () {
+        var el = document.getElementById('scr-msg');
+        if (el && el.textContent === text) _scrMsg('', '');
+    }, ms || 2500);
+}
+
 async function _scrSaveSettings() {
+    _scrSaveTimer = null;
     try {
-        await fetch('/api/screener/settings', {
+        var r = await fetch('/api/screener/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(_scrCollectSettings()),
         });
+        // fetch wirft bei 4xx/5xx NICHT — sonst meldet die Oberfläche „gespeichert",
+        // obwohl der Server nichts geschrieben hat.
+        if (!r.ok) {
+            var detail = '';
+            try { detail = (await r.json()).error || ''; } catch (e) { detail = ''; }
+            var msg = 'Einstellungen konnten nicht gespeichert werden (HTTP ' + r.status
+                + (detail ? ': ' + detail : '') + ')';
+            logIt(1, 'Screener', msg);
+            _scrMsg('⚠ ' + msg, 'err');
+            return;
+        }
         logIt(7, 'Screener', 'Einstellungen gespeichert');
+        _scrFlash('✓ Einstellungen gespeichert', 'ok');
     } catch (e) {
-        logIt(2, 'Screener', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+        logIt(1, 'Screener', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+        _scrMsg('⚠ Einstellungen speichern fehlgeschlagen: ' + e.message, 'err');
+    }
+}
+
+/**
+ * Noch offene Änderung sofort wegschreiben, wenn die Seite verlassen/versteckt
+ * wird — sonst geht verloren, was keine 800 ms alt ist (F5 direkt nach dem Klick).
+ * sendBeacon läuft auch noch, wenn das Dokument schon abgebaut wird.
+ */
+function _scrFlushSettings() {
+    if (!_scrSaveTimer) return;
+    clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
+    try {
+        var body = new Blob([JSON.stringify(_scrCollectSettings())], { type: 'application/json' });
+        if (!navigator.sendBeacon || !navigator.sendBeacon('/api/screener/settings', body)) {
+            _scrSaveSettings();
+        }
+    } catch (e) {
+        logIt(2, 'Screener', 'Einstellungen beim Verlassen nicht gesichert: ' + e.message);
     }
 }
 
 /** Zurück auf die Vorgaben aus screener.py — gespeicherte Datei löschen und neu aufbauen. */
 async function screenerResetSettings() {
+    // Eine noch offene Autosave-Änderung darf nach dem Löschen nicht nachträglich
+    // wieder auf den Server laufen.
+    clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
+    var failed = '';
     try {
-        await fetch('/api/screener/settings', { method: 'DELETE' });
-    } catch (e) { /* auch ohne Serverantwort das Formular zurücksetzen */ }
+        var r = await fetch('/api/screener/settings', { method: 'DELETE' });
+        if (!r.ok) failed = 'HTTP ' + r.status;
+    } catch (e) { failed = e.message; }
     document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
         cb.checked = _SCR.defaults.indexOf(cb.dataset.idx) >= 0;
     });
@@ -4915,7 +5125,13 @@ async function screenerResetSettings() {
     if (un) un.value = 'Mrd $';
     var hintEl = document.getElementById('scr-cap-hint');
     if (hintEl) { hintEl.textContent = '↳ 0 = keine Grenze → alle MarktCaps'; hintEl.style.color = ''; }
-    _scrMsg('Einstellungen auf die Vorgaben zurückgesetzt', 'ok');
+    if (failed) {
+        logIt(1, 'Screener', 'Gespeicherte Einstellungen konnten nicht gelöscht werden: ' + failed);
+        _scrMsg('⚠ Formular zurückgesetzt, aber der Server hat die gespeicherten '
+            + 'Einstellungen nicht gelöscht (' + failed + ')', 'err');
+    } else {
+        _scrMsg('Einstellungen auf die Vorgaben zurückgesetzt', 'ok');
+    }
 }
 
 /** Hängt das automatische Speichern an alle Eingabefelder des Screeners. */
@@ -4931,6 +5147,12 @@ function _scrWireSettingsAutosave() {
         if (!el) return;
         el.addEventListener('input', _scrSettingsChanged);
         el.addEventListener('change', _scrSettingsChanged);
+    });
+    // Offene Änderung sichern, bevor die Seite weg ist (Neuladen, Tab-Wechsel, Schließen)
+    window.addEventListener('pagehide', _scrFlushSettings);
+    window.addEventListener('beforeunload', _scrFlushSettings);
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') _scrFlushSettings();
     });
 }
 
@@ -4972,6 +5194,7 @@ async function screenerStart() {
     // Beim Start festhalten, was gerade eingestellt ist — sonst ginge eine
     // Änderung verloren, die keine 800 ms alt ist (siehe _scrSettingsChanged).
     clearTimeout(_scrSaveTimer);
+    _scrSaveTimer = null;
     _scrSaveSettings();
 
     var body = {
