@@ -1122,6 +1122,9 @@ function renderWatchlist() {
     el.appendChild(idxDiv);
     } // end basketShowIndex
 
+    // Im IBKR-Basket zusätzlich Depotanteil und Positionsgröße je Ticker
+    var ibkrVals = ibkrWatchlistValues();
+
     // Ticker (alphabetisch)
     Object.keys(WEIGHTS).sort().forEach(function(sym) {
         var p      = perfData[sym];
@@ -1132,7 +1135,26 @@ function renderWatchlist() {
         var logoHtml = '<img class="wl-logo"'
             + ' src="https://financialmodelingprep.com/image-stock/' + sym + '.png"'
             + ' onerror="this.style.display=\'none\'">';
-        div.innerHTML = '<div class="wl-sym">' + logoHtml + sym + '</div>'
+
+        // Zweite Zeile links: "4,2 % · 12.300 €". Der Betrag verschwindet per
+        // Container-Abfrage, sobald das Fenster zu schmal wird.
+        var metaHtml = '';
+        if (ibkrVals && ibkrVals.value[sym] !== undefined) {
+            var val   = ibkrVals.value[sym];
+            var share = ibkrVals.depot ? (val / ibkrVals.depot * 100) : null;
+            metaHtml = '<div class="wl-meta">'
+                + (share !== null
+                    ? '<span class="wl-share">' + share.toLocaleString('de-DE', {
+                          minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '&nbsp;%</span>'
+                    : '')
+                + '<span class="wl-size"> · ' + Math.round(val).toLocaleString('de-DE') + '&nbsp;€</span>'
+                + '</div>';
+        }
+
+        div.innerHTML = '<div class="wl-left">'
+            + '<div class="wl-sym">' + logoHtml + sym + '</div>'
+            + metaHtml
+            + '</div>'
             + '<div class="wl-right">'
             + '<div class="wl-price">' + (p ? tickerCurSymbol(sym) + p.price.toFixed(2) : '-') + '</div>'
             + '<div class="wl-chg" style="color:' + (!active ? chgColor : 'rgba(255,255,255,0.85)') + '">'
@@ -2381,6 +2403,42 @@ function ibkrExposure(p, ccyFx) {
         return (p.quantity || 0) * (p.mark_price || 0) * mult * fx;
     }
     return ibkrLiveValue(p, ccyFx);
+}
+
+/**
+ * Depotgröße in Base — dieselbe Rechnung wie "NET Gesamt" im Portfolio-Report:
+ * Long + Cash + Short. Bezugsgröße für den Anteil einer Position am Depot.
+ */
+function ibkrDepotTotal(ccyFx) {
+    var cashBase = (ibkrCash || []).find(function(c) { return c.currency === 'BASE'; });
+    var total    = cashBase ? (cashBase.ending_cash || 0) : 0;
+    (ibkrPositions || []).forEach(function(p) {
+        total += ibkrLiveValue(p, ccyFx);
+    });
+    return total;
+}
+
+/**
+ * Wert und Depotanteil je Yahoo-Symbol für die Watchlist des IBKR-Baskets.
+ * Mehrere IBKR-Positionen können auf dasselbe Symbol zeigen (z. B. Teilbestände
+ * aus verschiedenen Konten) — die werden addiert.
+ * @returns {?Object} { value: {sym: Betrag}, depot: Zahl } oder null.
+ */
+function ibkrWatchlistValues() {
+    var b = baskets[currentBasket];
+    if (!b || !b.ibkrManaged) return null;
+    if (!ibkrPositions || !ibkrPositions.length) return null;
+
+    var ccyFx = ibkrCcyFx();
+    var value = {};
+    ibkrPositions.forEach(function(p) {
+        var sym = ibkrPosYahoo(p);
+        if (!sym) return;
+        value[sym] = (value[sym] || 0) + ibkrLiveValue(p, ccyFx);
+    });
+
+    var depot = ibkrDepotTotal(ccyFx);
+    return { value: value, depot: depot };
 }
 
 function renderPortfolioReport() {
