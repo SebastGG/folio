@@ -44,6 +44,11 @@ var PAGES = [
         id: 'log', label: 'Protokoll', icon: '🧾',
         // renderLog() überspringt versteckte Seiten — beim Öffnen einmal nachziehen
         onShow: function () { if (typeof renderLog === 'function') renderLog(true); }
+    },
+    {
+        id: 'hilfe', label: 'Hilfe', icon: '❓',
+        // Verzeichnis wird beim ersten Öffnen aus den Karten gebaut
+        onShow: function () { if (typeof helpInit === 'function') helpInit(); }
     }
 ];
 

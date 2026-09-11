@@ -626,6 +626,8 @@
         <span id="scr-msg" class="settings-msg"></span>
         <button id="scr-btn-reset"   class="scr-btn"                 onclick="screenerResetSettings()"
                 title="Indizes, Filter und MarktCap zurück auf die Vorgaben. Die Einstellungen werden sonst automatisch gespeichert und beim nächsten Öffnen wiederhergestellt.">↺ Einstellungen zurücksetzen</button>
+        <button id="scr-btn-merge"   class="scr-btn"                 onclick="screenerMergeDated()" style="display:none"
+                title="Übergangshilfe: benennt je Sektor den jüngsten Basket mit Datum im Namen auf den festen Namen „Screener {Sektor}“ um und bietet an, die restlichen datierten zu löschen. Die Gewichte bleiben unangetastet.">⇄ Datierte Baskets zusammenführen</button>
         <button id="scr-btn-clean"   class="scr-btn scr-btn-clean"   onclick="screenerDeleteBaskets()"
                 title="Entfernt NUR die vom Screener angelegten Baskets (Name beginnt mit „Screener “). Eigene Portfolios und IBKR-Baskets bleiben unberührt.">🗑 Screener-Baskets löschen</button>
       </div>
@@ -904,6 +906,341 @@
     <div class="log-body" id="logBody"></div>
   </div>
 </section><!-- end #view-log -->
+
+<!-- ══ SEITE: HILFE ═══════════════════════════════════════════════════════════ -->
+<section id="view-hilfe" class="page">
+  <div class="help-wrap">
+
+    <aside class="help-nav">
+      <input type="search" id="helpSearch" class="help-search" placeholder="In der Hilfe suchen…"
+             autocomplete="off" oninput="helpFilter(this.value)">
+      <div id="help-toc" class="help-toc"></div>
+      <div id="help-nohit" class="help-nohit" style="display:none;">Kein Treffer</div>
+    </aside>
+
+    <div class="help-body" id="helpBody">
+
+      <article class="help-card" id="help-ueberblick" data-t="Was Folio macht">
+        <h2 class="help-h">📈 Was Folio macht</h2>
+        <p>
+          Folio rechnet aus deinen Werten einen <b>eigenen Index</b>: Du legst fest, welche Ticker mit
+          welcher Stückzahl in einen Korb („Basket") gehören, und bekommst daraus eine Kurve, die sich
+          wie ein Chart bedienen lässt — mit Kerzen, Indikatoren und Zeichnungen. Daneben kannst du
+          jeden Einzelwert des Baskets anschauen.
+        </p>
+        <p class="help-tip">
+          Alles, was du anlegst, gehört zu <b>deinem Konto</b>: Baskets, Zeichnungen, Notizen,
+          Einstellungen und die Kursdatenbank liegen in deinem eigenen Verzeichnis auf dem Server.
+          Andere Benutzer sehen davon nichts.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-start" data-t="Erste Schritte">
+        <h2 class="help-h">🚀 Erste Schritte</h2>
+        <ol class="help-steps">
+          <li>Rechts in der Leiste auf <b>+</b> drücken und dem Basket einen Namen geben.</li>
+          <li>Auf den Reiter <b>⚙ Verwaltung</b> wechseln und unten im Suchfeld einen Ticker suchen
+              (z.&nbsp;B. <code>AAPL</code>). Der Treffer landet mit Gewicht&nbsp;1 im Basket.</li>
+          <li>Gewichte eintragen — das ist üblicherweise die <b>Stückzahl</b>, die du hältst.</li>
+          <li>Oben rechts <b>↻ Refresh</b> drücken: erst dann holt Folio die Kurse von Yahoo.</li>
+          <li><b>✓ Speichern</b> sichert Basket und Gewichte dauerhaft.</li>
+        </ol>
+        <p class="help-tip">
+          Ohne Refresh bleibt der Chart leer — neue Ticker haben noch keine Kursdaten in deiner
+          Datenbank.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-baskets" data-t="Baskets & Gewichte">
+        <h2 class="help-h">🧺 Baskets &amp; Gewichte</h2>
+        <p>
+          Über den <b>Pillen</b> oberhalb der Kursliste wechselst du zwischen den Baskets. Am aktiven
+          Basket hängen zwei kleine Knöpfe: <b>✎</b> benennt um, <b>×</b> löscht. Das <b>+</b> ganz
+          rechts legt einen neuen an.
+        </p>
+        <dl class="help-def">
+          <dt>Gewicht</dt>
+          <dd>Stückzahl im Index. <b>Negativ</b> = Short-Position (zieht den Index nach unten).</dd>
+          <dt>Gewicht 0</dt>
+          <dd>Der Wert bleibt als Beobachtung in der Liste, zählt aber nicht in den Index und wird
+              beim Refresh <b>nicht</b> mitgeladen.</dd>
+          <dt>Index anzeigen</dt>
+          <dd>Haken im Reiter <b>⚙ Verwaltung</b>. Aus = reine Watchlist ohne Indexkurve; sinnvoll bei
+              Baskets, die nur eine Beobachtungsliste sind.</dd>
+        </dl>
+        <p>
+          Im Fenster <b>📥 Import / Export</b> kannst du eine Textdatei hineinziehen — je Zeile
+          <code>AAPL 10</code> oder <code>AAPL,10</code>. Der Knopf darunter schreibt den aktuellen
+          Basket wieder als TXT heraus.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-chart" data-t="Chart & Indikatoren">
+        <h2 class="help-h">📊 Chart &amp; Indikatoren</h2>
+        <dl class="help-def">
+          <dt>1M … All</dt>
+          <dd>Zeitraum, der beim Laden angezeigt wird.</dd>
+          <dt>1T / 1W / 1M</dt>
+          <dd>Kerzengröße (Tages-, Wochen-, Monatskerzen).</dd>
+          <dt>MA50 / MA200</dt>
+          <dd>Gleitende Durchschnitte über 50 bzw. 200 Kerzen.</dd>
+          <dt>LogReg</dt>
+          <dd>Logarithmische Regression; das Zahlenfeld daneben gibt die <b>Anzahl Kerzen</b> an, über
+              die gerechnet wird.</dd>
+          <dt>Log</dt>
+          <dd>Logarithmische Preisachse — bei langen Zeiträumen meist die ehrlichere Darstellung.</dd>
+          <dt>VRVP</dt>
+          <dd>Volumenprofil des <i>sichtbaren</i> Bereichs. Die kräftigere Zeile ist der POC, also der
+              Kurs mit dem meisten Volumen.</dd>
+          <dt>⤢ Fit</dt>
+          <dd>Chart wieder einpassen, wenn du dich verzoomt hast.</dd>
+          <dt>📍 Trades</dt>
+          <dd>Deine IBKR-Ausführungen als Marker; die Pfeilspitze sitzt auf dem Ausführungskurs.</dd>
+          <dt>📅 Earnings</dt>
+          <dd>Quartalstermine als senkrechte Linien — nur bei einer Einzelaktie, nicht im Index.</dd>
+          <dt>📊 Sektor-ETF</dt>
+          <dd>Legt den SPDR-ETF des Sektors als <b>relative Stärke</b> über die Aktie (eigene linke
+              Achse, mit dem Mausrad darauf skalierbar). Ebenfalls nur bei Einzelaktien.</dd>
+        </dl>
+        <p class="help-tip">
+          Oben links im Chart stehen beim Fahren mit der Maus <b>OHLC</b>, Volumen und das
+          Durchschnittsvolumen der jeweiligen Kerze.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-zeichnen" data-t="Zeichnen">
+        <h2 class="help-h">✏️ Zeichnen</h2>
+        <p>
+          Die Leiste links am Chart enthält Linien, Fibonacci, Gann, Kanäle, Pitchforks, Formen,
+          Annotationen und Prognose-Werkzeuge. Ein Klick auf ein Gruppensymbol klappt die Auswahl auf,
+          das zuletzt benutzte Werkzeug bleibt oben liegen.
+        </p>
+        <dl class="help-def">
+          <dt>Farbe / Strich</dt>
+          <dd>Unten in der Leiste: Farbfeld sowie durchgezogen, gestrichelt und gepunktet — wirkt auf
+              die <b>ausgewählte</b> Zeichnung.</dd>
+          <dt>🧲 Magnet</dt>
+          <dd>Endpunkte rasten auf Kurswerte ein.</dd>
+          <dt>🔒 Sperren</dt>
+          <dd>Zeichnungen lassen sich nicht mehr versehentlich verschieben.</dd>
+          <dt>👁 Sichtbarkeit</dt>
+          <dd>Blendet alle Zeichnungen aus, ohne sie zu löschen.</dd>
+          <dt>🗑</dt>
+          <dd>Löscht alle Zeichnungen der aktuellen Ansicht.</dd>
+        </dl>
+        <p class="help-tip">
+          Zeichnungen werden <b>je Ansicht</b> gespeichert: der Index hat eigene, jeder Ticker hat
+          eigene. Sie sind sofort gesichert — dafür musst du nicht auf Speichern drücken.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-fenster" data-t="Fenster & Layout">
+        <h2 class="help-h">🪟 Fenster &amp; Layout</h2>
+        <p>
+          Chart, Stammdaten, Eigene Trades, Kursliste, Performance, Notizen und Import/Export sind
+          eigene Fenster. Jedes lässt sich über das <b>×</b> in seiner Kopfzeile schließen, und an den
+          Trennern dazwischen ziehst du die Größen zurecht.
+        </p>
+        <p>
+          Geschlossene Fenster und alle Größen merkt sich Folio pro Benutzer. Unter
+          <b>Einstellungen → Fenster</b> steht, was gerade geschlossen ist; <b>↺ Layout
+          wiederherstellen</b> holt alles zurück.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-listen" data-t="Kursliste & Performance">
+        <h2 class="help-h">📋 Kursliste &amp; Performance</h2>
+        <p>
+          Ein Klick auf eine Zeile der Kursliste zeigt diesen Wert im Chart, ein Klick auf die
+          <b>INDEX</b>-Zeile den ganzen Basket. Mit <kbd>↑</kbd> und <kbd>↓</kbd> gehst du die Liste
+          durch. In einem IBKR-Basket steht unter dem Symbol zusätzlich der Anteil am Depot — und bei
+          breitem Fenster der Betrag.
+        </p>
+        <p>
+          Die <b>Performance</b>-Tabelle zeigt Kurs, Stückzahl, Positionswert, IBKR-P&amp;L und die
+          Veränderung über 1T/1W/1M/3M/YTD. Über das Auswahlfeld in der Kopfzeile sortierst du danach.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-kurse" data-t="Kurse & Aktualisierung">
+        <h2 class="help-h">↻ Kurse &amp; Aktualisierung</h2>
+        <p>
+          <b>↻ Refresh</b> holt für alle Ticker mit Gewicht ≠ 0 die fehlenden Tage von Yahoo und lädt
+          den Chart neu. Mehr als <b>ein Update pro Minute</b> lässt der Server nicht zu — der Rest
+          kommt aus der Datenbank und ist sofort da.
+        </p>
+        <dl class="help-def">
+          <dt>Notierung</dt>
+          <dd>Yahoo-Schreibweise verwenden: <code>AAPL</code>, aber <code>SAP.DE</code>,
+              <code>ASML.AS</code>, <code>ES=F</code>. Die Suche im Verwaltungs-Reiter liefert die
+              richtige Form.</dd>
+          <dt>Fremdwährung</dt>
+          <dd>Nicht-Euro-Werte werden über Wechselkurse umgerechnet, die beim Refresh mitgeladen
+              werden.</dd>
+          <dt>Splits</dt>
+          <dd>Folio erkennt Aktiensplits und rechnet die alten Kurse zurück, damit keine künstliche
+              Kursklippe entsteht.</dd>
+        </dl>
+        <p class="help-tip">
+          Die Fußzeile unten sagt nach jedem Refresh, wie viele Ticker tatsächlich aktualisiert wurden.
+          Steht dort etwas von Fehlern, schau ins <b>Protokoll</b>.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-ibkr" data-t="IBKR">
+        <h2 class="help-h">📋 IBKR</h2>
+        <p>
+          Mit einer <b>Flex Query</b> holt Folio Positionen, Cash und Trades direkt von Interactive
+          Brokers. Einrichten unter <b>Einstellungen → IBKR Flex Query</b>: in IBKR den Flex Web
+          Service aktivieren (ergibt den Token) und eine <i>Activity</i>-Query anlegen (ergibt die
+          Query-ID). Token und IDs werden verschlüsselt und pro Benutzer gespeichert.
+        </p>
+        <dl class="help-def">
+          <dt>↻ Sync</dt>
+          <dd>Holt den aktuellen Stand. Links entstehen Portfolio-Report und Sektor-Allokation,
+              rechts Positionen und Trades.</dd>
+          <dt>+ Als Basket</dt>
+          <dd>Basket aus allen aktuellen Positionen, mit den Depot-Stückzahlen als Gewicht.</dd>
+          <dt>+ Basket aus Auswahl</dt>
+          <dd>Dasselbe, aber nur aus den angehakten Zeilen.</dd>
+          <dt>+ Baskets nach Sektor</dt>
+          <dd>Je Sektor ein Basket aus den Aktienpositionen.</dd>
+          <dt>+ Ehemalige</dt>
+          <dd>Watchlist aller je gehandelten Aktien, die nicht mehr im Depot liegen — aktualisiert
+              sich bei jedem Sync.</dd>
+        </dl>
+        <p class="help-tip">
+          Der Hinweisstreifen über der Positionstabelle meldet Positionen, die in keinem Basket
+          vorkommen. Zeigt eine Position auf kein Yahoo-Symbol, hilft die ISIN-Zuordnung weiter.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-screener" data-t="Screener">
+        <h2 class="help-h">🔍 Screener</h2>
+        <p>
+          Der Screener durchsucht Finviz je Index und Sektor nach technischen Kriterien und
+          filtert die Treffer optional nach Marktkapitalisierung.
+        </p>
+        <ol class="help-steps">
+          <li>Indizes ankreuzen, Filter wählen (eigene Finviz-Codes kommagetrennt möglich), MarktCap
+              eingrenzen — <b>0</b> heißt „keine Grenze".</li>
+          <li><b>▶ Screening starten</b>. Der Lauf läuft im Hintergrund weiter, auch wenn du die Seite
+              neu lädst.</li>
+          <li><b>＋ Baskets anlegen</b> schreibt die Treffer je Sektor in einen <b>festen</b> Basket
+              namens „Screener {Sektor}". Jeder weitere Lauf füllt dieselben Baskets neu — es
+              entstehen keine neuen mit Datum.</li>
+          <li>Die Charts durchgehen und aus dem Basket werfen, was nicht überzeugt.</li>
+        </ol>
+        <p>
+          Aussortierte Ticker landen auf der <b>Blacklist</b> und kommen beim nächsten Screening nicht
+          wieder, solange die Sperrzeit läuft (Vorgabe 6 Monate, einstellbar). Über das <b>×</b> in der
+          Blacklist bekommt ein Wert seine Chance zurück. Löschst du einen <i>ganzen</i> Basket, gilt
+          das als Aufräumen und nicht als Absage — es wird nichts gesperrt.
+        </p>
+        <p>
+          <b>⬇ TradingView-Export</b> gibt die bereinigte Liste als Textdatei aus.
+          <b>🗑 Screener-Baskets löschen</b> entfernt alle Baskets, deren Name mit „Screener " beginnt.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-steuer" data-t="Steuer-Report">
+        <h2 class="help-h">🏛️ Steuer-Report</h2>
+        <p>
+          Aus den Flex-<b>XML</b>-Statements deines IBKR-Kontos entsteht eine vollständige
+          Anlage-KAP-Ermittlung samt KAP-INV, Trade-Journal und PDF. Ziehe die Jahres-XMLs seit
+          Depoteröffnung in das Feld — sie werden erst nur abgelegt. Mit <b>▶ Report erstellen</b>
+          rechnest du ein Jahr, <b>📥 Aktuelles Jahr von IBKR holen</b> zieht das laufende Jahr über
+          die Steuer-Flex-Query nach.
+        </p>
+        <p class="help-tip">
+          ⚠️ Rechnerische Aufbereitung <b>ohne Gewähr</b> und keine Steuerberatung — gedacht als
+          prüffähige Vorlage für den Steuerberater.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-protokoll" data-t="Protokoll">
+        <h2 class="help-h">🧾 Protokoll</h2>
+        <p>
+          Das Protokoll zeigt, was die App gerade tut. Der <b>Detailgrad</b> von 1 bis 10 regelt, wie
+          viel davon zu sehen ist: 1 sind nur Fehler, 10 ist jeder Schritt. Mit dem Filterfeld suchst
+          du nach Text oder Bereich, <b>📋 Kopieren</b> legt alles in die Zwischenablage.
+        </p>
+        <p class="help-tip">
+          <b>Wenn etwas nicht so lädt, wie es soll, ist das hier die erste Anlaufstelle</b> — fehlende
+          Kurse und abgelehnte Abrufe stehen dort im Klartext.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-einstellungen" data-t="Einstellungen">
+        <h2 class="help-h">⚙ Einstellungen</h2>
+        <p>
+          Theme, Kontrast, Schriftgröße und Akzentfarbe gelten pro Benutzer auf allen Geräten. Für den
+          Chart lassen sich Hintergrund, Volumenfarben und die Farben des Volumenprofils getrennt
+          einstellen — <b>Zurücksetzen</b> stellt die Vorgaben wieder her. Darunter stehen die
+          Fenster-Verwaltung, dein Konto und die IBKR-Zugangsdaten.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-tastatur" data-t="Tastatur">
+        <h2 class="help-h">⌨️ Tastatur</h2>
+        <dl class="help-def">
+          <dt><kbd>↑</kbd> <kbd>↓</kbd></dt>
+          <dd>Durch die Kursliste gehen und den Chart mitwechseln.</dd>
+          <dt><kbd>Entf</kbd> / <kbd>⌫</kbd></dt>
+          <dd>Ausgewählte Zeichnung(en) löschen.</dd>
+          <dt><kbd>Esc</kbd></dt>
+          <dd>Zeichenwerkzeug beenden und offene Klappmenüs schließen.</dd>
+          <dt>Maus</dt>
+          <dd>Mausrad über dem Chart zoomt, Ziehen verschiebt. An einer Preisachse gezogen,
+              skalierst du nur diese Achse — praktisch beim Sektor-ETF-Overlay mit seiner
+              eigenen linken Achse.</dd>
+        </dl>
+      </article>
+
+      <article class="help-card" id="help-daten" data-t="Woher die Daten kommen">
+        <h2 class="help-h">🛰️ Woher die Daten kommen</h2>
+        <dl class="help-def">
+          <dt>Kurse</dt>
+          <dd>Yahoo Finance, zeitverzögert. Sie liegen in deiner eigenen Datenbank auf dem Server;
+              geladen wird nur, was fehlt.</dd>
+          <dt>Stammdaten &amp; Earnings</dt>
+          <dd>Ebenfalls Yahoo, zwischengespeichert.</dd>
+          <dt>Logos</dt>
+          <dd>Financial Modeling Prep, direkt vom Browser geladen.</dd>
+          <dt>Screener</dt>
+          <dd>Finviz für die Treffer, Yahoo für die Marktkapitalisierung.</dd>
+          <dt>Depot</dt>
+          <dd>Interactive Brokers über deine eigene Flex Query.</dd>
+        </dl>
+      </article>
+
+      <article class="help-card" id="help-probleme" data-t="Wenn etwas klemmt">
+        <h2 class="help-h">🛟 Wenn etwas klemmt</h2>
+        <dl class="help-def">
+          <dt>Chart bleibt leer</dt>
+          <dd>Hat der Basket Ticker mit Gewicht ≠ 0? Einmal <b>↻ Refresh</b> drücken — neue Ticker
+              haben noch keine Kurse.</dd>
+          <dt>Ein Wert fehlt im Index</dt>
+          <dd>Meist die Notierung: Yahoo-Schreibweise samt Börsen-Endung prüfen (<code>.DE</code>,
+              <code>.AS</code>, …).</dd>
+          <dt>„Rate limit" beim Refresh</dt>
+          <dd>Ein Update pro Minute ist erlaubt; kurz warten und noch einmal drücken.</dd>
+          <dt>Screening ohne Treffer</dt>
+          <dd>Finviz drosselt bei vielen Abrufen kurzzeitig. Eine Minute warten und den Lauf
+              wiederholen.</dd>
+          <dt>Änderungen weg nach dem Neuladen</dt>
+          <dd>Gewichte und Basket-Einstellungen brauchen <b>✓ Speichern</b>; Zeichnungen und Notizen
+              sichern sich selbst.</dd>
+        </dl>
+        <p class="help-tip">
+          Bleibt etwas unklar: die Version steht oben rechts in der Kopfzeile — mit ihr und einem
+          Auszug aus dem Protokoll lässt sich fast alles nachvollziehen.
+        </p>
+      </article>
+
+    </div>
+  </div>
+</section><!-- end #view-hilfe -->
 
 </div><!-- end #page-container -->
 
