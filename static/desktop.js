@@ -4953,6 +4953,7 @@ async function screenerInit() {
     _scrWireSettingsAutosave();
 
     updateHint();
+    _scrUpdateMergeBtn();
     screenerBlacklistLoad();
     screenerResume();
 }
@@ -5444,23 +5445,7 @@ async function screenerToBaskets() {
         }
     });
 
-    // Was von der alten Benennung übrig ist, taugt nur noch als Altlast — gelöscht
-    // wird aber nur auf Zuruf, es sind Baskets des Benutzers. Der gerade
-    // angezeigte bleibt in jedem Fall stehen.
-    var reste = Object.keys(alteDatierte).filter(function (id) { return id !== currentBasket; });
-    var geloescht = 0;
-    if (reste.length) {
-        var namen = reste.map(function (id) { return baskets[id].name; }).sort();
-        var liste = namen.slice(0, 12).join('\n  • ');
-        if (namen.length > 12) liste += '\n  … und ' + (namen.length - 12) + ' weitere';
-        if (confirm('Der Screener schreibt jetzt in feste Baskets ohne Datum.\n\n'
-                    + namen.length + ' alte datierte Basket'
-                    + (namen.length === 1 ? '' : 's') + ' löschen?\n\n  • ' + liste)) {
-            reste.forEach(function (id) { delete baskets[id]; });
-            geloescht = reste.length;
-            logIt(3, 'Screener', geloescht + ' alte datierte Screener-Baskets gelöscht');
-        }
-    }
+    var geloescht = _screenerLoescheDatierteReste(alteDatierte);
 
     try {
         // 'screener' = kein Blacklist-Protokoll für diesen Schreibvorgang,
@@ -5473,6 +5458,7 @@ async function screenerToBaskets() {
             await switchBasket(currentBasket);
         }
         if (typeof renderBasketSelect === 'function') renderBasketSelect();
+        _scrUpdateMergeBtn();
         var summary = [];
         if (created)   summary.push(created + ' neu');
         if (updated)   summary.push(updated + ' aktualisiert');
@@ -5507,6 +5493,90 @@ function _screenerJuengsterDatierter(datierte, sektor) {
         if (!best || datierte[id].datum > datierte[best].datum) best = id;
     });
     return best;
+}
+
+/* Löscht die übrig gebliebenen datierten Baskets — nur nach Rückfrage, es sind
+   Baskets des Benutzers. Der gerade angezeigte bleibt in jedem Fall stehen.
+   @returns {number} Anzahl der gelöschten Baskets. */
+function _screenerLoescheDatierteReste(datierte) {
+    var reste = Object.keys(datierte).filter(function (id) { return id !== currentBasket; });
+    if (!reste.length) return 0;
+    var namen = reste.map(function (id) { return baskets[id].name; }).sort();
+    var liste = namen.slice(0, 12).join('\n  • ');
+    if (namen.length > 12) liste += '\n  … und ' + (namen.length - 12) + ' weitere';
+    if (!confirm('Der Screener schreibt jetzt in feste Baskets ohne Datum.\n\n'
+                 + namen.length + ' alte datierte Basket'
+                 + (namen.length === 1 ? '' : 's') + ' löschen?\n\n  • ' + liste)) {
+        return 0;
+    }
+    reste.forEach(function (id) { delete baskets[id]; });
+    logIt(3, 'Screener', reste.length + ' alte datierte Screener-Baskets gelöscht');
+    return reste.length;
+}
+
+/* Führt die datierten Baskets auf die festen Namen zusammen, ohne dass dafür ein
+   Screening laufen muss: je Sektor wird der jüngste umbenannt, der Rest kann weg.
+   Die Gewichte bleiben unangetastet — umbenannt wird nur. */
+async function screenerMergeDated() {
+    var datierte = _screenerDatierteBaskets();
+    if (!Object.keys(datierte).length) {
+        _scrMsg('Keine datierten Screener-Baskets vorhanden', 'err');
+        _scrUpdateMergeBtn();
+        return;
+    }
+
+    var belegt = {};
+    Object.keys(baskets).forEach(function (id) {
+        if (baskets[id] && baskets[id].name) belegt[baskets[id].name] = id;
+    });
+
+    var sektoren = [];
+    Object.keys(datierte).forEach(function (id) {
+        if (sektoren.indexOf(datierte[id].sektor) === -1) sektoren.push(datierte[id].sektor);
+    });
+
+    var migriert = 0;
+    sektoren.forEach(function (sektor) {
+        var name = SCREENER_BASKET_PREFIX + sektor;
+        if (belegt[name]) return;   // fester Basket existiert schon → der datierte ist Altlast
+        var alt = _screenerJuengsterDatierter(datierte, sektor);
+        if (!alt) return;
+        baskets[alt].name = name;
+        belegt[name] = alt;
+        delete datierte[alt];
+        migriert++;
+    });
+
+    var geloescht = _screenerLoescheDatierteReste(datierte);
+    if (!migriert && !geloescht) {
+        _scrMsg('Nichts geändert', 'ok');
+        return;
+    }
+
+    try {
+        await saveBasketsToServer('screener');
+        if (typeof renderBasketSelect === 'function') renderBasketSelect();
+        if (typeof updateChartTitle   === 'function') updateChartTitle();
+        var summary = [];
+        if (migriert)  summary.push(migriert + ' umbenannt');
+        if (geloescht) summary.push(geloescht + ' gelöscht');
+        logIt(3, 'Screener', 'Datierte Baskets zusammengeführt: ' + summary.join(', '));
+        _scrMsg('Baskets: ' + summary.join(', '), 'ok');
+    } catch (e) {
+        _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
+    }
+    _scrUpdateMergeBtn();
+}
+
+/* Übergangshilfe: der Knopf zeigt sich nur, solange es überhaupt noch Baskets
+   mit Datum im Namen gibt. */
+function _scrUpdateMergeBtn() {
+    var btn = document.getElementById('scr-btn-merge');
+    if (!btn) return;
+    var anzahl = Object.keys(_screenerDatierteBaskets()).length;
+    btn.style.display = anzahl ? '' : 'none';
+    btn.textContent   = '⇄ ' + anzahl + ' datierte Basket' + (anzahl === 1 ? '' : 's')
+                      + ' zusammenführen';
 }
 
 /* Namenspräfix, unter dem screenerToBaskets() seine Baskets anlegt. */
@@ -5699,4 +5769,75 @@ function _scrRenderBlocked(blocked) {
         '🚫 ' + blocked.length + ' gesperrt, nicht in den Baskets:'));
     box.appendChild(_scrEl('span', 'scr-blocked-list', blocked.join(', ')));
     box.style.display = '';
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║  HILFE-SEITE                                              ║
+// ╚══════════════════════════════════════════════════════════╝
+// Das Verzeichnis entsteht aus den Karten selbst (data-t), damit eine neue
+// Karte im HTML genügt und hier nichts nachgepflegt werden muss.
+
+var _helpBuilt = false;
+
+function helpInit() {
+    if (_helpBuilt) return;
+    var toc = document.getElementById('help-toc');
+    if (!toc) return;
+    toc.innerHTML = '';
+    _helpCards().forEach(function (card) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = card.getAttribute('data-t') || card.id;
+        b.setAttribute('data-for', card.id);
+        b.onclick = function () { helpGoto(card.id); };
+        toc.appendChild(b);
+    });
+    _helpBuilt = true;
+    _helpMarkActive();
+    var body = document.getElementById('helpBody');
+    if (body) body.addEventListener('scroll', _helpMarkActive, { passive: true });
+}
+
+function _helpCards() {
+    return Array.prototype.slice.call(document.querySelectorAll('#helpBody .help-card'));
+}
+
+function helpGoto(id) {
+    var card = document.getElementById(id);
+    if (card) card.scrollIntoView({ block: 'start' });
+}
+
+/* Hebt im Verzeichnis die Karte hervor, die gerade oben im Blick ist. */
+function _helpMarkActive() {
+    var body = document.getElementById('helpBody');
+    if (!body) return;
+    var grenze = body.getBoundingClientRect().top + 40;
+    var aktiv = null;
+    _helpCards().forEach(function (card) {
+        if (card.style.display === 'none') return;
+        if (card.getBoundingClientRect().top <= grenze) aktiv = card.id;
+    });
+    if (!aktiv) {
+        var sichtbar = _helpCards().filter(function (c) { return c.style.display !== 'none'; });
+        aktiv = sichtbar.length ? sichtbar[0].id : null;
+    }
+    document.querySelectorAll('#help-toc button').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-for') === aktiv);
+    });
+}
+
+/* Blendet Karten aus, die den Suchbegriff nicht enthalten — Verzeichnis mit. */
+function helpFilter(q) {
+    var such = (q || '').trim().toLowerCase();
+    var treffer = 0;
+    _helpCards().forEach(function (card) {
+        var passt = !such || (card.textContent || '').toLowerCase().indexOf(such) !== -1;
+        card.style.display = passt ? '' : 'none';
+        var b = document.querySelector('#help-toc button[data-for="' + card.id + '"]');
+        if (b) b.style.display = passt ? '' : 'none';
+        if (passt) treffer++;
+    });
+    var leer = document.getElementById('help-nohit');
+    if (leer) leer.style.display = treffer ? 'none' : '';
+    _helpMarkActive();
 }

@@ -942,3 +942,83 @@ footer {
   font-size: 13px; line-height: 1; color: var(--muted);
 }
 .scr-bl-x:hover { color: var(--red); }
+
+/* ── Hilfe-Seite ───────────────────────────────────────────────────────────── */
+/* Zwei Spalten: links das Verzeichnis (bleibt stehen), rechts die Karten.
+   Die Einträge sind Knöpfe und keine Anker — ein href="#…" würde den Hash-Router
+   auf eine Seite schicken, die es nicht gibt. */
+.help-wrap { flex: 1; display: flex; min-height: 0; }
+
+.help-nav {
+  width: 210px; flex-shrink: 0; overflow-y: auto;
+  padding: 16px 10px; background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.help-search {
+  width: 100%; box-sizing: border-box; margin-bottom: 12px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 6px 8px; font-family: inherit; font-size: 11px; border-radius: 4px; outline: none;
+}
+.help-search:focus { border-color: var(--accent); }
+.help-toc { display: flex; flex-direction: column; gap: 1px; }
+.help-toc button {
+  text-align: left; border: none; background: none; cursor: pointer;
+  color: var(--muted); font-family: inherit; font-size: 11px;
+  padding: 5px 8px; border-left: 2px solid transparent; border-radius: 0 3px 3px 0;
+}
+.help-toc button:hover { color: var(--text); background: var(--bg); }
+.help-toc button.active { color: var(--text); border-left-color: var(--accent); font-weight: 600; }
+.help-nohit { color: var(--muted); font-size: 11px; padding: 6px 8px; }
+
+.help-body {
+  flex: 1; overflow-y: auto; padding: 24px 28px 60px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+  scroll-behavior: smooth;
+}
+.help-card {
+  width: 100%; max-width: 780px; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px 24px;
+  scroll-margin-top: 12px;
+  container: help / inline-size;   /* für die zweispaltigen Begriffslisten unten */
+}
+.help-h {
+  font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  margin: 0 0 14px; display: flex; align-items: center; gap: 8px;
+}
+.help-card p { font-size: 12px; line-height: 1.75; margin: 0 0 10px; }
+.help-card p:last-child { margin-bottom: 0; }
+.help-card code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 4px;
+}
+
+.help-steps { margin: 0 0 10px; padding-left: 20px; }
+.help-steps li { font-size: 12px; line-height: 1.75; margin-bottom: 6px; }
+.help-steps li:last-child { margin-bottom: 0; }
+
+/* Begriff → Erklärung. Ab ~560 px Kartenbreite zweispaltig, darunter untereinander. */
+.help-def { margin: 0 0 10px; font-size: 12px; line-height: 1.7; }
+.help-def dt {
+  font-weight: 600; color: var(--text);
+  padding: 6px 0 0; border-top: 1px solid var(--border);
+}
+.help-def dd { margin: 0 0 6px; color: var(--muted); }
+.help-def dt:first-child { border-top: none; padding-top: 0; }
+@container help (min-width: 560px) {
+  .help-def { display: grid; grid-template-columns: 160px 1fr; column-gap: 16px; }
+  .help-def dt { grid-column: 1; }
+  .help-def dd { grid-column: 2; padding: 6px 0 0; border-top: 1px solid var(--border); }
+  .help-def dt:first-child + dd { border-top: none; padding-top: 0; }
+}
+
+.help-tip {
+  border-left: 3px solid var(--accent); background: var(--bg);
+  padding: 8px 12px; border-radius: 0 4px 4px 0; color: var(--muted);
+}
+.help-card kbd {
+  font-family: inherit; font-size: 10px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+}
