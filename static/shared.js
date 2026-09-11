@@ -784,7 +784,7 @@ function applyPeriod() {
 function setPeriod(days) {
     currentPeriod = days;
     applyPeriod();
-    markUnsaved();
+    chartPrefsChanged();
 }
 
 function setTF(tf) {
@@ -794,7 +794,7 @@ function setTF(tf) {
     // sechs Jahre, und beim Zurückschalten auf Tageskerzen blieb es dabei.
     applyPeriod();
     loadDrawings(); // Anker auf neue TF-Bars snappen
-    markUnsaved();
+    chartPrefsChanged();
 }
 
 /**
@@ -883,13 +883,13 @@ function clampVisibleRange(saved, first, last) {
 function togInd(name) {
     indicators[name] = !indicators[name];
     applyPeriod();
-    markUnsaved();
+    chartPrefsChanged();
 }
 
 function togLog() {
     logScale = !logScale;
     applyPeriod();
-    markUnsaved();
+    chartPrefsChanged();
 }
 
 // ╔══════════════════════════════════════════════════════════╗
@@ -1395,6 +1395,44 @@ function chartPrefsCollect() {
     if (typeof _showSectorEtf    !== 'undefined') c.sectorEtf    = !!_showSectorEtf;
     if (typeof _vrvpEnabled      !== 'undefined') c.vrvp         = !!_vrvpEnabled;
     return c;
+}
+
+/**
+ * Chart-Einstellung geändert: einsammeln und kurz darauf speichern. Sie sind
+ * Vorlieben des Benutzers und keine Bearbeitung eines Baskets — dafür soll
+ * niemand den Speichern-Knopf suchen müssen.
+ */
+function chartPrefsChanged() {
+    chartPrefsCollect();
+    saveAppearanceSoon();
+}
+
+var _appearanceTimer = null;
+
+/** Sammelt schnelle Klickfolgen zu einem Schreibvorgang zusammen. */
+function saveAppearanceSoon() {
+    clearTimeout(_appearanceTimer);
+    _appearanceTimer = setTimeout(saveAppearanceToServer, 700);
+}
+
+/**
+ * Schreibt NUR den appearance-Abschnitt (eigener Endpunkt). Über /api/config
+ * ginge die ganze Config raus — samt Gewichten, die gerade nur ausprobiert und
+ * noch nicht gespeichert sind.
+ */
+async function saveAppearanceToServer() {
+    clearTimeout(_appearanceTimer);
+    try {
+        var r = await fetch('/api/appearance', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ appearance: appearance || {} })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        logIt(7, 'Chart', 'Einstellungen gespeichert');
+    } catch (e) {
+        logIt(1, 'Chart', 'Einstellungen speichern fehlgeschlagen: ' + e.message);
+    }
 }
 
 /** Gespeicherten Stand in die globalen Variablen laden (beim Start, einmal). */

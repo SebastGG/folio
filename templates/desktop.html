@@ -75,7 +75,7 @@
         <input type="number" id="regPeriod" value="12" min="5" max="200"
           title="LogReg Zeitrahmen (Anzahl Kerzen) — gilt wie die übrigen Chart-Einstellungen für alle Charts"
           style="width:44px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:2px 4px;font-family:inherit;font-size:10px;text-align:center;"
-          onchange="applyPeriod();markUnsaved()">
+          onchange="applyPeriod();chartPrefsChanged()">
         <button class="btn" id="blog"   onclick="togLog()">Log</button>
         <button class="btn" id="bvrvp"  onclick="togVRVP(this)" title="Visible Range Volume Profile">VRVP</button>
       </div>
@@ -1005,8 +1005,8 @@
         <p class="help-tip">
           Alle Einstellungen dieser Leiste — Zeitraum, Kerzengröße, Indikatoren, Log-Achse und die
           Schalter für VRVP, Trades, Earnings und Sektor-ETF — gelten <b>für alle Charts</b>. Einmal
-          eingestellt, bleiben sie beim Wechsel zwischen Werten und Baskets stehen; mit
-          <b>✓ Speichern</b> überdauern sie auch das nächste Öffnen.
+          eingestellt, bleiben sie beim Wechsel zwischen Werten und Baskets stehen und werden
+          von selbst gespeichert — dafür ist kein <b>✓ Speichern</b> nötig.
         </p>
         <p class="help-tip">
           Oben links im Chart stehen beim Fahren mit der Maus <b>OHLC</b>, Volumen und das

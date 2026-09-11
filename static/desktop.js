@@ -63,7 +63,7 @@ function togVRVP(btn) {
     _vrvpEnabled = !_vrvpEnabled;
     if (btn) btn.classList.toggle('ind-active', _vrvpEnabled);
     if (_vrvpEnabled) { _initVRVP(); } else { _clearVRVP(); }
-    if (typeof markUnsaved === 'function') markUnsaved();
+    chartPrefsChanged();
 }
 
 function _initVRVP() {
@@ -843,7 +843,7 @@ async function fetchEarnings(sym) {
 function toggleEarnings(btn) {
     _showEarnings = !_showEarnings;
     if (btn) btn.classList.toggle('active', _showEarnings);
-    markUnsaved();
+    chartPrefsChanged();
     refreshEarnings();
 }
 
@@ -3351,7 +3351,7 @@ function ibkrRenderTrades() {
 function toggleTradeMarkers(btn) {
     _showTradeMarkers = !_showTradeMarkers;
     if (btn) btn.classList.toggle('active', _showTradeMarkers);
-    markUnsaved();
+    chartPrefsChanged();
     refreshTradeMarkers();
 }
 
@@ -3364,7 +3364,7 @@ function toggleTradeMarkers(btn) {
 function toggleSectorEtf(btn) {
     _showSectorEtf = !_showSectorEtf;
     if (btn) btn.classList.toggle('active', _showSectorEtf);
-    markUnsaved();   // gilt benutzerweit (appearance.chart), nicht mehr pro Basket
+    chartPrefsChanged();   // benutzerweit (appearance.chart), speichert sich selbst
     refreshSectorEtf();
 }
 
@@ -3578,7 +3578,7 @@ async function setChartColor(key, value, commit) {
     var lab = document.getElementById('ap-' + key + '-val');
     if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
     refreshChartColors();
-    if (commit) await saveBasketsToServer();
+    if (commit) await saveAppearanceToServer();
 }
 
 /** Volumen- und Profilfarben zurück auf die Vorgaben. */
@@ -3587,7 +3587,7 @@ async function resetChartColors() {
     Object.keys(CHART_COLOR_DEFAULTS).forEach(function(k) { delete appearance[k]; });
     renderAppearanceControls();
     refreshChartColors();
-    await saveBasketsToServer();
+    await saveAppearanceToServer();
 }
 
 /**
@@ -3605,7 +3605,9 @@ async function setAppearance(key, value) {
     if (!appearance) appearance = {};
     appearance[key] = value;
     applyAppearance();
-    await saveBasketsToServer();
+    // Eigener Endpunkt statt der ganzen Config: sonst gingen beim Umschalten des
+    // Themes auch Gewichte mit raus, die noch gar nicht gespeichert werden sollten.
+    await saveAppearanceToServer();
 }
 
 /** Lädt eingeloggten User + IBKR-Konfigurationsstatus in die Settings-Seite. */
