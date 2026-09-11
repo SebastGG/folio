@@ -701,6 +701,52 @@
   </div>
 </section><!-- end #view-screener -->
 
+<!-- ══ SEITE: KONTEN & VERMÖGEN ═══════════════════════════════════════════════ -->
+<section id="view-konten" class="page">
+  <div class="settings-wrap konten-wrap">
+
+    <div class="settings-card">
+      <h2 class="settings-h">Vermögen</h2>
+      <p class="settings-hint">
+        Das IBKR-Depot mit Live-Kursen, dazu alles, was daneben liegt: Girokonten,
+        weitere Depots, Sachwerte und Darlehen. Schulden werden abgezogen.
+      </p>
+      <div id="vermoegenKacheln"></div>
+    </div>
+
+    <div class="settings-card">
+      <h2 class="settings-h">Entwicklung</h2>
+      <div class="konten-leiste">
+        <span id="wealthZeitraum" class="konten-zeitraum">
+          <button class="refresh-btn k-mini" data-z="1m"    onclick="wealthZeitraum('1m')">1M</button>
+          <button class="refresh-btn k-mini" data-z="6m"    onclick="wealthZeitraum('6m')">6M</button>
+          <button class="refresh-btn k-mini" data-z="1j"    onclick="wealthZeitraum('1j')">1J</button>
+          <button class="refresh-btn k-mini active" data-z="alles" onclick="wealthZeitraum('alles')">Alles</button>
+        </span>
+        <select id="wealthKontoWahl" onchange="wealthKonto(this.value)">
+          <option value="">Gesamtvermögen</option>
+        </select>
+      </div>
+      <div id="wealthChart" class="wealth-chart"></div>
+      <p id="wealthLeer" class="settings-hint"></p>
+      <p class="settings-hint">
+        Der Stand des Tages wird beim Öffnen dieser Seite festgehalten. Frühere Stände
+        trägst du beim jeweiligen Konto unter „Verlauf" nach.
+      </p>
+    </div>
+
+    <div class="settings-card">
+      <h2 class="settings-h">Konten
+        <button class="refresh-btn k-mini" style="float:right" onclick="kontenFormOeffnen('')">+ Konto anlegen</button>
+      </h2>
+      <div id="kontenListe"></div>
+    </div>
+
+    <div id="kontenForm"></div>
+
+  </div>
+</section><!-- end #view-konten -->
+
 <!-- ══ SEITE: EINSTELLUNGEN ═══════════════════════════════════════════════════ -->
 <section id="view-settings" class="page">
   <div class="settings-wrap">
@@ -1118,6 +1164,44 @@
         <p class="help-tip">
           Der Hinweisstreifen über der Positionstabelle meldet Positionen, die in keinem Basket
           vorkommen. Zeigt eine Position auf kein Yahoo-Symbol, hilft die ISIN-Zuordnung weiter.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-konten" data-t="Konten &amp; Vermögen">
+        <h2 class="help-h">🏦 Konten &amp; Vermögen</h2>
+        <p>
+          Die Seite <b>Konten</b> nimmt alles auf, was nicht bei IBKR liegt: Girokonto,
+          Tagesgeld, ein zweites Depot (etwa Smartbroker/Baader), Darlehen und Sachwerte.
+          Zusammen mit dem IBKR-Depot ergibt das <b>Vermögen gesamt</b> — Schulden abgezogen.
+        </p>
+        <dl class="help-def">
+          <dt>Girokonto / Tagesgeld</dt>
+          <dd>Name, Institut, Saldo, Stand vom. Mehr braucht es nicht.</dd>
+          <dt>Depot</dt>
+          <dd>Der Bestand kommt per <b>Depotauszug einlesen</b> hinein: Tabelle im Online-Banking
+              markieren, kopieren, ins Feld einfügen, prüfen, übernehmen. Erkannt werden ISIN,
+              Bezeichnung, Stück, Einstand, Kurs und Wert — auch als CSV mit Semikolon oder
+              Tabulator. Die Titel bekommen über ihre ISIN dieselben Yahoo-Kurse wie die
+              IBKR-Positionen und erscheinen anschließend überall mit, gekennzeichnet mit dem
+              Kontonamen. Das Feld <i>Verrechnungskonto</i> ist das Bargeld im Depot.</dd>
+          <dt>Darlehen</dt>
+          <dd>Restschuld immer <b>positiv</b> eintragen, das Minus setzt Folio selbst. Aus
+              Zinssatz und monatlicher Rate entsteht eine Tilgungsprognose: Laufzeit, Zinssumme
+              und Restschuld am Ende der Zinsbindung.</dd>
+          <dt>Sachwert</dt>
+          <dd>Ein Gegenstand mit geschätztem Verkaufserlös — Haus, Fahrzeug, Anlage. Ordnest du
+              ihn einem Darlehen zu, steht unter dem Kredit die Nettoposition aus beidem.</dd>
+        </dl>
+        <p class="help-tip">
+          <b>Die Entwicklung über die Zeit</b> entsteht dadurch, dass die Seite benutzt wird: bei
+          jedem Öffnen wird der Stand des Tages festgehalten. Damit die Kurve weiter zurückreicht,
+          trägst du bei einem Konto unter <b>Verlauf</b> ältere Stände mit Datum nach — etwa den
+          Jahresanfangsstand aus dem Kontoauszug. Ein Konto ohne neuen Eintrag behält seinen
+          letzten Stand, fällt also nicht auf null.
+        </p>
+        <p class="help-tip">
+          Im Portfolio-Report auf der IBKR-Seite steht unter „NET Gesamt" ein Block
+          <b>Weitere Konten</b> mit derselben Summe. „NET Gesamt" selbst bleibt reines IBKR.
         </p>
       </article>
 

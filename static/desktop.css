@@ -1022,3 +1022,65 @@ footer {
   background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
   border-radius: 3px; padding: 1px 5px; white-space: nowrap;
 }
+
+/* ── Konten & Vermögen ─────────────────────────────────────────────────────── */
+/* Breiter als die Einstellungen: Kontenliste und Kurve brauchen Platz. */
+#view-konten .settings-card { max-width: 860px; }
+#view-konten .settings-field select,
+#view-konten .konten-leiste select {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 8px 10px; outline: none; border-radius: 4px;
+}
+
+.v-kacheln { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.v-kachel {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px;
+}
+.v-kachel-t { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.v-kachel-w { font-size: 17px; font-weight: 600; margin-top: 3px; }
+.v-kachel.v-minus .v-kachel-w { color: var(--red); }
+.v-gesamt {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 14px; padding-top: 12px; border-top: 2px solid var(--border);
+}
+.v-gesamt span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.v-gesamt b { font-size: 22px; font-weight: 700; }
+.v-delta { display: flex; gap: 18px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.v-hint { font-size: 11px; color: var(--muted); padding: 6px 0; line-height: 1.6; }
+
+.konten-leiste { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.konten-zeitraum { display: inline-flex; gap: 4px; }
+.konten-zeitraum .active { border-color: var(--accent); color: var(--accent); }
+.wealth-chart { width: 100%; height: 260px; }
+
+.konten-tab { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
+.konten-tab th {
+  text-align: left; font-size: 10px; color: var(--muted); font-weight: 500;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 5px 6px; border-bottom: 1px solid var(--border);
+}
+.konten-tab td { padding: 6px; border-bottom: 1px solid var(--border); }
+.konten-tab tr:last-child td { border-bottom: none; }
+.k-unterzeile td { color: var(--muted); font-size: 10px; padding-left: 18px; }
+.k-badge {
+  font-size: 9px; color: var(--muted); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 1px 6px; margin-left: 4px;
+}
+.k-mini { font-size: 10px; padding: 3px 8px; }
+.k-prognose {
+  margin-top: 12px; padding: 9px 11px; font-size: 11px; line-height: 1.6;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--muted);
+}
+.k-verlauf-eingabe { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.k-verlauf-eingabe input {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 6px 9px; outline: none; border-radius: 4px; font-size: 11px; max-width: 140px;
+}
+.k-verlauf-tab { max-height: 240px; }
+.k-import-feld {
+  width: 100%; margin-top: 10px; font-family: inherit; font-size: 11px; line-height: 1.5;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  border-radius: 4px; padding: 8px 10px; outline: none; resize: vertical;
+}
+.k-import-feld:focus { border-color: var(--accent); }
