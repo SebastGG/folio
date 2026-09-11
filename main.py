@@ -1419,6 +1419,26 @@ async def set_config(request: Request):
     save_config_data(files["config"], neu)
     return JSONResponse(content={"ok": True, "blacklisted": gesperrt})
 
+@app.post("/api/appearance")
+async def set_appearance(request: Request):
+    """Nur den Abschnitt `appearance` der Config schreiben — Aussehen und die
+    benutzerweiten Chart-Einstellungen.
+
+    Eigener Endpunkt, weil POST /api/config die Config als **Ganzes** ersetzt:
+    beim Umschalten eines Indikators würden sonst auch Gewichte mitgeschrieben,
+    die der Benutzer gerade nur ausprobiert und noch nicht gespeichert hat.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    body  = await request.json()
+    neu   = body.get("appearance")
+    if not isinstance(neu, dict):
+        return JSONResponse({"ok": False, "error": "appearance fehlt"}, status_code=400)
+    cfg = load_config(files["config"])
+    cfg["appearance"] = neu
+    save_config_data(files["config"], cfg)
+    return JSONResponse(content={"ok": True})
+
 @app.get("/api/notes")
 async def get_notes(request: Request):
     user = get_user(request)
