@@ -5379,9 +5379,11 @@ function screenerExport() {
     window.location.href = '/api/screener/export/' + _SCR.jobId;
 }
 
-/* Legt pro Sektor einen Basket an (equal weight, qty=1 je Ticker).
-   Name: "Screener {Sektor} {YYYY-MM-DD}". Existiert ein Basket mit
-   identischem Namen, werden dessen Gewichte überschrieben. */
+/* Legt pro Sektor **einen festen** Basket an: "Screener {Sektor}".
+   Jeder weitere Lauf schreibt die Gewichte desselben Baskets neu, statt mit
+   jedem Datum einen weiteren anzulegen — die Chart-Einstellungen des Baskets
+   und die Blacklist-Historie bleiben so über die Läufe hinweg erhalten.
+   Baskets aus der alten, datierten Benennung werden einmalig übernommen. */
 async function screenerToBaskets() {
     var results = _SCR.results || {};
     var sectors = Object.keys(results).filter(function (s) {
@@ -5392,27 +5394,39 @@ async function screenerToBaskets() {
         return;
     }
 
-    var d = new Date();
-    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
-    var datum = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-
     // Bestehende Baskets nach Name indexieren (für Overwrite)
     var byName = {};
     Object.keys(baskets).forEach(function (id) {
         if (baskets[id] && baskets[id].name) byName[baskets[id].name] = id;
     });
+    var alteDatierte = _screenerDatierteBaskets();
 
-    var created = 0, updated = 0, firstId = null;
+    var created = 0, updated = 0, migriert = 0, firstId = null, aktivBetroffen = false;
     sectors.forEach(function (sector, i) {
         var tickers = results[sector];
         var weights = {};
         tickers.forEach(function (t) { weights[t] = 1; });
 
-        var name = 'Screener ' + sector + ' ' + datum;
+        var name = 'Screener ' + sector;
         var existingId = byName[name];
+
+        // Übergang von der alten Benennung: gibt es den festen Basket noch
+        // nicht, wird der jüngste datierte dieses Sektors umbenannt und
+        // weitergenutzt — sonst stünde er als Leiche daneben.
+        if (!existingId) {
+            var alt = _screenerJuengsterDatierter(alteDatierte, sector);
+            if (alt) {
+                existingId = alt;
+                baskets[alt].name = name;
+                delete alteDatierte[alt];
+                migriert++;
+            }
+        }
+
         if (existingId) {
             baskets[existingId].weights = weights;
             updated++;
+            if (existingId === currentBasket) aktivBetroffen = true;
             if (!firstId) firstId = existingId;
         } else {
             var id = 'basket_' + (Date.now() + i);  // +i = Kollisionen vermeiden
@@ -5430,18 +5444,69 @@ async function screenerToBaskets() {
         }
     });
 
+    // Was von der alten Benennung übrig ist, taugt nur noch als Altlast — gelöscht
+    // wird aber nur auf Zuruf, es sind Baskets des Benutzers. Der gerade
+    // angezeigte bleibt in jedem Fall stehen.
+    var reste = Object.keys(alteDatierte).filter(function (id) { return id !== currentBasket; });
+    var geloescht = 0;
+    if (reste.length) {
+        var namen = reste.map(function (id) { return baskets[id].name; }).sort();
+        var liste = namen.slice(0, 12).join('\n  • ');
+        if (namen.length > 12) liste += '\n  … und ' + (namen.length - 12) + ' weitere';
+        if (confirm('Der Screener schreibt jetzt in feste Baskets ohne Datum.\n\n'
+                    + namen.length + ' alte datierte Basket'
+                    + (namen.length === 1 ? '' : 's') + ' löschen?\n\n  • ' + liste)) {
+            reste.forEach(function (id) { delete baskets[id]; });
+            geloescht = reste.length;
+            logIt(3, 'Screener', geloescht + ' alte datierte Screener-Baskets gelöscht');
+        }
+    }
+
     try {
         // 'screener' = kein Blacklist-Protokoll für diesen Schreibvorgang,
         // siehe saveBasketsToServer() in shared.js.
         await saveBasketsToServer('screener');
+        if (aktivBetroffen && baskets[currentBasket]) {
+            // Anzeige-Weights mitziehen, bevor switchBasket() sie über
+            // saveCurrentBasketState() wieder mit dem alten Stand überschreibt.
+            WEIGHTS = Object.assign({}, baskets[currentBasket].weights || {});
+            await switchBasket(currentBasket);
+        }
         if (typeof renderBasketSelect === 'function') renderBasketSelect();
         var summary = [];
-        if (created) summary.push(created + ' neu');
-        if (updated) summary.push(updated + ' aktualisiert');
+        if (created)   summary.push(created + ' neu');
+        if (updated)   summary.push(updated + ' aktualisiert');
+        if (migriert)  summary.push(migriert + ' übernommen');
+        if (geloescht) summary.push(geloescht + ' alte gelöscht');
         _scrMsg('Baskets: ' + summary.join(', '), 'ok');
     } catch (e) {
         _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
     }
+}
+
+/* Baskets aus der alten Benennung "Screener {Sektor} {YYYY-MM-DD}".
+   @returns {Object} {basket_id: {sektor, datum}} */
+function _screenerDatierteBaskets() {
+    var out = {};
+    Object.keys(baskets).forEach(function (id) {
+        var name = (baskets[id] || {}).name || '';
+        if (name.indexOf(SCREENER_BASKET_PREFIX) !== 0) return;
+        var rest  = name.slice(SCREENER_BASKET_PREFIX.length);
+        var datum = rest.slice(-10);
+        if (rest.length < 12 || !/^\d{4}-\d{2}-\d{2}$/.test(datum)) return;
+        out[id] = { sektor: rest.slice(0, -11), datum: datum };
+    });
+    return out;
+}
+
+/* Die id des jüngsten datierten Baskets eines Sektors — oder null. */
+function _screenerJuengsterDatierter(datierte, sektor) {
+    var best = null;
+    Object.keys(datierte).forEach(function (id) {
+        if (datierte[id].sektor !== sektor) return;
+        if (!best || datierte[id].datum > datierte[best].datum) best = id;
+    });
+    return best;
 }
 
 /* Namenspräfix, unter dem screenerToBaskets() seine Baskets anlegt. */
