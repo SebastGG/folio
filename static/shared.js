@@ -927,7 +927,9 @@ async function loadConfig() {
             await saveBasketsToServer();
         }
 
+        chartPrefsLoad();   // vor loadBasketState: setzt Zeitraum, TF und Indikatoren
         loadBasketState();
+        if (typeof syncUIState === 'function') syncUIState();   // Knöpfe auf den geladenen Stand
         if (typeof renderBasketSelect === 'function') renderBasketSelect();
         logIt(3, 'Config', 'Geladen: ' + Object.keys(baskets).length + ' Portfolios, aktiv „'
             + ((baskets[currentBasket] || {}).name || currentBasket) + '"');
@@ -1364,15 +1366,64 @@ function updateDerivedConfig() {
  * Noch NICHT auf dem Server — dafür saveAll() aufrufen.
  */
 function saveCurrentBasketState() {
+    chartPrefsCollect();   // Chart-Einstellungen gelten benutzerweit, nicht je Basket
     if (!baskets[currentBasket]) return;
-    baskets[currentBasket].weights       = Object.assign({}, WEIGHTS);
-    baskets[currentBasket].period        = currentPeriod;
-    baskets[currentBasket].tf            = currentTF;
-    baskets[currentBasket].indicators    = Object.assign({}, indicators);
-    baskets[currentBasket].logScale      = logScale;
-    if (typeof _showSectorEtf !== 'undefined') baskets[currentBasket].showSectorEtf = _showSectorEtf;
+    baskets[currentBasket].weights = Object.assign({}, WEIGHTS);
+}
+
+// ── Chart-Einstellungen (pro Benutzer) ────────────────────────────────────────
+// Zeitraum, Kerzengröße, Indikatoren und die Chart-Schalter hingen früher am
+// Basket. Beim Wechsel zwischen Baskets sprang damit alles auf den Stand des
+// neuen zurück — einmal eingeschaltetes LogReg war weg. Jetzt stehen sie in
+// `appearance.chart` und gelten für alle Charts, bis sie geändert werden.
+// Gespeichert wird wie bisher mit „✓ Speichern" (saveAll → saveCurrentBasketState).
+
+/** Aktuellen Stand in appearance.chart schreiben (nicht auf den Server). */
+function chartPrefsCollect() {
+    if (!appearance) appearance = {};
+    var c = appearance.chart = appearance.chart || {};
+    c.period     = currentPeriod;
+    c.tf         = currentTF;
+    c.logScale   = logScale;
+    c.indicators = Object.assign({}, indicators);
     var rpEl = document.getElementById('regPeriod');
-    if (rpEl) baskets[currentBasket].regPeriod = parseInt(rpEl.value, 10) || 12;
+    if (rpEl) c.regPeriod = parseInt(rpEl.value, 10) || 12;
+    // Nur auf dem Desktop vorhanden — auf Mobile bleiben die Werte unangetastet
+    // stehen, statt beim Speichern aus der Config zu fallen.
+    if (typeof _showTradeMarkers !== 'undefined') c.tradeMarkers = !!_showTradeMarkers;
+    if (typeof _showEarnings     !== 'undefined') c.earnings     = !!_showEarnings;
+    if (typeof _showSectorEtf    !== 'undefined') c.sectorEtf    = !!_showSectorEtf;
+    if (typeof _vrvpEnabled      !== 'undefined') c.vrvp         = !!_vrvpEnabled;
+    return c;
+}
+
+/** Gespeicherten Stand in die globalen Variablen laden (beim Start, einmal). */
+function chartPrefsLoad() {
+    if (!appearance) appearance = {};
+    var c = appearance.chart;
+    if (!c) {
+        // Übergang von der alten Ablage: den Stand des zuletzt aktiven Baskets
+        // übernehmen, damit die gewohnte Einstellung nicht verloren geht.
+        var b = baskets[currentBasket] || {};
+        c = appearance.chart = {
+            period:     b.period !== undefined ? b.period : currentPeriod,
+            tf:         b.tf || currentTF,
+            logScale:   !!b.logScale,
+            indicators: Object.assign({}, indicators, b.indicators || {}),
+            regPeriod:  b.regPeriod || 12,
+            sectorEtf:  !!b.showSectorEtf,
+        };
+        logIt(5, 'Chart', 'Chart-Einstellungen aus dem Basket übernommen — sie gelten ab jetzt für alle');
+    }
+    if (c.period !== undefined) currentPeriod = c.period;
+    if (c.tf)                   currentTF     = c.tf;
+    if (c.logScale !== undefined) logScale    = !!c.logScale;
+    if (c.indicators)           indicators    = Object.assign({}, indicators, c.indicators);
+    var rpEl = document.getElementById('regPeriod');
+    if (rpEl && c.regPeriod)    rpEl.value    = c.regPeriod;
+    if (typeof _showTradeMarkers !== 'undefined' && c.tradeMarkers !== undefined) _showTradeMarkers = !!c.tradeMarkers;
+    if (typeof _showEarnings     !== 'undefined' && c.earnings     !== undefined) _showEarnings     = !!c.earnings;
+    if (typeof _showSectorEtf    !== 'undefined' && c.sectorEtf    !== undefined) _showSectorEtf    = !!c.sectorEtf;
 }
 
 /**
@@ -1386,14 +1437,10 @@ function basketShowIndex() {
 function loadBasketState() {
     var b = baskets[currentBasket];
     if (!b) return;
-    WEIGHTS       = Object.assign({}, b.weights || {});
-    currentPeriod = b.period !== undefined ? b.period : 180;
-    currentTF     = b.tf || '1D';
-    if (b.indicators) indicators = Object.assign({}, b.indicators);
-    if (b.logScale !== undefined) logScale = b.logScale;
-    if (typeof _showSectorEtf !== 'undefined') _showSectorEtf = !!b.showSectorEtf;
-    var rpEl = document.getElementById('regPeriod');
-    if (rpEl && b.regPeriod) rpEl.value = b.regPeriod;
+    // Nur noch die Zusammensetzung: Zeitraum, Kerzengröße, Indikatoren und die
+    // Chart-Schalter hängen am Benutzer (chartPrefsLoad) und bleiben beim
+    // Basket-Wechsel stehen.
+    WEIGHTS = Object.assign({}, b.weights || {});
     updateDerivedConfig();
     loadPerfDate();
 }

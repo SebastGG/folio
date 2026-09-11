@@ -4,7 +4,7 @@
   "author": "seb",
   "description": "Pers\u00f6nlicher gewichteter Portfolio-Index",
   "tagline": "Dein pers\u00f6nlicher Aktienindex",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "healthCheckPath": "/health",
   "httpPort": 8000,
   "addons": {
