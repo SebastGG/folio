@@ -565,9 +565,20 @@ header {
 .wl-item.active .wl-price, .wl-item.active .wl-chg { color: rgba(255,255,255,0.85); }
 .wl-sym { font-weight: 600; font-size: 12px; display:flex; align-items:center; gap:5px; }
 .wl-logo { width:18px; height:18px; border-radius:3px; object-fit:contain; flex-shrink:0; }
+.wl-left { min-width: 0; }
 .wl-right { text-align: right; }
 .wl-price { font-size: 11px; font-weight: 500; }
 .wl-chg { font-size: 10px; margin-top: 1px; }
+
+/* Zweite Zeile im IBKR-Basket: Depotanteil, bei genug Platz auch der Betrag.
+   Die Breite des Fensters entscheidet, nicht die des Bildschirms — deshalb
+   eine Container-Abfrage (#watchlist ist unten als Container ausgewiesen). */
+.wl-meta { font-size: 10px; color: var(--muted); margin-top: 1px; white-space: nowrap; }
+.wl-item.active .wl-meta { color: rgba(255,255,255,0.75); }
+.wl-size { display: none; }
+@container watchlist (min-width: 215px) {
+  .wl-size { display: inline; }
+}
 .wl-index { border-bottom: 2px solid var(--border); }
 
 /* ── Basket-Verwaltung (Sidebar) ───────────────────────────────────────────── */
