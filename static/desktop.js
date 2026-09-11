@@ -63,6 +63,7 @@ function togVRVP(btn) {
     _vrvpEnabled = !_vrvpEnabled;
     if (btn) btn.classList.toggle('ind-active', _vrvpEnabled);
     if (_vrvpEnabled) { _initVRVP(); } else { _clearVRVP(); }
+    if (typeof markUnsaved === 'function') markUnsaved();
 }
 
 function _initVRVP() {
@@ -842,6 +843,7 @@ async function fetchEarnings(sym) {
 function toggleEarnings(btn) {
     _showEarnings = !_showEarnings;
     if (btn) btn.classList.toggle('active', _showEarnings);
+    markUnsaved();
     refreshEarnings();
 }
 
@@ -1088,6 +1090,15 @@ function syncUIState() {
     });
     var blog = document.getElementById('blog');
     if (blog) blog.classList.toggle('ind-active', !!logScale);
+
+    // Die übrigen Chart-Schalter — sie gelten ebenfalls benutzerweit und werden
+    // beim Start aus der Config geladen, also hier mitgezogen.
+    var bvrvp = document.getElementById('bvrvp');
+    if (bvrvp) bvrvp.classList.toggle('ind-active', !!_vrvpEnabled);
+    var btrd = document.getElementById('btn-trades-toggle');
+    if (btrd) btrd.classList.toggle('active', !!_showTradeMarkers);
+    var bearn = document.getElementById('btn-earnings');
+    if (bearn) bearn.classList.toggle('active', !!_showEarnings);
 
     // Sektor-ETF-Button an den (in loadBasketState geladenen) Zustand angleichen.
     updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
@@ -2350,8 +2361,19 @@ updateClock();
                 updateChartMeta();
             });
         });
+        // Chart-Schalter aus der Config: VRVP braucht den fertig geladenen Chart,
+        // deshalb erst hier und nicht schon in syncUIState(). Nicht über togVRVP(),
+        // sonst stünde der Speichern-Knopf gleich beim Start auf „ungespeichert".
+        if (((appearance || {}).chart || {}).vrvp && !_vrvpEnabled) {
+            _vrvpEnabled = true;
+            var vbtn = document.getElementById('bvrvp');
+            if (vbtn) vbtn.classList.add('ind-active');
+            _initVRVP();
+        }
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
+        var ebtn = document.getElementById('btn-earnings');
+        if (ebtn) ebtn.classList.toggle('active', _showEarnings);
         updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
     });
 })();
@@ -3329,6 +3351,7 @@ function ibkrRenderTrades() {
 function toggleTradeMarkers(btn) {
     _showTradeMarkers = !_showTradeMarkers;
     if (btn) btn.classList.toggle('active', _showTradeMarkers);
+    markUnsaved();
     refreshTradeMarkers();
 }
 
@@ -3341,7 +3364,7 @@ function toggleTradeMarkers(btn) {
 function toggleSectorEtf(btn) {
     _showSectorEtf = !_showSectorEtf;
     if (btn) btn.classList.toggle('active', _showSectorEtf);
-    if (baskets[currentBasket]) { baskets[currentBasket].showSectorEtf = _showSectorEtf; markUnsaved(); }
+    markUnsaved();   // gilt benutzerweit (appearance.chart), nicht mehr pro Basket
     refreshSectorEtf();
 }
 
