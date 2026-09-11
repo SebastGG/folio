@@ -1975,6 +1975,67 @@ def _confirmation_position_deltas(conf_text: str, activity_tids: set, fx_by_ccy:
                 g("CurrencyPrimary"), g("ISIN"), g("AssetClass"))
     return recs
 
+def _isin_auto_resolve(conn, items) -> int:
+    """Füllt die isin_map für (symbol, isin, currency)-Tripel. Gibt die Zahl der
+    neu aufgelösten ISINs zurück.
+
+    Nur fehlende oder auto-aufgelöste Einträge — manuelle (auto=0) bleiben fix.
+    USD-Positionen nutzen das blanke Symbol (US-Listing nutzt kein Yahoo-Suffix);
+    sonst Yahoo-Suche per ISIN (liefert i.d.R. die Heimatbörse, passt zu EUR/GBP).
+    Wird vom IBKR-Sync und vom Depot-Import benutzt.
+    """
+    import urllib.request as urlreq
+    geloest = 0
+    try:
+        existing = {r["isin"]: r["auto"] for r in conn.execute("SELECT isin, auto FROM isin_map").fetchall()}
+    except Exception as e:
+        print(f"[ISIN] auto-resolve uebersprungen: {e}")
+        return 0
+    seen = set()
+    for sym, isin, cur in items:
+        # Jede ISIN für sich absichern — ein Ausreißer darf nicht den Rest verschlucken.
+        try:
+            isin = (isin or "").strip().upper()
+            cur  = (cur or "").strip().upper()
+            if not isin or isin in seen:
+                continue
+            if isin in existing and existing[isin] == 0:   # manuell → nicht anfassen
+                continue
+            seen.add(isin)
+            ysym = None
+            # Nur wenn das Symbol wirklich ein Ticker ist — beim Depot-Import steht
+            # dort die ISIN selbst, die als Yahoo-Symbol nichts taugt.
+            if cur == "USD" and sym and sym.upper() != isin:
+                ysym = sym
+            else:
+                try:
+                    u  = f"https://query1.finance.yahoo.com/v1/finance/search?q={isin}&quotesCount=5"
+                    rq = urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                    with urlreq.urlopen(rq, timeout=6) as rp:
+                        jd = json.loads(rp.read())
+                    for q in jd.get("quotes", []):
+                        if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
+                            ysym = q["symbol"]
+                            break
+                except Exception:
+                    ysym = None
+            if ysym:
+                conn.execute(
+                    "INSERT INTO isin_map (isin, yahoo_symbol, display_name, auto) VALUES (?,?,NULL,1) "
+                    "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, auto=1",
+                    (isin, ysym))
+                geloest += 1
+                # ASCII-Pfeil: die Windows-Konsole beim lokalen Lauf kann kein → und
+                # riss frueher den ganzen Auflöse-Lauf mit in den Fehlerzweig.
+                print(f"[ISIN] {isin} -> {ysym} (auto, {cur})")
+        except Exception as e:
+            print(f"[ISIN] {isin} uebersprungen: {e}")
+    try:
+        conn.commit()
+    except Exception as e:
+        print(f"[ISIN] commit fehlgeschlagen: {e}")
+    return geloest
+
 def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
     """Blockierender IBKR-Sync — läuft im ThreadPoolExecutor."""
     import csv as csv_mod
@@ -2250,43 +2311,11 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
             print(f"[IBKR] Trade-Confirmations Fehler: {e}")
 
     # ISIN → Yahoo-Symbol automatisch auflösen (Mapping aus der CSV ableiten).
-    # Nur fehlende oder auto-aufgelöste Einträge — manuelle (auto=0) bleiben fix.
-    # USD-Positionen nutzen das blanke Symbol (US-Listing nutzt kein Yahoo-Suffix);
-    # sonst Yahoo-Suche per ISIN (liefert i.d.R. die Heimatbörse, passt zu EUR/GBP).
-    try:
-        existing = {r["isin"]: r["auto"] for r in conn.execute("SELECT isin, auto FROM isin_map").fetchall()}
-        seen = set()
-        for prow in positions:
-            p_sym, p_cls, p_isin, p_cur = prow[0], (prow[6] or "").upper(), prow[9], (prow[10] or "").upper()
-            if p_cls != "STK" or not p_isin or p_isin in seen:
-                continue
-            if p_isin in existing and existing[p_isin] == 0:   # manuell → nicht anfassen
-                continue
-            seen.add(p_isin)
-            ysym = None
-            if p_cur == "USD":
-                ysym = p_sym
-            else:
-                try:
-                    u  = f"https://query1.finance.yahoo.com/v1/finance/search?q={p_isin}&quotesCount=5"
-                    rq = urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
-                    with urlreq.urlopen(rq, timeout=6) as rp:
-                        jd = json.loads(rp.read())
-                    for q in jd.get("quotes", []):
-                        if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
-                            ysym = q["symbol"]
-                            break
-                except Exception:
-                    ysym = None
-            if ysym:
-                conn.execute(
-                    "INSERT INTO isin_map (isin, yahoo_symbol, display_name, auto) VALUES (?,?,NULL,1) "
-                    "ON CONFLICT(isin) DO UPDATE SET yahoo_symbol=excluded.yahoo_symbol, auto=1",
-                    (p_isin, ysym))
-                print(f"[IBKR] ISIN {p_isin} → {ysym} (auto, {p_cur})")
-        conn.commit()
-    except Exception as e:
-        print(f"[IBKR] ISIN auto-resolve übersprungen: {e}")
+    # Nur Aktien — Futures/Optionen haben keine handelbare ISIN bei Yahoo.
+    _isin_auto_resolve(conn, [
+        (prow[0], prow[9], prow[10]) for prow in positions
+        if (prow[6] or "").upper() == "STK"
+    ])
 
     conn.close()
     return {"ok": True, "count": len(positions), "cash_count": len(cash_rows),
@@ -2310,14 +2339,32 @@ async def ibkr_sync(request: Request):
 
 @app.get("/api/ibkr/positions")
 async def ibkr_positions(request: Request):
-    """Alle gespeicherten IBKR-Positionen als JSON."""
+    """Alle Positionen als JSON — IBKR und die weiteren Depots aus /api/konten.
+
+    Beide Quellen haben dieselben Spaltennamen und werden deshalb hier einfach
+    aneinandergehängt; das Feld `account` sagt, woher eine Zeile stammt. Dadurch
+    laufen Positionstabelle, Portfolio-Report, Sektor-Allokation und die
+    Watchlist-Werte ohne Sonderfall über beide Depots.
+    """
     user  = get_user(request)
     files = get_user_files(user)
     _init_ibkr_tables(files["db"])
+    _init_account_tables(files["db"])
     conn  = get_db(files["db"])
-    rows  = conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall()
+    out   = []
+    for r in conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall():
+        d = dict(r)
+        d["account"] = "IBKR"
+        out.append(d)
+    for r in conn.execute(
+            "SELECT p.*, a.name AS konto FROM depot_positions p "
+            "JOIN accounts a ON a.id = p.account_id "
+            "WHERE COALESCE(a.archived,0) = 0 ORDER BY a.name, p.symbol").fetchall():
+        d = dict(r)
+        d["account"] = d.pop("konto")
+        out.append(d)
     conn.close()
-    return JSONResponse(content=[dict(r) for r in rows])
+    return JSONResponse(content=out)
 
 @app.patch("/api/ibkr/positions/{symbol}")
 async def update_ibkr_position(symbol: str, request: Request):
@@ -2408,6 +2455,630 @@ async def ibkr_isin_resolve(isin: str, request: Request):
     except Exception as e:
         print(f"ISIN resolve error for {isin}: {e}")
         return JSONResponse(content=[])
+
+# ── Konten & Vermögen ──────────────────────────────────────────────────────────
+# Alles, was NICHT bei IBKR liegt: Girokonten, Tagesgeld, weitere Depots (Baader/
+# Smartbroker), Darlehen und Sachwerte. Bewusst eigene Tabellen — `_do_ibkr_sync`
+# ersetzt `positions`/`cash_balances` komplett (DELETE ohne WHERE), diese Daten
+# dürfen ihm nicht in die Quere kommen.
+#
+# Vorzeichen: 'darlehen' zählt negativ, alles andere positiv. Restschulden werden
+# IMMER als positive Zahl gespeichert, das Minus entsteht erst in der Summe.
+#
+# Verlauf: `account_history` hält je Konto und Tag den GESAMTBEITRAG des Kontos
+# (bei Depots also Positionen + Verrechnungskonto). Der IBKR-Anteil lässt sich
+# nicht rekonstruieren und wird täglich in `wealth_history` fortgeschrieben.
+
+ACCOUNT_KINDS   = ("giro", "tagesgeld", "depot", "darlehen", "sachwert")
+# Zuordnung Kontoart → Gruppe der Vermögensübersicht
+ACCOUNT_GROUPS  = {"giro": "guthaben", "tagesgeld": "guthaben", "depot": "depots",
+                   "darlehen": "schulden", "sachwert": "sachwerte"}
+
+def _init_account_tables(db_file: str):
+    """Erstellt die Konten-Tabellen falls nicht vorhanden."""
+    conn = get_db(db_file)
+    conn.execute('''CREATE TABLE IF NOT EXISTS accounts (
+        id             TEXT PRIMARY KEY,
+        name           TEXT,
+        kind           TEXT,
+        institute      TEXT,
+        currency       TEXT DEFAULT 'EUR',
+        fx_rate        REAL DEFAULT 1.0,
+        note           TEXT,
+        balance        REAL DEFAULT 0,
+        balance_date   TEXT,
+        sort           INTEGER DEFAULT 0,
+        archived       INTEGER DEFAULT 0,
+        rate           REAL,
+        interest       REAL,
+        fixed_until    TEXT,
+        asset_id       TEXT,
+        valuation      REAL,
+        valuation_date TEXT,
+        updated        TEXT
+    )''')
+    # Migrationen nach dem Muster von _init_ibkr_tables
+    for ddl in ("fx_rate REAL DEFAULT 1.0", "asset_id TEXT", "valuation REAL",
+                "valuation_date TEXT", "fixed_until TEXT", "archived INTEGER DEFAULT 0"):
+        try:
+            conn.execute(f"ALTER TABLE accounts ADD COLUMN {ddl}")
+        except Exception:
+            pass
+    conn.execute('''CREATE TABLE IF NOT EXISTS account_history (
+        account_id TEXT,
+        date       TEXT,
+        value      REAL,
+        PRIMARY KEY (account_id, date)
+    )''')
+    # Gleiche Spaltennamen wie `positions` — dadurch laufen ibkrLiveValue,
+    # ibkrPosYahoo und das ISIN-Mapping im Frontend unverändert darüber.
+    conn.execute('''CREATE TABLE IF NOT EXISTS depot_positions (
+        account_id       TEXT,
+        symbol           TEXT,
+        quantity         REAL,
+        cost_basis_price REAL,
+        cost_basis_money REAL,
+        mark_price       REAL,
+        position_value   REAL,
+        asset_class      TEXT DEFAULT 'STK',
+        currency         TEXT DEFAULT 'EUR',
+        isin             TEXT,
+        yahoo_symbol     TEXT,
+        fx_rate_to_base  REAL DEFAULT 1.0,
+        multiplier       REAL DEFAULT 1.0,
+        name             TEXT,
+        updated          TEXT,
+        PRIMARY KEY (account_id, symbol)
+    )''')
+    # Nur der IBKR-Anteil: alles andere wird aus account_history gerechnet, damit
+    # eine nachträgliche Korrektur eines Kontostands rückwirkend durchschlägt.
+    conn.execute('''CREATE TABLE IF NOT EXISTS wealth_history (
+        date TEXT PRIMARY KEY,
+        ibkr REAL
+    )''')
+    conn.commit()
+    conn.close()
+
+def _heute() -> str:
+    return time.strftime("%Y-%m-%d")
+
+def _de_num(v):
+    """'1.234,56' → 1234.56, '1,234.56' → 1234.56, '12,5' → 12.5. Leer → None.
+
+    Ein einzelner Punkt vor genau drei Ziffern ist mehrdeutig ('1.234' = 1234 im
+    Deutschen, 1.234 im Englischen). Bei einer führenden 0 gewinnt der Dezimal-
+    punkt (Bruchstücke aus ETF-Sparplänen), sonst der Tausenderpunkt.
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace(" ", " ").strip()
+    if not s:
+        return None
+    neg = s.startswith("-") or (s.startswith("(") and s.endswith(")"))
+    s = re.sub(r"[^0-9,.]", "", s)
+    if not s:
+        return None
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):          # 1.234,56 → deutsch
+            s = s.replace(".", "").replace(",", ".")
+        else:                                     # 1,234.56 → englisch
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".", 1).replace(",", "")
+    elif re.fullmatch(r"[1-9]\d{0,2}(\.\d{3})+", s):
+        s = s.replace(".", "")                    # 1.234.567 → Tausenderpunkte
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    return -f if neg and f > 0 else f
+
+def _account_positions_value(conn, account_id: str) -> float:
+    """Summe der Positionen eines Depotkontos in Base (EUR)."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(position_value * COALESCE(fx_rate_to_base, 1.0)), 0) AS v "
+        "FROM depot_positions WHERE account_id = ?", (account_id,)).fetchone()
+    return float(row["v"] or 0)
+
+def _account_value(conn, acc) -> float:
+    """Gesamtbeitrag eines Kontos in EUR, OHNE Vorzeichen der Gruppe.
+
+    Depot = Wertpapiere + Verrechnungskonto. Sachwert = geschätzter Verkaufserlös.
+    Darlehen = Restschuld (positiv; das Minus setzt erst die Summe).
+    """
+    kind = acc["kind"]
+    fx   = float(acc["fx_rate"] or 1.0)
+    if kind == "sachwert":
+        return float(acc["valuation"] or 0) * fx
+    val = float(acc["balance"] or 0) * fx
+    if kind == "depot":
+        val += _account_positions_value(conn, acc["id"])
+    if kind == "darlehen":
+        val = abs(val)
+    return val
+
+def _account_row(conn, acc) -> dict:
+    """Konto als JSON-Objekt inkl. berechneter Werte."""
+    d = dict(acc)
+    d["kind"]      = d.get("kind") or "giro"
+    d["group"]     = ACCOUNT_GROUPS.get(d["kind"], "guthaben")
+    d["value"]     = _account_value(conn, acc)
+    d["signed"]    = -d["value"] if d["kind"] == "darlehen" else d["value"]
+    if d["kind"] == "depot":
+        d["positions_value"] = _account_positions_value(conn, acc["id"])
+        d["positions_count"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM depot_positions WHERE account_id = ?",
+            (acc["id"],)).fetchone()["c"]
+    return d
+
+def _write_account_history(conn, account_id: str, value: float, date: str = None):
+    """Schreibt den Gesamtbeitrag eines Kontos für einen Tag (ein Eintrag je Tag)."""
+    conn.execute(
+        "INSERT INTO account_history (account_id, date, value) VALUES (?,?,?) "
+        "ON CONFLICT(account_id, date) DO UPDATE SET value = excluded.value",
+        (account_id, date or _heute(), float(value or 0)))
+
+def _ibkr_db_value(conn) -> float:
+    """IBKR-Depotwert aus den zuletzt gesynct Zahlen (ohne Live-Kurse).
+
+    Entspricht der Zeile "NET Gesamt" im Portfolio-Report: Positionen + Cash.
+    Das Frontend rechnet dieselbe Summe mit Live-Kursen und darf sie an
+    /api/vermoegen mitgeben; ohne diese Angabe gilt der Stand vom letzten Sync.
+    """
+    try:
+        pos  = conn.execute(
+            "SELECT COALESCE(SUM(position_value * COALESCE(fx_rate_to_base,1.0)),0) AS v "
+            "FROM positions").fetchone()["v"] or 0
+        cash = conn.execute(
+            "SELECT ending_cash FROM cash_balances WHERE currency='BASE'").fetchone()
+        return float(pos) + float(cash["ending_cash"] if cash else 0)
+    except Exception:
+        return 0.0
+
+def _wealth_summary(conn, ibkr: float = None) -> dict:
+    """Vermögensübersicht nach Gruppen."""
+    accs = conn.execute(
+        "SELECT * FROM accounts WHERE COALESCE(archived,0) = 0 ORDER BY sort, name").fetchall()
+    grp = {"depots": 0.0, "guthaben": 0.0, "sachwerte": 0.0, "schulden": 0.0}
+    for a in accs:
+        grp[ACCOUNT_GROUPS.get(a["kind"], "guthaben")] += _account_value(conn, a)
+    grp["ibkr"]  = float(ibkr) if ibkr is not None else _ibkr_db_value(conn)
+    grp["total"] = grp["ibkr"] + grp["depots"] + grp["guthaben"] + grp["sachwerte"] - grp["schulden"]
+    return grp
+
+def _wealth_series(conn) -> list:
+    """Tagesreihe des Vermögens nach Gruppen.
+
+    Kontostände werden vorwärts gefüllt: ein Konto ohne neuen Eintrag behält
+    seinen letzten bekannten Stand, statt auf null zu fallen. Der IBKR-Anteil
+    kommt aus wealth_history (ebenfalls vorwärts gefüllt).
+    """
+    kinds = {r["id"]: r["kind"] for r in conn.execute("SELECT id, kind FROM accounts").fetchall()}
+    hist  = conn.execute(
+        "SELECT account_id, date, value FROM account_history ORDER BY date").fetchall()
+    wh    = conn.execute("SELECT date, ibkr FROM wealth_history ORDER BY date").fetchall()
+
+    tage = sorted({r["date"] for r in hist} | {r["date"] for r in wh})
+    if not tage:
+        return []
+    per_tag_acc = {}
+    for r in hist:
+        per_tag_acc.setdefault(r["date"], []).append((r["account_id"], r["value"]))
+    per_tag_ibkr = {r["date"]: r["ibkr"] for r in wh}
+
+    stand, ibkr_stand, out = {}, 0.0, []
+    for tag in tage:
+        for acc_id, val in per_tag_acc.get(tag, []):
+            stand[acc_id] = float(val or 0)
+        if tag in per_tag_ibkr:
+            ibkr_stand = float(per_tag_ibkr[tag] or 0)
+        grp = {"depots": 0.0, "guthaben": 0.0, "sachwerte": 0.0, "schulden": 0.0}
+        for acc_id, val in stand.items():
+            if acc_id in kinds:
+                grp[ACCOUNT_GROUPS.get(kinds[acc_id], "guthaben")] += val
+        grp["date"]  = tag
+        grp["ibkr"]  = ibkr_stand
+        grp["total"] = ibkr_stand + grp["depots"] + grp["guthaben"] + grp["sachwerte"] - grp["schulden"]
+        out.append(grp)
+    return out
+
+@app.get("/api/konten")
+async def konten_list(request: Request):
+    """Alle Konten mit berechneten Werten + Vermögensübersicht."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    _init_ibkr_tables(files["db"])
+    conn = get_db(files["db"])
+    accs = conn.execute("SELECT * FROM accounts ORDER BY sort, name").fetchall()
+    out  = [_account_row(conn, a) for a in accs]
+    summary = _wealth_summary(conn)
+    conn.close()
+    return JSONResponse({"accounts": out, "summary": summary})
+
+@app.post("/api/konten")
+async def konten_save(request: Request):
+    """Legt ein Konto an oder ändert es (Upsert über `id`).
+
+    Schreibt den Gesamtbeitrag als Verlaufseintrag — für `balance_date`, falls
+    angegeben, sonst für heute. So kann beim Anlegen gleich ein Anfangsstand mit
+    zurückliegendem Datum hinterlegt werden und die Kurve beginnt nicht erst heute.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    body  = await request.json()
+
+    name = (body.get("name") or "").strip()
+    kind = (body.get("kind") or "giro").strip().lower()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Name erforderlich"}, status_code=400)
+    if kind not in ACCOUNT_KINDS:
+        return JSONResponse({"ok": False, "error": f"Unbekannte Kontoart: {kind}"}, status_code=400)
+
+    acc_id = (body.get("id") or "").strip() or f"acc_{int(time.time()*1000)}_{_secrets.token_hex(3)}"
+    bal    = _de_num(body.get("balance")) or 0.0
+    if kind == "darlehen":
+        bal = abs(bal)                      # Restschuld immer positiv speichern
+    fx     = _de_num(body.get("fx_rate")) or 1.0
+    datum  = (body.get("balance_date") or "").strip() or _heute()
+
+    conn = get_db(files["db"])
+    conn.execute('''INSERT INTO accounts
+        (id, name, kind, institute, currency, fx_rate, note, balance, balance_date,
+         sort, archived, rate, interest, fixed_until, asset_id, valuation, valuation_date, updated)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, kind=excluded.kind, institute=excluded.institute,
+            currency=excluded.currency, fx_rate=excluded.fx_rate, note=excluded.note,
+            balance=excluded.balance, balance_date=excluded.balance_date,
+            sort=excluded.sort, archived=excluded.archived, rate=excluded.rate,
+            interest=excluded.interest, fixed_until=excluded.fixed_until,
+            asset_id=excluded.asset_id, valuation=excluded.valuation,
+            valuation_date=excluded.valuation_date, updated=excluded.updated''',
+        (acc_id, name, kind, (body.get("institute") or "").strip(),
+         (body.get("currency") or "EUR").strip().upper() or "EUR", fx,
+         (body.get("note") or "").strip(), bal, datum,
+         int(body.get("sort") or 0), 1 if body.get("archived") else 0,
+         _de_num(body.get("rate")), _de_num(body.get("interest")),
+         (body.get("fixed_until") or "").strip() or None,
+         (body.get("asset_id") or "").strip() or None,
+         _de_num(body.get("valuation")),
+         (body.get("valuation_date") or "").strip() or None,
+         time.strftime("%Y-%m-%d %H:%M:%S")))
+
+    acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (acc_id,)).fetchone()
+    _write_account_history(conn, acc_id, _account_value(conn, acc), datum)
+    conn.commit()
+    row = _account_row(conn, acc)
+    conn.close()
+    return JSONResponse({"ok": True, "account": row})
+
+@app.delete("/api/konten/{account_id}")
+async def konten_delete(account_id: str, request: Request):
+    """Entfernt ein Konto samt Verlauf und Positionen."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    conn.execute("DELETE FROM accounts         WHERE id = ?",         (account_id,))
+    conn.execute("DELETE FROM account_history  WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM depot_positions  WHERE account_id = ?", (account_id,))
+    # Verweise von Darlehen auf einen gelöschten Sachwert aufräumen
+    conn.execute("UPDATE accounts SET asset_id = NULL WHERE asset_id = ?", (account_id,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+@app.get("/api/konten/{account_id}/verlauf")
+async def konten_verlauf(account_id: str, request: Request):
+    """Verlauf eines Kontos, älteste zuerst."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    rows = conn.execute(
+        "SELECT date, value FROM account_history WHERE account_id = ? ORDER BY date",
+        (account_id,)).fetchall()
+    conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+@app.post("/api/konten/{account_id}/verlauf")
+async def konten_verlauf_set(account_id: str, request: Request):
+    """Trägt einen Stand für ein Datum nach oder korrigiert ihn (löschen: value=null).
+
+    Ist das Datum der jüngste Eintrag, wandert der Wert auch in `accounts.balance`,
+    damit Übersicht und Verlauf nicht auseinanderlaufen.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    body  = await request.json()
+    datum = (body.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", datum):
+        return JSONResponse({"ok": False, "error": "Datum als JJJJ-MM-TT erwartet"}, status_code=400)
+
+    conn = get_db(files["db"])
+    acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "Konto nicht gefunden"}, status_code=404)
+
+    if body.get("value") is None and "value" in body:
+        conn.execute("DELETE FROM account_history WHERE account_id = ? AND date = ?",
+                     (account_id, datum))
+    else:
+        val = _de_num(body.get("value")) or 0.0
+        if acc["kind"] == "darlehen":
+            val = abs(val)
+        _write_account_history(conn, account_id, val, datum)
+        juengste = conn.execute(
+            "SELECT MAX(date) AS d FROM account_history WHERE account_id = ?",
+            (account_id,)).fetchone()["d"]
+        if juengste == datum and acc["kind"] != "depot":
+            feld = "valuation" if acc["kind"] == "sachwert" else "balance"
+            conn.execute(f"UPDATE accounts SET {feld} = ?, balance_date = ? WHERE id = ?",
+                         (val / float(acc["fx_rate"] or 1.0), datum, account_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+@app.get("/api/konten/{account_id}/positionen")
+async def konten_positionen(account_id: str, request: Request):
+    """Positionen eines Depotkontos."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    rows = conn.execute(
+        "SELECT * FROM depot_positions WHERE account_id = ? ORDER BY symbol",
+        (account_id,)).fetchall()
+    conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+def _positionen_schreiben(db_file: str, account_id: str, items: list) -> dict:
+    """Ersetzt die Positionsliste eines Depotkontos.
+
+    `items`: Liste aus {isin, name, quantity, cost_basis_price, mark_price,
+    position_value, currency}. Fehlende Werte werden abgeleitet (Wert = Menge ×
+    Kurs und umgekehrt). Danach wandert der neue Depotwert in den Verlauf.
+    """
+    _init_account_tables(db_file)
+    _init_ibkr_tables(db_file)
+
+    conn = get_db(db_file)
+    acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        conn.close()
+        return {"ok": False, "error": "Konto nicht gefunden", "status": 404}
+
+    now  = time.strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+    for it in items:
+        isin = (it.get("isin") or "").strip().upper() or None
+        sym  = (it.get("symbol") or "").strip().upper() or isin
+        if not sym:
+            continue
+        qty   = _de_num(it.get("quantity")) or 0.0
+        price = _de_num(it.get("mark_price"))
+        wert  = _de_num(it.get("position_value"))
+        if wert is None and price is not None:
+            wert = qty * price
+        if price is None and wert is not None and qty:
+            price = wert / qty
+        einst = _de_num(it.get("cost_basis_price"))
+        ebm   = _de_num(it.get("cost_basis_money"))
+        if ebm is None and einst is not None:
+            ebm = qty * einst
+        if einst is None and ebm is not None and qty:
+            einst = ebm / qty
+        cur = (it.get("currency") or acc["currency"] or "EUR").strip().upper()
+        rows.append((account_id, sym, qty, einst, ebm, price, wert or 0.0,
+                     (it.get("asset_class") or "STK").upper(), cur, isin,
+                     (it.get("yahoo_symbol") or "").strip().upper() or None,
+                     _de_num(it.get("fx_rate_to_base")) or 1.0, 1.0,
+                     (it.get("name") or "").strip() or None, now))
+
+    conn.execute("DELETE FROM depot_positions WHERE account_id = ?", (account_id,))
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO depot_positions "
+            "(account_id,symbol,quantity,cost_basis_price,cost_basis_money,mark_price,"
+            " position_value,asset_class,currency,isin,yahoo_symbol,fx_rate_to_base,"
+            " multiplier,name,updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.commit()
+
+    # ISIN → Yahoo-Symbol auflösen, damit die Titel dieselben Kurse bekommen wie
+    # die IBKR-Positionen (dieselbe isin_map, manuelle Einträge bleiben unangetastet).
+    geloest = _isin_auto_resolve(conn, [(r[1], r[9], r[8]) for r in rows if r[9]])
+
+    acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    wert_gesamt = _account_value(conn, acc)
+    _write_account_history(conn, account_id, wert_gesamt)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "count": len(rows), "isin_aufgeloest": geloest, "wert": wert_gesamt}
+
+@app.post("/api/konten/{account_id}/positionen")
+async def konten_positionen_set(account_id: str, request: Request):
+    """Ersetzt die Positionsliste eines Depotkontos (Feld `positionen`)."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    body  = await request.json()
+    res   = _positionen_schreiben(files["db"], account_id, body.get("positionen") or [])
+    return JSONResponse(res, status_code=res.pop("status", 200))
+
+# ── Depotauszug einlesen ───────────────────────────────────────────────────────
+# Bewusst generisch statt auf ein Broker-Format verdrahtet: der Text darf aus
+# einer CSV-Datei stammen oder direkt aus der Zwischenablage kommen (Tabulatoren).
+# Die Spalten werden über die Kopfzeile erraten, die Zuordnung ist in der
+# Oberfläche korrigierbar.
+
+_SPALTEN_MUSTER = [
+    ("isin",             (r"isin",)),
+    ("wkn",              (r"wkn",)),
+    ("name",             (r"bezeichnung", r"wertpapier", r"instrument", r"titel",
+                          r"produkt", r"^name$", r"security")),
+    ("quantity",         (r"st.?ck", r"anzahl", r"nominal", r"menge", r"bestand",
+                          r"quantity", r"^stk")),
+    ("cost_basis_price", (r"einstand", r"einkaufs", r"kaufkurs", r"durchschnitt",
+                          r"^ek", r"cost")),
+    ("mark_price",       (r"aktueller kurs", r"letzter", r"kurs", r"preis", r"price")),
+    ("position_value",   (r"kurswert", r"marktwert", r"gesamtwert", r"^wert",
+                          r"value", r"volumen")),
+    ("currency",         (r"w.?hrung", r"whg", r"currency")),
+]
+
+def _trennzeichen(text: str) -> str:
+    """Häufigstes Trennzeichen der Kopfzeile — Tab, Semikolon oder Komma."""
+    kopf = text.splitlines()[0] if text.splitlines() else ""
+    return max(("\t", ";", ","), key=kopf.count) if any(c in kopf for c in "\t;,") else ";"
+
+def _spalten_zuordnen(kopf: list) -> dict:
+    """Ordnet Kopfzeilen-Beschriftungen den bekannten Feldern zu. {feld: index}"""
+    zuordnung, belegt = {}, set()
+    for feld, muster in _SPALTEN_MUSTER:
+        for i, titel in enumerate(kopf):
+            if i in belegt:
+                continue
+            t = titel.strip().lower()
+            if any(re.search(m, t) for m in muster):
+                zuordnung[feld] = i
+                belegt.add(i)
+                break
+    return zuordnung
+
+def _depot_text_parsen(text: str) -> dict:
+    """Zerlegt einen eingefügten Depotauszug in Zeilen + erkannte Spalten."""
+    zeilen = [z for z in (text or "").splitlines() if z.strip()]
+    if not zeilen:
+        return {"ok": False, "error": "Kein Inhalt"}
+    sep  = _trennzeichen(text)
+    tab  = [[f.strip().strip('"') for f in z.split(sep)] for z in zeilen]
+    kopf = tab[0]
+    zuordnung = _spalten_zuordnen(kopf)
+    daten = tab[1:]
+    if "isin" not in zuordnung and "name" not in zuordnung:
+        # Keine brauchbare Kopfzeile — ISIN-Muster irgendwo in den Feldern suchen
+        for i, feld in enumerate(kopf):
+            if re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}\d", feld.upper()):
+                zuordnung["isin"] = i
+                daten = tab            # dann ist Zeile 1 schon eine Datenzeile
+                break
+    if not zuordnung:
+        return {"ok": False, "error": "Spalten nicht erkannt — bitte mit Kopfzeile einfügen"}
+
+    hinweise, positionen = [], []
+    for z in daten:
+        def feld(name):
+            i = zuordnung.get(name)
+            return z[i] if i is not None and i < len(z) else ""
+        isin = feld("isin").upper()
+        if isin and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}\d", isin):
+            isin = ""
+        name = feld("name")
+        if not isin and not name:
+            continue
+        qty = _de_num(feld("quantity"))
+        if qty is None and not isin:
+            continue                   # Summen-/Leerzeile
+        positionen.append({
+            "isin": isin or None, "wkn": feld("wkn") or None, "name": name or None,
+            "quantity": qty or 0.0,
+            "cost_basis_price": _de_num(feld("cost_basis_price")),
+            "mark_price":       _de_num(feld("mark_price")),
+            "position_value":   _de_num(feld("position_value")),
+            "currency": (feld("currency") or "EUR").upper()[:3] or "EUR",
+        })
+    if not positionen:
+        return {"ok": False, "error": "Keine Positionen erkannt"}
+    if "isin" not in zuordnung:
+        hinweise.append("Keine ISIN-Spalte gefunden — die Titel bekommen keine Kurse.")
+    if "quantity" not in zuordnung:
+        hinweise.append("Keine Stück-Spalte gefunden.")
+    if "position_value" not in zuordnung and "mark_price" not in zuordnung:
+        hinweise.append("Weder Kurs noch Wert gefunden — der Depotwert bleibt 0.")
+    return {"ok": True, "spalten": kopf, "zuordnung": zuordnung,
+            "trennzeichen": {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[sep],
+            "positionen": positionen, "hinweise": hinweise}
+
+@app.post("/api/konten/{account_id}/import")
+async def konten_import(account_id: str, request: Request):
+    """Liest einen eingefügten Depotauszug. Vorschau, bis `bestaetigt` gesetzt ist."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    body  = await request.json()
+    ergebnis = _depot_text_parsen(body.get("text") or "")
+    if not ergebnis.get("ok"):
+        return JSONResponse(ergebnis, status_code=400)
+    if not body.get("bestaetigt"):
+        return JSONResponse(ergebnis)
+
+    # Die Oberfläche darf die erkannte Liste vor dem Übernehmen korrigieren.
+    positionen = body.get("positionen") or ergebnis["positionen"]
+    res = _positionen_schreiben(files["db"], account_id, positionen)
+    res["hinweise"] = ergebnis.get("hinweise", [])
+    return JSONResponse(res, status_code=res.pop("status", 200))
+
+@app.get("/api/vermoegen")
+async def vermoegen(request: Request, ibkr: str = ""):
+    """Vermögensübersicht. `ibkr` = vom Frontend mit Live-Kursen gerechneter Wert.
+
+    Schreibt nebenbei den IBKR-Stand des Tages fort — dadurch entsteht die
+    Vermögenskurve ohne eigenen Hintergrundjob, einfach dadurch dass die Seite
+    benutzt wird. Ein Eintrag je Tag, der letzte gewinnt.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    _init_ibkr_tables(files["db"])
+    conn  = get_db(files["db"])
+    live  = _de_num(ibkr) if ibkr else None
+    summe = _wealth_summary(conn, live)
+    try:
+        conn.execute("INSERT INTO wealth_history (date, ibkr) VALUES (?,?) "
+                     "ON CONFLICT(date) DO UPDATE SET ibkr = excluded.ibkr",
+                     (_heute(), summe["ibkr"]))
+        conn.commit()
+    except Exception as e:
+        print(f"[Konten] Vermoegens-Fortschreibung uebersprungen: {e}")
+    conn.close()
+    return JSONResponse(summe)
+
+@app.get("/api/vermoegen/verlauf")
+async def vermoegen_verlauf(request: Request):
+    """Tagesreihe des Gesamtvermögens nach Gruppen."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    reihe = _wealth_series(conn)
+    conn.close()
+    return JSONResponse(reihe)
+
+@app.post("/api/vermoegen/verlauf")
+async def vermoegen_verlauf_set(request: Request):
+    """Trägt den IBKR-Depotwert für ein zurückliegendes Datum nach."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    body  = await request.json()
+    datum = (body.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", datum):
+        return JSONResponse({"ok": False, "error": "Datum als JJJJ-MM-TT erwartet"}, status_code=400)
+    conn = get_db(files["db"])
+    if body.get("ibkr") is None and "ibkr" in body:
+        conn.execute("DELETE FROM wealth_history WHERE date = ?", (datum,))
+    else:
+        conn.execute("INSERT INTO wealth_history (date, ibkr) VALUES (?,?) "
+                     "ON CONFLICT(date) DO UPDATE SET ibkr = excluded.ibkr",
+                     (datum, _de_num(body.get("ibkr")) or 0.0))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
 
 # ── Deutscher Steuer-Report (IBKR Activity Statements → Anlage KAP) ─────────────
 # Stateless: Uploads werden geparst und sofort zurückgegeben, nichts gespeichert.

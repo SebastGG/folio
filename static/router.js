@@ -28,6 +28,11 @@ var PAGES = [
         onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
     },
     {
+        id: 'konten', label: 'Konten', icon: '🏦',
+        // Lädt Konten, Vermögensübersicht und Verlauf; schreibt den Tagesstand fort
+        onShow: function () { if (typeof kontenLoad === 'function') kontenLoad(); }
+    },
+    {
         id: 'steuer4', label: 'IBKR Steuer Report', icon: '🏛️',
         // Gespeicherte XMLs beim Öffnen automatisch auswerten (einmal/Session)
         onShow: function () { if (typeof taxStoreInit === 'function') taxStoreInit(); }

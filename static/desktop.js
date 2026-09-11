@@ -2473,8 +2473,14 @@ function renderPortfolioReport() {
     // Währung→Base aus IBKRs eigenen FX-Raten (konsistent mit Positions-Bewertung)
     var ccyFx = ibkrCcyFx();
 
+    // LONG/SHORT/EXPOSURE beziehen sich auf das IBKR-Depot — seit den weiteren
+    // Konten stehen in ibkrPositions auch fremde Depots (Feld `account`). Die
+    // kommen unten als eigener Block „WEITERE KONTEN" dazu, damit „NET Gesamt"
+    // dieselbe Bedeutung behält wie vorher.
+    var ibkrPos = ibkrPositionsIbkr();
+
     var longG = {}, shortG = {};
-    (ibkrPositions || []).forEach(function(p) {
+    ibkrPos.forEach(function(p) {
         var fx  = p.fx_rate_to_base || 1.0;
         var qty = p.quantity || 0;
         var cb  = (p.cost_basis_money || 0) * fx;
@@ -2493,7 +2499,7 @@ function renderPortfolioReport() {
 
     // Markt-Exposure (inkl. Futures-Notional, signiert: long > 0 / short < 0)
     var longExp = 0, shortExp = 0, futGross = 0;
-    (ibkrPositions || []).forEach(function(p) {
+    ibkrPos.forEach(function(p) {
         var e = ibkrExposure(p, ccyFx);
         if (e >= 0) longExp += e; else shortExp += e;
         if ((p.asset_class || '').toUpperCase() === 'FUT') futGross += Math.abs(e);
@@ -2550,6 +2556,25 @@ function renderPortfolioReport() {
     h += '<tr class="pr-total"><td>NET Gesamt</td>'
         + '<td style="color:' + gc(netTotal) + '">' + fmt(netTotal) + '</td>'
         + '<td style="color:' + gc(netPnl) + '">' + pf(netPnl) + '</td></tr>';
+
+    // WEITERE KONTEN — Girokonten, fremde Depots, Sachwerte, Darlehen.
+    // Kommt aus kontenState (Seite „Konten"); ohne angelegte Konten unverändert.
+    var weitere = (kontenState.accounts || []).filter(function(a) { return !a.archived; });
+    if (weitere.length) {
+        h += '<tr class="pr-section"><td colspan="3">WEITERE KONTEN</td></tr>';
+        var summeWeitere = 0;
+        weitere.forEach(function(a) {
+            var wert = kontoWert(a);
+            summeWeitere += a.kind === 'darlehen' ? -wert : wert;
+            h += '<tr class="pr-row"><td>' + escHtml(a.name)
+                + ' <span style="color:var(--muted);font-size:9px">' + KONTO_ARTEN[a.kind] + '</span></td>'
+                + '<td style="color:' + (a.kind === 'darlehen' ? 'var(--red)' : 'var(--text)') + '">'
+                + fmt(a.kind === 'darlehen' ? -wert : wert) + '</td><td>—</td></tr>';
+        });
+        h += '<tr class="pr-total"><td>Vermögen gesamt</td>'
+            + '<td style="color:' + gc(netTotal + summeWeitere) + '">' + fmt(netTotal + summeWeitere) + '</td>'
+            + '<td>—</td></tr>';
+    }
 
     // EXPOSURE — Marktwirkung inkl. Futures-Notional (€-Beträge, ohne Prozente)
     h += '<tr class="pr-section"><td colspan="3">EXPOSURE (inkl. Futures)</td></tr>';
@@ -2666,6 +2691,11 @@ function ibkrRenderTable() {
                 + p.symbol + (yahooSym && yahooSym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + yahooSym + '</span>' : ' <span style="color:var(--muted);font-size:10px">✎</span>')
                 + '</span>';
             var provBadge = p.provisional ? ' <span title="inkl. heutiger Trades (vorläufig, bis T+1-Abrechnung)" style="font-size:9px;color:var(--accent);font-weight:700">•heute</span>' : '';
+            // Positionen aus einem weiteren Depot (Seite „Konten") kenntlich machen
+            if (p.account && p.account !== 'IBKR') {
+                provBadge += ' <span class="k-badge" title="Depot: ' + escHtml(p.account) + '">'
+                           + esc(p.account) + '</span>';
+            }
             var cls    = (p.asset_class || '').toUpperCase();
             var secTd;
             if (cls === 'STK' && qty > 0) {
@@ -5865,4 +5895,713 @@ function helpFilter(q) {
     var leer = document.getElementById('help-nohit');
     if (leer) leer.style.display = treffer ? 'none' : '';
     _helpMarkActive();
+}
+
+// ╔══════════════════════════════════════════════════════════╗
+// ║ 17. KONTEN & VERMÖGEN                                     ║
+// ╚══════════════════════════════════════════════════════════╝
+//
+// Alles außerhalb von IBKR: Girokonten, Tagesgeld, weitere Depots (Baader/
+// Smartbroker), Darlehen und Sachwerte. Der Zustand liegt in `kontenState`
+// (shared.js), damit der Portfolio-Report ihn auch ohne geöffnete Seite kennt.
+//
+// Die Wertpapiere eines weiteren Depots landen über /api/ibkr/positions in
+// `ibkrPositions` und werden dadurch überall mitbewertet; das Feld `account`
+// sagt, aus welchem Depot eine Zeile stammt.
+
+var _kontenOffen   = null;   // id des gerade bearbeiteten Kontos ('' = neues)
+var _kontenVorschau = null;  // Ergebnis des letzten Import-Probelaufs
+var _wealthChart   = null;   // Lightweight-Charts-Instanz der Verlaufskurve
+var _wealthSeries  = {};     // { schluessel: Serie }
+var _wealthZeitraum = 'alles';
+var _wealthKonto   = '';     // '' = Gesamtvermögen, sonst Konto-id
+
+/** IBKR-Depotwert mit Live-Kursen — dieselbe Rechnung wie „NET Gesamt". */
+function kontenIbkrLive() {
+    var ccyFx = ibkrCcyFx();
+    var cashBase = (ibkrCash || []).find(function(c) { return c.currency === 'BASE'; });
+    var total = cashBase ? (cashBase.ending_cash || 0) : 0;
+    ibkrPositionsIbkr().forEach(function(p) { total += ibkrLiveValue(p, ccyFx); });
+    return total;
+}
+
+/** Lädt Konten, Vermögensübersicht und Verlauf und zeichnet die Seite neu. */
+async function kontenLoad() {
+    var fertig = logTimer(4, 'Konten', 'Konten laden');
+    try {
+        var daten = await kontenLaden();
+        kontenState.accounts = daten.accounts || [];
+        logIt(3, 'Konten', kontenState.accounts.length + ' Konten geladen');
+
+        // Der Server kennt nur den Stand vom letzten Sync — den Live-Wert
+        // rechnen wir hier und geben ihn mit, damit auch die Fortschreibung stimmt.
+        var live = (ibkrPositions || []).length ? kontenIbkrLive() : null;
+        kontenState.summary = await vermoegenLaden(live);
+        kontenState.verlauf = await vermoegenVerlaufLaden();
+        logIt(5, 'Konten', 'Verlauf: ' + kontenState.verlauf.length + ' Tage');
+    } catch (e) {
+        logIt(1, 'Konten', 'Laden fehlgeschlagen: ' + e.message);
+    }
+    fertig();
+    renderKonten();
+}
+
+/** Zeichnet Übersicht, Liste, Formular und Kurve. */
+function renderKonten() {
+    renderVermoegensKacheln();
+    renderKontenListe();
+    renderWealthKontoWahl();
+    renderWealthChart();
+    if (_kontenOffen !== null) renderKontenFormular();
+}
+
+/** Füllt das Auswahlfeld über der Kurve mit den angelegten Konten. */
+function renderWealthKontoWahl() {
+    var el = document.getElementById('wealthKontoWahl');
+    if (!el) return;
+    var h = '<option value="">Gesamtvermögen</option>';
+    (kontenState.accounts || []).forEach(function(a) {
+        h += '<option value="' + a.id + '"' + (_wealthKonto === a.id ? ' selected' : '') + '>'
+           + escHtml(a.name) + '</option>';
+    });
+    el.innerHTML = h;
+}
+
+// ── Vermögensübersicht ───────────────────────────────────────────────────────
+
+function renderVermoegensKacheln() {
+    var el = document.getElementById('vermoegenKacheln');
+    if (!el) return;
+    var s = kontenState.summary;
+    if (!s) { el.innerHTML = '<div class="v-hint">Noch keine Daten.</div>'; return; }
+
+    // Depots live nachrechnen (der Server kennt nur den Importstand)
+    var depots = 0, guthaben = 0, sachwerte = 0, schulden = 0;
+    (kontenState.accounts || []).forEach(function(a) {
+        if (a.archived) return;
+        var w = kontoWert(a);
+        if      (a.kind === 'depot')    depots    += w;
+        else if (a.kind === 'sachwert') sachwerte += w;
+        else if (a.kind === 'darlehen') schulden  += w;
+        else                            guthaben  += w;
+    });
+    var ibkr  = (ibkrPositions || []).length ? kontenIbkrLive() : (s.ibkr || 0);
+    var total = ibkr + depots + guthaben + sachwerte - schulden;
+
+    var kachel = function(titel, wert, klasse) {
+        return '<div class="v-kachel ' + (klasse || '') + '">'
+             + '<div class="v-kachel-t">' + titel + '</div>'
+             + '<div class="v-kachel-w">' + fmtEur(wert) + '</div></div>';
+    };
+    var h = '<div class="v-kacheln">';
+    h += kachel('IBKR-Depot', ibkr);
+    if (depots)    h += kachel('Weitere Depots', depots);
+    if (guthaben)  h += kachel('Guthaben', guthaben);
+    if (sachwerte) h += kachel('Sachwerte', sachwerte);
+    if (schulden)  h += kachel('Schulden', -schulden, 'v-minus');
+    h += '</div>';
+    h += '<div class="v-gesamt"><span>Vermögen gesamt</span><b>' + fmtEur(total) + '</b></div>';
+
+    // Veränderung gegenüber Vormonat und Jahresanfang
+    var reihe = kontenState.verlauf || [];
+    if (reihe.length > 1) {
+        var heute = reihe[reihe.length - 1];
+        var teile = [];
+        var vgl = function(label, ab) {
+            var frueher = null;
+            for (var i = 0; i < reihe.length; i++) { if (reihe[i].date <= ab) frueher = reihe[i]; }
+            if (!frueher || !frueher.total) return;
+            var d = (heute.total || 0) - frueher.total;
+            var p = d / Math.abs(frueher.total) * 100;
+            teile.push('<span>' + label + ' <b style="color:' + (d >= 0 ? 'var(--green)' : 'var(--red)') + '">'
+                + fmtEurSign(d) + ' (' + (d >= 0 ? '+' : '') + p.toFixed(1) + '%)</b></span>');
+        };
+        var d30 = new Date(); d30.setMonth(d30.getMonth() - 1);
+        vgl('30 Tage', d30.toISOString().slice(0, 10));
+        vgl('seit 1.1.', new Date().getFullYear() + '-01-01');
+        if (teile.length) h += '<div class="v-delta">' + teile.join('') + '</div>';
+    }
+    el.innerHTML = h;
+}
+
+// ── Kontenliste ──────────────────────────────────────────────────────────────
+
+function renderKontenListe() {
+    var el = document.getElementById('kontenListe');
+    if (!el) return;
+    var accs = kontenState.accounts || [];
+    if (!accs.length) {
+        el.innerHTML = '<div class="v-hint">Noch keine Konten angelegt. '
+                     + '„Konto anlegen" öffnet das Formular.</div>';
+        return;
+    }
+    var h = '<table class="konten-tab"><thead><tr>'
+          + '<th>Konto</th><th>Institut</th><th>Art</th><th style="text-align:right">Wert</th>'
+          + '<th>Stand</th><th></th></tr></thead><tbody>';
+    accs.forEach(function(a) {
+        var w = kontoWert(a);
+        var minus = a.kind === 'darlehen';
+        h += '<tr' + (a.archived ? ' style="opacity:.5"' : '') + '>'
+           + '<td><b>' + escHtml(a.name) + '</b>'
+           + (a.kind === 'depot' && a.positions_count
+                ? ' <span class="k-badge">' + a.positions_count + ' Titel</span>' : '')
+           + (a.archived ? ' <span class="k-badge">stillgelegt</span>' : '')
+           + '</td>'
+           + '<td style="color:var(--muted)">' + escHtml(a.institute || '—') + '</td>'
+           + '<td style="color:var(--muted)">' + (KONTO_ARTEN[a.kind] || a.kind) + '</td>'
+           + '<td style="text-align:right;color:' + (minus ? 'var(--red)' : 'var(--text)') + '">'
+           + fmtEur(minus ? -w : w) + '</td>'
+           + '<td style="color:var(--muted);font-size:10px">' + escHtml(a.balance_date || '—') + '</td>'
+           + '<td style="text-align:right"><button class="refresh-btn k-mini" onclick="kontenFormOeffnen(\''
+           + a.id + '\')">Bearbeiten</button></td>'
+           + '</tr>';
+        // Darlehen mit zugeordnetem Sachwert: Nettoposition darunter
+        if (a.kind === 'darlehen' && a.asset_id) {
+            var obj = accs.find(function(x) { return x.id === a.asset_id; });
+            if (obj) {
+                var netto = kontoWert(obj) - w;
+                h += '<tr class="k-unterzeile"><td colspan="3">↳ zusammen mit '
+                   + escHtml(obj.name) + '</td>'
+                   + '<td style="text-align:right;color:' + (netto >= 0 ? 'var(--green)' : 'var(--red)') + '">'
+                   + fmtEur(netto) + '</td><td colspan="2"></td></tr>';
+            }
+        }
+    });
+    h += '</tbody></table>';
+    el.innerHTML = h;
+}
+
+// ── Formular ─────────────────────────────────────────────────────────────────
+
+function kontenFormOeffnen(id) {
+    _kontenOffen = id === undefined ? '' : id;
+    _kontenVorschau = null;
+    renderKontenFormular();
+    var el = document.getElementById('kontenForm');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function kontenFormSchliessen() {
+    _kontenOffen = null;
+    _kontenVorschau = null;
+    var el = document.getElementById('kontenForm');
+    if (el) el.innerHTML = '';
+}
+
+function renderKontenFormular() {
+    var el = document.getElementById('kontenForm');
+    if (!el) return;
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === _kontenOffen; })
+            || { id: '', kind: 'giro', currency: 'EUR', fx_rate: 1 };
+    var neu = !a.id;
+
+    var feld = function(id, label, wert, typ, hint) {
+        return '<label class="settings-field"><span>' + label + '</span>'
+             + '<input id="' + id + '" type="' + (typ || 'text') + '" value="'
+             + escHtml(wert == null ? '' : wert) + '"'
+             + (hint ? ' placeholder="' + escHtml(hint) + '"' : '') + '></label>';
+    };
+
+    var h = '<div class="settings-card">';
+    h += '<h2 class="settings-h">' + (neu ? 'Konto anlegen' : escHtml(a.name))
+       + '<span class="settings-badge">' + (KONTO_ARTEN[a.kind] || a.kind) + '</span></h2>';
+
+    h += '<label class="settings-field"><span>Art</span><select id="k-kind" onchange="renderKontenFormularFelder()">';
+    Object.keys(KONTO_ARTEN).forEach(function(k) {
+        h += '<option value="' + k + '"' + (a.kind === k ? ' selected' : '') + '>' + KONTO_ARTEN[k] + '</option>';
+    });
+    h += '</select></label>';
+
+    h += feld('k-name', 'Name', a.name, 'text', 'z. B. GLS Girokonto');
+    h += feld('k-institute', 'Institut', a.institute, 'text', 'z. B. GLS Bank');
+    h += '<div id="k-typfelder"></div>';
+    h += feld('k-note', 'Notiz', a.note);
+
+    h += '<div class="settings-actions">'
+       + '<button class="refresh-btn" onclick="kontenSpeichernKlick(this)">Speichern</button>'
+       + (neu ? '' : '<button class="refresh-btn" onclick="kontenLoeschenKlick(\'' + a.id + '\')">Löschen</button>')
+       + '<button class="refresh-btn" onclick="kontenFormSchliessen()">Schließen</button>'
+       + '<span id="k-msg" class="settings-msg"></span></div>';
+    h += '<input type="hidden" id="k-id" value="' + escHtml(a.id || '') + '">';
+    h += '</div>';
+
+    // Depot: Import + Positionen; jedes Konto: Verlauf
+    if (!neu) {
+        h += '<div class="settings-card" id="k-verlauf-karte"></div>';
+        if (a.kind === 'depot') h += '<div class="settings-card" id="k-import-karte"></div>';
+    }
+    el.innerHTML = h;
+    renderKontenFormularFelder();
+    if (!neu) {
+        renderKontenVerlaufKarte(a);
+        if (a.kind === 'depot') renderKontenImportKarte(a);
+    }
+}
+
+/** Die art-abhängigen Felder — hängt an der Auswahl „Art". */
+function renderKontenFormularFelder() {
+    var el = document.getElementById('k-typfelder');
+    if (!el) return;
+    var kind = (document.getElementById('k-kind') || {}).value || 'giro';
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === _kontenOffen; }) || {};
+
+    var feld = function(id, label, wert, hint) {
+        return '<label class="settings-field"><span>' + label + '</span>'
+             + '<input id="' + id + '" type="text" value="' + escHtml(wert == null ? '' : wert) + '"'
+             + (hint ? ' placeholder="' + escHtml(hint) + '"' : '') + '></label>';
+    };
+    var h = '';
+    if (kind === 'sachwert') {
+        h += feld('k-valuation', 'Geschätzter Verkaufserlös (€)', a.valuation, 'z. B. 285000');
+        h += feld('k-valuation-date', 'Schätzung vom', a.valuation_date || heuteIso(), 'JJJJ-MM-TT');
+    } else {
+        var label = kind === 'darlehen' ? 'Restschuld (€, positiv)'
+                  : kind === 'depot'    ? 'Verrechnungskonto (€)' : 'Saldo (€)';
+        h += feld('k-balance', label, a.balance, '0');
+        h += feld('k-balance-date', 'Stand vom', a.balance_date || heuteIso(), 'JJJJ-MM-TT');
+    }
+    if (kind === 'darlehen') {
+        h += feld('k-interest', 'Zinssatz (% p. a.)', a.interest, 'z. B. 3,4');
+        h += feld('k-rate', 'Monatliche Rate (€)', a.rate, 'z. B. 950');
+        h += feld('k-fixed-until', 'Zinsbindung bis', a.fixed_until, 'JJJJ-MM-TT');
+        // Prognose rechnet bei jeder Eingabe mit
+        h = h.replace(/<input id="k-(balance|interest|rate|fixed-until)"/g,
+                      '<input oninput="renderTilgungsVorschau()" id="k-$1"');
+        h += '<label class="settings-field"><span>Zugeordneter Sachwert</span><select id="k-asset">'
+           + '<option value="">— keiner —</option>';
+        (kontenState.accounts || []).filter(function(x) { return x.kind === 'sachwert'; })
+            .forEach(function(x) {
+                h += '<option value="' + x.id + '"' + (a.asset_id === x.id ? ' selected' : '') + '>'
+                   + escHtml(x.name) + '</option>';
+            });
+        h += '</select></label>';
+    }
+    if (kind !== 'sachwert') {
+        h += '<label class="settings-field"><span>Währung</span><input id="k-currency" type="text" value="'
+           + escHtml(a.currency || 'EUR') + '" style="max-width:80px"></label>';
+        h += feld('k-fx', 'Kurs zu Euro (1 bei Euro-Konten)', a.fx_rate == null ? 1 : a.fx_rate);
+    }
+    el.innerHTML = h;
+
+    // Tilgungsvorschau, sobald Restschuld, Zins und Rate stehen
+    if (kind === 'darlehen') renderTilgungsVorschau();
+}
+
+/** Restschuld-Prognose aus Rate und Zinssatz (Annuität, monatlich). Liest die Felder. */
+function renderTilgungsVorschau() {
+    var el = document.getElementById('k-typfelder');
+    if (!el) return;
+    var rest = zahl((document.getElementById('k-balance') || {}).value);
+    var zins = zahl((document.getElementById('k-interest') || {}).value);
+    var rate = zahl((document.getElementById('k-rate') || {}).value);
+    if (!rest || !rate) return;
+
+    var monate = 0, r = Math.abs(rest), zinsSumme = 0;
+    var m = zins / 100 / 12;
+    while (r > 0 && monate < 720) {
+        var z = r * m;
+        if (rate <= z) { monate = -1; break; }    // Rate deckt nicht mal die Zinsen
+        zinsSumme += z;
+        r = r + z - rate;
+        monate++;
+    }
+    var h = '<div class="k-prognose">';
+    if (monate < 0) {
+        h += 'Die Rate deckt die Zinsen nicht — die Schuld wächst.';
+    } else {
+        var fertig = new Date();
+        fertig.setMonth(fertig.getMonth() + monate);
+        h += 'Bei ' + fmtEur(rate) + ' im Monat und ' + (zins || 0).toString().replace('.', ',')
+           + ' % getilgt in <b>' + Math.floor(monate / 12) + ' J ' + (monate % 12) + ' M</b> (bis '
+           + fertig.toISOString().slice(0, 7).replace('-', '/') + '), Zinsen zusammen '
+           + fmtEur(zinsSumme) + '.';
+        var bis = (document.getElementById('k-fixed-until') || {}).value;
+        if (bis && /^\d{4}-\d{2}-\d{2}$/.test(bis)) {
+            var bisM = Math.max(0, Math.round((new Date(bis) - new Date()) / (1000 * 3600 * 24 * 30.44)));
+            var rr = Math.abs(rest);
+            for (var i = 0; i < bisM && rr > 0; i++) { rr = rr + rr * m - rate; }
+            h += '<br>Restschuld am Ende der Zinsbindung: <b>' + fmtEur(Math.max(0, rr)) + '</b>.';
+        }
+    }
+    h += '</div>';
+    var alt = el.querySelector('.k-prognose');
+    if (alt) alt.outerHTML = h; else el.insertAdjacentHTML('beforeend', h);
+}
+
+async function kontenSpeichernKlick(btn) {
+    var msg = document.getElementById('k-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    var wert = function(id) { var e = document.getElementById(id); return e ? e.value : ''; };
+
+    var konto = {
+        id:        wert('k-id'),
+        kind:      wert('k-kind'),
+        name:      wert('k-name'),
+        institute: wert('k-institute'),
+        note:      wert('k-note'),
+        currency:  wert('k-currency') || 'EUR',
+        fx_rate:   wert('k-fx') || 1,
+        balance:      wert('k-balance'),
+        balance_date: wert('k-balance-date'),
+        valuation:      wert('k-valuation'),
+        valuation_date: wert('k-valuation-date'),
+        interest:    wert('k-interest'),
+        rate:        wert('k-rate'),
+        fixed_until: wert('k-fixed-until'),
+        asset_id:    wert('k-asset')
+    };
+    if (konto.kind === 'sachwert') konto.balance_date = konto.valuation_date;
+    if (!konto.name.trim()) { setMsg('Name fehlt', 'err'); return; }
+
+    btn.disabled = true;
+    var alt = btn.textContent;
+    btn.textContent = 'Speichere…';
+    try {
+        var res = await kontenSpeichern(konto);
+        if (res.ok) {
+            setMsg('✓ Gespeichert', 'ok');
+            logIt(3, 'Konten', 'Konto „' + konto.name + '" gespeichert');
+            _kontenOffen = res.account.id;
+            await kontenLoad();
+        } else {
+            setMsg('Fehler: ' + (res.error || 'unbekannt'), 'err');
+            logIt(1, 'Konten', 'Speichern fehlgeschlagen: ' + (res.error || '?'));
+        }
+    } catch (e) {
+        setMsg('Verbindungsfehler: ' + e.message, 'err');
+        logIt(1, 'Konten', 'Speichern fehlgeschlagen: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = alt;
+    }
+}
+
+async function kontenLoeschenKlick(id) {
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === id; });
+    if (!confirm('Konto „' + (a ? a.name : id) + '" mit Verlauf und Positionen löschen?')) return;
+    var res = await kontenLoeschen(id);
+    if (res.ok) {
+        logIt(3, 'Konten', 'Konto gelöscht');
+        kontenFormSchliessen();
+        await kontenLoad();
+    }
+}
+
+// ── Verlauf eines Kontos ─────────────────────────────────────────────────────
+
+async function renderKontenVerlaufKarte(a) {
+    var el = document.getElementById('k-verlauf-karte');
+    if (!el) return;
+    var reihe = [];
+    try { reihe = await kontenVerlaufLaden(a.id); } catch (e) { /* leer lassen */ }
+
+    var h = '<h2 class="settings-h">Verlauf</h2>'
+          + '<p class="settings-hint">Jeder gespeicherte Stand landet hier. Ältere Stände '
+          + 'kannst du nachtragen — die Vermögenskurve reicht dann weiter zurück.</p>';
+    h += '<div class="k-verlauf-eingabe">'
+       + '<input id="k-v-datum" type="text" placeholder="JJJJ-MM-TT" value="' + heuteIso() + '">'
+       + '<input id="k-v-wert" type="text" placeholder="Betrag">'
+       + '<button class="refresh-btn k-mini" onclick="kontenVerlaufKlick(\'' + a.id + '\', this)">Eintragen</button>'
+       + '<span id="k-v-msg" class="settings-msg"></span></div>';
+    if (reihe.length) {
+        h += '<table class="konten-tab k-verlauf-tab"><tbody>';
+        reihe.slice().reverse().slice(0, 40).forEach(function(r) {
+            h += '<tr><td>' + escHtml(r.date) + '</td>'
+               + '<td style="text-align:right">' + fmtEur(r.value, 2) + '</td>'
+               + '<td style="text-align:right"><button class="refresh-btn k-mini" onclick="kontenVerlaufWeg(\''
+               + a.id + '\',\'' + r.date + '\')">×</button></td></tr>';
+        });
+        h += '</tbody></table>';
+        if (reihe.length > 40) h += '<p class="settings-hint">… ' + (reihe.length - 40) + ' ältere Einträge</p>';
+    }
+    el.innerHTML = h;
+}
+
+async function kontenVerlaufKlick(id, btn) {
+    var datum = (document.getElementById('k-v-datum') || {}).value || '';
+    var wert  = (document.getElementById('k-v-wert') || {}).value || '';
+    var msg   = document.getElementById('k-v-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datum.trim())) { setMsg('Datum als JJJJ-MM-TT', 'err'); return; }
+    btn.disabled = true;
+    try {
+        var res = await kontenVerlaufSetzen(id, datum.trim(), wert);
+        if (res.ok) {
+            setMsg('✓', 'ok');
+            logIt(3, 'Konten', 'Stand ' + datum + ' eingetragen');
+            await kontenLoad();
+        } else {
+            setMsg(res.error || 'Fehler', 'err');
+        }
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function kontenVerlaufWeg(id, datum) {
+    await kontenVerlaufSetzen(id, datum, null);
+    logIt(3, 'Konten', 'Stand ' + datum + ' entfernt');
+    await kontenLoad();
+}
+
+// ── Depotauszug einlesen ─────────────────────────────────────────────────────
+
+async function renderKontenImportKarte(a) {
+    var el = document.getElementById('k-import-karte');
+    if (!el) return;
+    var h = '<h2 class="settings-h">Depotauszug einlesen</h2>'
+          + '<p class="settings-hint">Tabelle aus dem Online-Banking markieren, kopieren und hier '
+          + 'einfügen — mit Kopfzeile. CSV mit Semikolon, Komma oder Tabulator geht genauso. '
+          + 'Erkannt werden ISIN, Bezeichnung, Stück, Einstand, Kurs, Wert und Währung.</p>'
+          + '<textarea id="k-import-text" class="k-import-feld" rows="6" '
+          + 'placeholder="ISIN;Bezeichnung;Stück;Einstand;Kurs;Wert&#10;DE0007164600;SAP SE;40;98,50;215,30;8612,00"></textarea>'
+          + '<div class="settings-actions">'
+          + '<button class="refresh-btn" onclick="kontenImportPruefen(\'' + a.id + '\', this)">Prüfen</button>'
+          + '<span id="k-import-msg" class="settings-msg"></span></div>'
+          + '<div id="k-import-vorschau"></div>';
+    el.innerHTML = h;
+    renderDepotPositionen(a);
+}
+
+async function kontenImportPruefen(id, btn) {
+    var text = (document.getElementById('k-import-text') || {}).value || '';
+    var msg  = document.getElementById('k-import-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    if (!text.trim()) { setMsg('Nichts eingefügt', 'err'); return; }
+    btn.disabled = true;
+    setMsg('Prüfe…', 'run');
+    try {
+        var res = await kontenImport(id, text);
+        if (!res.ok) { setMsg(res.error || 'Nicht erkannt', 'err'); return; }
+        _kontenVorschau = res;
+        setMsg('', '');
+        logIt(3, 'Konten', res.positionen.length + ' Positionen erkannt (' + res.trennzeichen + ')');
+        renderImportVorschau(id, res);
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function renderImportVorschau(id, res) {
+    var el = document.getElementById('k-import-vorschau');
+    if (!el) return;
+    var h = '<p class="settings-hint">Erkannt: <b>' + res.positionen.length + ' Positionen</b>, '
+          + 'Trennzeichen ' + res.trennzeichen + '.</p>';
+    (res.hinweise || []).forEach(function(w) {
+        h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + escHtml(w) + '</p>';
+    });
+    h += '<table class="konten-tab"><thead><tr><th>ISIN</th><th>Bezeichnung</th>'
+       + '<th style="text-align:right">Stück</th><th style="text-align:right">Einstand</th>'
+       + '<th style="text-align:right">Kurs</th><th style="text-align:right">Wert</th></tr></thead><tbody>';
+    res.positionen.slice(0, 50).forEach(function(p) {
+        h += '<tr><td>' + escHtml(p.isin || '—') + '</td><td>' + escHtml(p.name || '—') + '</td>'
+           + '<td style="text-align:right">' + (p.quantity || 0) + '</td>'
+           + '<td style="text-align:right">' + (p.cost_basis_price == null ? '—' : p.cost_basis_price) + '</td>'
+           + '<td style="text-align:right">' + (p.mark_price == null ? '—' : p.mark_price) + '</td>'
+           + '<td style="text-align:right">' + (p.position_value == null ? '—' : fmtEur(p.position_value, 2)) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    if (res.positionen.length > 50) h += '<p class="settings-hint">… und ' + (res.positionen.length - 50) + ' weitere</p>';
+    h += '<div class="settings-actions">'
+       + '<button class="refresh-btn" onclick="kontenImportUebernehmen(\'' + id + '\', this)">Übernehmen</button>'
+       + '<span class="settings-hint" style="margin:0">ersetzt die bisherigen Positionen des Depots</span></div>';
+    el.innerHTML = h;
+}
+
+async function kontenImportUebernehmen(id, btn) {
+    if (!_kontenVorschau) return;
+    var text = (document.getElementById('k-import-text') || {}).value || '';
+    btn.disabled = true;
+    btn.textContent = 'Übernehme…';
+    try {
+        var res = await kontenImport(id, text, _kontenVorschau.positionen);
+        if (res.ok) {
+            logIt(3, 'Konten', res.count + ' Positionen übernommen, '
+                  + (res.isin_aufgeloest || 0) + ' ISIN aufgelöst, Depotwert ' + fmtEur(res.wert));
+            _kontenVorschau = null;
+            await ibkrLoadPositions();     // Positionen erscheinen sofort überall
+            await kontenLoad();
+            ibkrRenderTable();
+        } else {
+            logIt(1, 'Konten', 'Übernehmen fehlgeschlagen: ' + (res.error || '?'));
+        }
+    } catch (e) {
+        logIt(1, 'Konten', 'Übernehmen fehlgeschlagen: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Übernehmen';
+    }
+}
+
+/** Die aktuell gespeicherten Positionen eines Depotkontos. */
+function renderDepotPositionen(a) {
+    var eigene = (ibkrPositions || []).filter(function(p) { return p.account === a.name; });
+    if (!eigene.length) return;
+    var ccyFx = ibkrCcyFx();
+    var h = '<h2 class="settings-h" style="margin-top:18px">Bestand (' + eigene.length + ')</h2>';
+    h += '<table class="konten-tab"><thead><tr><th>Titel</th><th>ISIN</th>'
+       + '<th style="text-align:right">Stück</th><th style="text-align:right">Wert</th></tr></thead><tbody>';
+    eigene.forEach(function(p) {
+        var ysym = ibkrPosYahoo(p);
+        h += '<tr><td>' + escHtml(p.name || ysym || p.symbol)
+           + (ysym && ysym !== p.symbol ? ' <span style="color:var(--accent);font-size:10px">→' + escHtml(ysym) + '</span>' : '')
+           + '</td><td style="color:var(--muted)">' + escHtml(p.isin || '—') + '</td>'
+           + '<td style="text-align:right">' + (p.quantity || 0) + '</td>'
+           + '<td style="text-align:right">' + fmtEur(ibkrLiveValue(p, ccyFx)) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    var el = document.getElementById('k-import-karte');
+    if (el) el.insertAdjacentHTML('beforeend', h);
+}
+
+// ── Vermögenskurve ───────────────────────────────────────────────────────────
+// Gestapelte Flächen (kumuliert gerechnet, die größte zuerst hinzugefügt, damit
+// sie hinten liegt) plus die Linie „Vermögen gesamt" nach Abzug der Schulden.
+
+function wealthZeitraum(v) {
+    _wealthZeitraum = v;
+    document.querySelectorAll('#wealthZeitraum button').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-z') === v);
+    });
+    renderWealthChart();
+}
+
+async function wealthKonto(v) {
+    _wealthKonto = v;
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === v; });
+    if (a && !a._verlauf) {
+        try { a._verlauf = await kontenVerlaufLaden(v); }
+        catch (e) { logIt(1, 'Konten', 'Verlauf nicht ladbar: ' + e.message); }
+    }
+    renderWealthChart();
+}
+
+function renderWealthChart() {
+    var box = document.getElementById('wealthChart');
+    if (!box || typeof LightweightCharts === 'undefined') return;
+    var reihe = (kontenState.verlauf || []).slice();
+
+    // Zeitraum abschneiden
+    if (_wealthZeitraum !== 'alles' && reihe.length) {
+        var ab = new Date();
+        ab.setMonth(ab.getMonth() - ({ '1m': 1, '6m': 6, '1j': 12 }[_wealthZeitraum] || 12));
+        var abStr = ab.toISOString().slice(0, 10);
+        reihe = reihe.filter(function(r) { return r.date >= abStr; });
+    }
+
+    var leer = document.getElementById('wealthLeer');
+    if (reihe.length < 2) {
+        if (leer) {
+            leer.style.display = '';
+            leer.textContent = reihe.length
+                ? 'Erst ein Datenpunkt — ab dem zweiten Tag entsteht die Kurve. '
+                + 'Ältere Stände kannst du beim jeweiligen Konto nachtragen.'
+                : 'Noch kein Verlauf. Lege ein Konto an oder trage frühere Stände nach.';
+        }
+        box.style.display = 'none';
+        return;
+    }
+    if (leer) leer.style.display = 'none';
+    box.style.display = '';
+
+    if (!_wealthChart) {
+        _wealthChart = LightweightCharts.createChart(box, {
+            width: box.clientWidth, height: box.clientHeight,
+            layout: {
+                background: { color: 'transparent' },
+                textColor: getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#1a1a18',
+                fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, Arial, sans-serif"
+            },
+            grid: { vertLines: { color: 'rgba(0,0,0,0.05)' }, horzLines: { color: 'rgba(0,0,0,0.05)' } },
+            timeScale: { borderVisible: false, timeVisible: false },
+            rightPriceScale: { borderVisible: false },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+        });
+        // Reihenfolge: die oberste Fläche zuerst, damit die kleineren davor liegen.
+        [['ibkr', 'rgba(41,98,255,.35)', '#2962ff'],
+         ['depots', 'rgba(45,138,78,.35)', '#2d8a4e'],
+         ['sachwerte', 'rgba(245,166,35,.35)', '#f5a623'],
+         ['guthaben', 'rgba(155,89,182,.35)', '#9b59b6']].forEach(function(s) {
+            _wealthSeries[s[0]] = _wealthChart.addSeries(LightweightCharts.AreaSeries, {
+                topColor: s[1], bottomColor: 'rgba(0,0,0,0)', lineColor: s[2], lineWidth: 1,
+                priceLineVisible: false, lastValueVisible: false
+            });
+        });
+        _wealthSeries.total = _wealthChart.addSeries(LightweightCharts.LineSeries, {
+            color: '#c0392b', lineWidth: 2, priceLineVisible: false, lastValueVisible: true
+        });
+        new ResizeObserver(function() {
+            if (_wealthChart) _wealthChart.applyOptions({ width: box.clientWidth, height: box.clientHeight });
+        }).observe(box);
+    }
+
+    var daten = wealthSerien(reihe, _wealthKonto);
+    Object.keys(daten).forEach(function(k) { _wealthSeries[k].setData(daten[k]); });
+    _wealthChart.timeScale().fitContent();
+    logIt(8, 'Konten', 'Vermögenskurve gezeichnet (' + reihe.length + ' Punkte)');
+}
+
+/**
+ * Die fünf Datenreihen der Kurve — reine Rechnung, ohne Chart.
+ *
+ * Die Flächen sind KUMULIERT (guthaben unten, darauf sachwerte, depots, ibkr):
+ * Lightweight Charts stapelt nicht von selbst, jede Fläche startet bei null und
+ * würde die kleineren sonst verdecken. Die Linie `total` zieht die Schulden ab
+ * und läuft deshalb unter den Flächen, wenn mehr Schuld als Vermögen da ist.
+ *
+ * @param {Array} reihe  Tagesreihe aus /api/vermoegen/verlauf
+ * @param {string} konto Konto-id für die Einzelansicht, '' = Gesamtvermögen
+ */
+function wealthSerien(reihe, konto) {
+    if (konto) {
+        // Einzelkonto: nur eine Linie, die Flächen bleiben leer
+        return { guthaben: [], sachwerte: [], depots: [], ibkr: [],
+                 total: _wealthKontoReihe(konto) };
+    }
+    var kum = function(felder) {
+        return reihe.map(function(r) {
+            var v = 0;
+            felder.forEach(function(f) { v += r[f] || 0; });
+            return { time: r.date, value: v };
+        });
+    };
+    return {
+        guthaben:  kum(['guthaben']),
+        sachwerte: kum(['guthaben', 'sachwerte']),
+        depots:    kum(['guthaben', 'sachwerte', 'depots']),
+        ibkr:      kum(['guthaben', 'sachwerte', 'depots', 'ibkr']),
+        total:     reihe.map(function(r) { return { time: r.date, value: r.total || 0 }; })
+    };
+}
+
+/** Verlauf eines einzelnen Kontos aus dem zuletzt geladenen Gesamtverlauf. */
+function _wealthKontoReihe(id) {
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === id; });
+    if (!a || !a._verlauf) return [];
+    return a._verlauf.map(function(r) { return { time: r.date, value: r.value || 0 }; });
+}
+
+// ── kleine Helfer ────────────────────────────────────────────────────────────
+
+function heuteIso() {
+    var d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+/** '1.234,56' → 1234.56 (dasselbe Verständnis wie _de_num im Backend). */
+function zahl(v) {
+    if (v == null || v === '') return 0;
+    var s = String(v).replace(/[^\d,.\-]/g, '');
+    if (s.indexOf(',') > -1 && s.indexOf('.') > -1) {
+        s = s.lastIndexOf(',') > s.lastIndexOf('.')
+            ? s.replace(/\./g, '').replace(',', '.')
+            : s.replace(/,/g, '');
+    } else if (s.indexOf(',') > -1) {
+        s = s.replace(',', '.');
+    }
+    return parseFloat(s) || 0;
 }

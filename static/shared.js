@@ -71,6 +71,18 @@ function escHtml(s) {
         .replace(/"/g, '&quot;');
 }
 
+/** Eurobetrag deutsch: fmtEur(1234.5) → "1.235 €", fmtEur(1234.5, 2) → "1.234,50 €". */
+function fmtEur(v, dec) {
+    var n = Number(v) || 0;
+    return n.toLocaleString('de-DE', { minimumFractionDigits: dec || 0,
+                                       maximumFractionDigits: dec || 0 }) + ' €';
+}
+
+/** Wie fmtEur, aber mit ausdrücklichem Vorzeichen (für Veränderungen). */
+function fmtEurSign(v, dec) {
+    return ((Number(v) || 0) >= 0 ? '+' : '') + fmtEur(v, dec);
+}
+
 var LOG_MAX     = 800;     // Ringpuffer-Größe
 var logEntries  = [];      // [{ t: Date, lvl: 1..10, tag, msg }]
 var logLevel    = 3;       // Detailgrad, aus localStorage wiederhergestellt
@@ -1725,6 +1737,43 @@ var ibkrSectors   = {};   // Yahoo-Symbol → GICS-Sektor (via /api/ticker/info,
 var tickerSplits  = {};   // Yahoo-Symbol → [{date, ratio}] aufsteigend (via /api/splits)
 var ibkrIndustries= {};   // Yahoo-Symbol → Subsektor/Industry (via /api/ticker/info, gecacht)
 
+// Konten außerhalb von IBKR (Seite „Konten"). Steht hier, weil der Portfolio-
+// Report die Summen schon braucht, bevor die Konten-Seite je geöffnet wurde.
+var kontenState = { accounts: [], summary: null, verlauf: [] };
+
+// Kontoarten und ihre Beschriftung — Reihenfolge = Reihenfolge im Auswahlfeld.
+var KONTO_ARTEN = {
+    giro:      'Girokonto',
+    tagesgeld: 'Tagesgeld',
+    depot:     'Depot',
+    darlehen:  'Darlehen',
+    sachwert:  'Sachwert'
+};
+
+/** Nur die IBKR-Positionen (ohne die Depots aus der Konten-Seite). */
+function ibkrPositionsIbkr() {
+    return (ibkrPositions || []).filter(function(p) {
+        return !p.account || p.account === 'IBKR';
+    });
+}
+
+/**
+ * Beitrag eines Kontos in Euro, immer positiv (das Minus eines Darlehens setzt
+ * erst die Summe). Depots werden mit Live-Kursen gerechnet, sofern die
+ * Positionen geladen sind — sonst gilt der Wert vom Server.
+ */
+function kontoWert(a) {
+    if (a.kind !== 'depot') return a.value || 0;
+    // Live-Bewertung gibt es nur im Desktop-Code; mobil zählt der Server-Wert.
+    if (typeof ibkrLiveValue !== 'function' || typeof ibkrCcyFx !== 'function') return a.value || 0;
+    var ccyFx = ibkrCcyFx();
+    var live  = (ibkrPositions || []).reduce(function(s, p) {
+        return p.account === a.name ? s + ibkrLiveValue(p, ccyFx) : s;
+    }, 0);
+    // Verrechnungskonto steckt in value, aber nicht in den Positionen
+    return live ? live + (a.balance || 0) * (a.fx_rate || 1) : (a.value || 0);
+}
+
 // Auflösung Trade/Position → Yahoo-Symbol des Charts.
 // ISIN-Mapping hat Vorrang (venue-unabhängig); sonst Symbol-Fallback,
 // damit US-Ticker ohne manuelles Mapping weiter matchen.
@@ -1970,12 +2019,101 @@ async function ibkrDoSync() {
     return await r.json();
 }
 
+// ── Konten & Vermögen ────────────────────────────────────────────────────────
+// Alles, was nicht bei IBKR liegt: Girokonten, Tagesgeld, weitere Depots,
+// Darlehen und Sachwerte. Siehe main.py, Abschnitt "Konten & Vermögen".
+
+async function kontenLaden() {
+    var r = await fetch('/api/konten');
+    return await r.json();
+}
+
+async function kontenSpeichern(konto) {
+    var r = await fetch('/api/konten', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(konto)
+    });
+    return await r.json();
+}
+
+async function kontenLoeschen(id) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id), { method: 'DELETE' });
+    return await r.json();
+}
+
+async function kontenVerlaufLaden(id) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/verlauf');
+    return await r.json();
+}
+
+/** Stand nachtragen/korrigieren. value = null löscht den Eintrag des Tages. */
+async function kontenVerlaufSetzen(id, datum, wert) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/verlauf', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ date: datum, value: wert })
+    });
+    return await r.json();
+}
+
+async function kontenPositionenLaden(id) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/positionen');
+    return await r.json();
+}
+
+/**
+ * Depotauszug einlesen. Ohne `positionen` ist es eine Vorschau (nichts wird
+ * geschrieben), mit `positionen` wird die bestätigte Liste übernommen.
+ */
+async function kontenImport(id, text, positionen) {
+    var body = { text: text };
+    if (positionen) { body.bestaetigt = true; body.positionen = positionen; }
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/import', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    });
+    return await r.json();
+}
+
+/**
+ * Vermögensübersicht. `ibkrLive` ist der mit Live-Kursen gerechnete IBKR-Wert;
+ * ohne ihn nimmt der Server den Stand vom letzten Sync. Der Aufruf schreibt
+ * nebenbei den Tagesstand fort — daher entsteht die Kurve allein durchs Benutzen.
+ */
+async function vermoegenLaden(ibkrLive) {
+    var q = (ibkrLive === undefined || ibkrLive === null) ? '' : '?ibkr=' + encodeURIComponent(ibkrLive);
+    var r = await fetch('/api/vermoegen' + q);
+    return await r.json();
+}
+
+async function vermoegenVerlaufLaden() {
+    var r = await fetch('/api/vermoegen/verlauf');
+    return await r.json();
+}
+
+/** Trägt den IBKR-Depotwert für ein zurückliegendes Datum nach. */
+async function vermoegenVerlaufSetzen(datum, ibkrWert) {
+    var r = await fetch('/api/vermoegen/verlauf', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ date: datum, ibkr: ibkrWert })
+    });
+    return await r.json();
+}
+
 /**
  * Erzeugt CSV im IBKR Basket Trader Format aus dem Vergleich
  * aktiver Basket-Gewichte mit IBKR-Ist-Positionen.
+ *
+ * Ausdrücklich NUR die IBKR-Positionen: aus dieser Liste werden echte Orders.
+ * Bestände in einem anderen Depot (Seite „Konten") würden das Ordervolumen
+ * verfälschen, weil IBKR sie nicht kennt.
  */
 function ibkrBuildExportCsv() {
-    var totalPortValue = ibkrPositions.reduce(function(s, p) { return s + (p.position_value || 0); }, 0);
+    var eigene = ibkrPositionsIbkr();
+    var totalPortValue = eigene.reduce(function(s, p) { return s + (p.position_value || 0); }, 0);
     if (totalPortValue <= 0) return null;
 
     var tickers = Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s] || 0) > 0; });
@@ -1983,7 +2121,7 @@ function ibkrBuildExportCsv() {
     var totalWeight = tickers.reduce(function(s, sym) { return s + (WEIGHTS[sym] || 0); }, 0);
 
     var ibkrMap = {};
-    ibkrPositions.forEach(function(p) { ibkrMap[p.symbol] = p; });
+    eigene.forEach(function(p) { ibkrMap[p.symbol] = p; });
 
     var rows = [['Symbol', 'Action', 'Quantity']];
     tickers.forEach(function(sym) {
