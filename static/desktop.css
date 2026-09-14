@@ -1105,6 +1105,12 @@ footer {
 .k-einfuegen summary::-webkit-details-marker { display: none; }
 .k-einfuegen summary:hover { color: var(--accent); }
 .k-umsatz-tab td { vertical-align: top; }
+/* Lange Listen vollständig, aber ohne die Seite zu sprengen */
+.k-umsatz-liste { max-height: 420px; overflow-y: auto; margin-top: 10px; }
+.k-umsatz-liste table { margin-top: 0; }
+.k-umsatz-liste thead th {
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
 .k-umsatz-zweck {
   color: var(--muted); max-width: 260px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;

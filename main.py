@@ -2553,8 +2553,18 @@ def _init_account_tables(db_file: str):
         seq        INTEGER DEFAULT 0,
         source     TEXT,
         imported   TEXT,
+        isin       TEXT,
+        quantity   REAL,
+        datei      TEXT,
         PRIMARY KEY (account_id, tx_id)
     )''')
+    # Nachtraeglich ergaenzt, damit aus den Buchungen der Wertpapierbestand
+    # rueckwaerts gerechnet werden kann (siehe _depot_rueckrechnung).
+    for ddl in ("isin TEXT", "quantity REAL", "datei TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE account_transactions ADD COLUMN {ddl}")
+        except Exception:
+            pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_acc_tx_datum "
                  "ON account_transactions (account_id, date)")
     conn.commit()
@@ -3134,6 +3144,10 @@ _UMSATZ_MUSTER = [
                     r"zahlungspflichtiger", r"empf.?nger", r"^name", r"gegenkonto")),
     ("purpose",    (r"verwendungszweck", r"zweck", r"vwz", r"referenz")),
     ("kind",       (r"buchungstext", r"transaktionstyp", r"umsatzart", r"vorgang", r"^art")),
+    # Nur im Transaktionsexport eines Depots vorhanden — daraus entsteht der
+    # Bestandsverlauf, siehe _depot_rueckrechnung.
+    ("isin",       (r"^isin$", r"isin")),
+    ("quantity",   (r"^st.?cke?$", r"^stk$", r"nominal", r"^anzahl$")),
 ]
 
 # Vorzeichen aus der Umsatzart, wenn die Datei keine Minuszeichen mitbringt
@@ -3156,6 +3170,31 @@ def _umsatz_typ_vorzeichen(typ: str) -> int:
         if re.search(muster, t):
             return vz
     return 0
+
+# Bewegt die Buchung den Wertpapierbestand, und in welche Richtung?
+_STUECK_RICHTUNG = [
+    (r"verkauf|ver.?u.?er|ausbuchung|auslieferung",              -1),
+    (r"kauf|zeichnung|sparplan|einbuchung|einlieferung",         +1),
+]
+# Geldbuchungen, bei denen manche Banken trotzdem eine Stückzahl mitdrucken
+_NUR_GELD = (r"dividend|aussch.?tt|zins|ertrag|steuer|geb.?hr|entgelt|"
+             r".?berweisung|lastschrift|gutschrift|einzahlung|auszahlung")
+
+def _stueck_richtung(typ: str, betrag: float) -> int:
+    """+1 = Stücke kommen ins Depot, -1 = gehen heraus, 0 = keine Bestandsänderung.
+
+    Die Umsatzart entscheidet. Ist sie unbekannt, gilt die Geldrichtung: Geld
+    raus heißt Stücke rein. Eine Dividende bringt bei manchen Banken eine
+    Stückzahl mit, ohne dass sich am Bestand etwas ändert — die muss draußen
+    bleiben, sonst verkauft die Rückrechnung Anteile, die nie bewegt wurden.
+    """
+    t = (typ or "").lower()
+    for muster, vz in _STUECK_RICHTUNG:
+        if re.search(muster, t):
+            return vz
+    if re.search(_NUR_GELD, t):
+        return 0
+    return -1 if (betrag or 0) > 0 else 1
 
 def _datum_iso(v):
     """'12.03.2026', '12.03.26', '2026-03-12', '2026-03-12T09:00:00' → '2026-03-12'."""
@@ -3412,6 +3451,8 @@ def _umsatz_csv_parsen(text: str) -> dict:
             "saldo": _de_num(feld("saldo")),
             "name": feld("name") or None, "purpose": feld("purpose") or None,
             "kind": feld("kind") or None, "ref": None, "seq": 0,
+            "isin": (feld("isin") or "").strip().upper() or None,
+            "quantity": _de_num(feld("quantity")),
         })
     if not umsaetze:
         return {"ok": False, "error": "Keine Buchungen erkannt"}
@@ -3594,10 +3635,19 @@ def _umsatz_pdf_parsen(daten: bytes) -> dict:
         if teile:
             u["purpose"] = " · ".join(teile)[:500]
             u["name"] = teile[0][:200]
+        text = u["purpose"] or ""
         # Vorgangs-Nr. ist je Buchung eindeutig — der beste Schlüssel gegen Doppelte
-        m = re.search(r"Vorgangs-?Nr\.?:?\s*([A-Z0-9 ]{6,40})", u["purpose"] or "", re.I)
+        m = re.search(r"Vorgangs-?Nr\.?:?\s*([A-Z0-9 ]{6,40})", text, re.I)
         if m:
             u["ref"] = re.sub(r"\s+", "", m.group(1))
+        # ISIN und Stückzahl stehen im Auszug als eigene Zeilen unter der Buchung.
+        # Aus ihnen entsteht später der Bestandsverlauf (_depot_rueckrechnung).
+        m = re.search(r"\bISIN\s+([A-Z]{2}[A-Z0-9]{9}\d)\b", text)
+        if m:
+            u["isin"] = m.group(1)
+        m = re.search(r"\b(?:STK|ST\.|NOM)\.?\s+([\d.]*\d(?:,\d+)?)", text)
+        if m:
+            u["quantity"] = _de_num(m.group(1))
 
     if not umsaetze and not salden:
         return {"ok": False, "error": "Im PDF wurden weder Buchungen noch Salden gefunden — "
@@ -3676,7 +3726,7 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         return {"ok": False, "error": "Keine Datei erhalten"}
 
     alle, hinweise, quellen, ibans, gelesen = [], [], [], [], 0
-    fehler, raender = [], []
+    fehler, raender, protokoll = [], [], []
     for name, daten in dateien:
         kurz = name.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
         if not daten:
@@ -3685,6 +3735,8 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         res = _umsatz_datei_parsen(kurz, daten)
         if not res.get("ok"):
             fehler.append(f"{kurz}: {res.get('error')}")
+            protokoll.append({"datei": kurz, "fehler": res.get("error"),
+                              "buchungen": 0, "salden": []})
             continue
         gelesen += 1
         quellen.append(res["quelle"])
@@ -3707,6 +3759,17 @@ def _umsaetze_sammeln(dateien: list) -> dict:
                 raender.append((rand[1], float(rand[0]), rolle))
         for u in res["umsaetze"]:
             u["datei"] = kurz
+        # Je Datei festhalten, was sie beigetragen hat — auch wenn es nichts war.
+        # Nur so lässt sich nach einem Stapel von zwanzig Auszügen nachsehen, ob
+        # wirklich jeder angekommen ist.
+        protokoll.append({
+            "datei": kurz, "quelle": res["quelle"],
+            "buchungen": len(res["umsaetze"]),
+            "von": min((u["date"] for u in res["umsaetze"]), default=None),
+            "bis": max((u["date"] for u in res["umsaetze"]), default=None),
+            "salden": [[r[1], float(r[0])] for r in
+                       (res.get("eroeffnung"), res.get("schluss")) if r and r[1]],
+        })
         alle.extend(res["umsaetze"])
         hinweise.extend(f"{kurz}: {h}" if gelesen and len(dateien) > 1 else h
                         for h in res.get("hinweise") or [])
@@ -3722,6 +3785,15 @@ def _umsaetze_sammeln(dateien: list) -> dict:
     if not alle:
         hinweise.append("Keine Buchungen in diesem Zeitraum — übernommen werden nur "
                         "die Salden.")
+
+    # Stückzahlen mit Richtung versehen: Kauf bringt Stücke ins Depot, Verkauf
+    # holt sie heraus. Die Umsatzart entscheidet, nicht das Geld allein.
+    for u in alle:
+        if u.get("quantity"):
+            vz = _stueck_richtung(u.get("kind"), u.get("amount"))
+            u["quantity"] = abs(float(u["quantity"])) * vz if vz else None
+            if not vz:
+                u["isin"] = u.get("isin")     # ISIN bleibt zur Einordnung stehen
 
     # Doppelte aus überlappenden Dateien: über die Bankreferenz eindeutig.
     gesehen, sauber = set(), []
@@ -3745,7 +3817,8 @@ def _umsaetze_sammeln(dateien: list) -> dict:
     return {"ok": True, "quelle": quelle, "umsaetze": sauber,
             "iban": ibans[0] if ibans else "", "ibans": sorted(set(ibans)),
             "dateien": gelesen, "doppelt": doppelt, "hinweise": hinweise,
-            "salden": sorted(set(raender), key=_saldo_rang)}
+            "salden": sorted(set(raender), key=_saldo_rang),
+            "protokoll": sorted(protokoll, key=lambda p: p["datei"])}
 
 def _saldo_rang(rand):
     """Sortierschlüssel für (datum, wert, rolle): je Tag zuerst der Anfangs-,
@@ -3900,13 +3973,14 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
             continue
         conn.execute(
             "INSERT INTO account_transactions (account_id, tx_id, date, valuta, amount, "
-            "currency, saldo, name, purpose, kind, ref, seq, source, imported) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "currency, saldo, name, purpose, kind, ref, seq, source, imported, isin, "
+            "quantity, datei) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (account_id, tx_id, u.get("date"), u.get("valuta"),
              float(u.get("amount") or 0), (u.get("currency") or "EUR")[:3],
              None if u.get("saldo") is None else float(u["saldo"]),
              u.get("name"), u.get("purpose"), u.get("kind"), u.get("ref"),
-             int(u.get("seq") or 0), u.get("source") or "", now))
+             int(u.get("seq") or 0), u.get("source") or "", now,
+             u.get("isin"), u.get("quantity"), u.get("datei")))
         neu += 1
     conn.commit()
 
@@ -3992,6 +4066,10 @@ def _umsatz_vorschau(db_file: str, account_id: str, dateien: list) -> dict:
                                    f"steht {andere[0]}.")
             break
 
+    je_datei = {}
+    for u in res["umsaetze"]:
+        je_datei[u.get("datei") or "?"] = je_datei.get(u.get("datei") or "?", 0) + 1
+    res["je_datei"] = sorted(je_datei.items())
     res["summe"] = round(sum(float(u["amount"] or 0) for u in res["umsaetze"]), 2)
     res["von"]   = min((u["date"] for u in res["umsaetze"]), default=None)
     res["bis"]   = max((u["date"] for u in res["umsaetze"]), default=None)

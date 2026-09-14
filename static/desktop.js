@@ -6331,15 +6331,18 @@ async function renderKontenVerlaufKarte(a) {
        + '<button class="refresh-btn k-mini" onclick="kontenVerlaufKlick(\'' + a.id + '\', this)">Eintragen</button>'
        + '<span id="k-v-msg" class="settings-msg"></span></div>';
     if (reihe.length) {
-        h += '<table class="konten-tab k-verlauf-tab"><tbody>';
-        reihe.slice().reverse().slice(0, 40).forEach(function(r) {
+        // Vollständig, nur scrollbar — nach einem Stapel Auszüge muss sich jeder
+        // Monatsstand nachschlagen lassen, nicht nur die letzten vierzig.
+        h += '<p class="settings-hint">' + reihe.length + ' Stände von '
+           + escHtml(reihe[0].date) + ' bis ' + escHtml(reihe[reihe.length - 1].date) + '.</p>'
+           + '<div class="k-umsatz-liste"><table class="konten-tab k-verlauf-tab"><tbody>';
+        reihe.slice().reverse().forEach(function(r) {
             h += '<tr><td>' + escHtml(r.date) + '</td>'
                + '<td style="text-align:right">' + fmtEur(r.value, 2) + '</td>'
                + '<td style="text-align:right"><button class="refresh-btn k-mini" onclick="kontenVerlaufWeg(\''
                + a.id + '\',\'' + r.date + '\')">×</button></td></tr>';
         });
-        h += '</tbody></table>';
-        if (reihe.length > 40) h += '<p class="settings-hint">… ' + (reihe.length - 40) + ' ältere Einträge</p>';
+        h += '</tbody></table></div>';
     }
     el.innerHTML = h;
 }
@@ -6647,6 +6650,28 @@ function renderUmsatzVorschau(id, res) {
              }).join(' · ') + '</p>';
     }
 
+    // Was jede einzelne Datei beigetragen hat. Bei zwanzig Monatsauszügen ist
+    // das die einzige Möglichkeit nachzusehen, ob wirklich jeder angekommen ist.
+    if ((res.protokoll || []).length > 1) {
+        h += '<h2 class="settings-h" style="margin-top:16px">Dateien (' + res.protokoll.length + ')</h2>'
+           + '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Datei</th><th>Art</th>'
+           + '<th style="text-align:right">Buchungen</th><th>Zeitraum</th>'
+           + '<th>Salden</th></tr></thead><tbody>';
+        res.protokoll.forEach(function(d) {
+            h += '<tr' + (d.fehler ? ' style="color:var(--red)"' : '') + '>'
+               + '<td>' + escHtml(d.datei) + '</td>'
+               + '<td style="color:var(--muted)">' + escHtml(d.fehler ? '—' : (d.quelle || '')) + '</td>'
+               + '<td style="text-align:right">' + (d.fehler ? '—' : d.buchungen) + '</td>'
+               + '<td style="color:var(--muted)">'
+               + escHtml(d.fehler ? d.fehler : (d.von ? d.von + ' – ' + d.bis : 'keine Buchungen')) + '</td>'
+               + '<td style="color:var(--muted)">'
+               + (d.salden || []).map(function(s) {
+                     return escHtml(s[0]) + ' ' + fmtEur(s[1], 2);
+                 }).join('<br>') + '</td></tr>';
+        });
+        h += '</tbody></table>';
+    }
+
     if (u.length) {
         h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
            + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
@@ -6664,17 +6689,35 @@ function renderUmsatzVorschau(id, res) {
     el.innerHTML = h;
 }
 
-/** Eine Zeile — gleich für Vorschau und gespeicherte Liste. */
+/**
+ * Eine Zeile — gleich für Vorschau und gespeicherte Liste. Stückzahl und ISIN
+ * stehen mit dabei: nur so ist nachvollziehbar, woraus der Bestandsverlauf
+ * gerechnet wird. Die Herkunftsdatei ebenso, damit sich ein Stapel Auszüge
+ * abhaken lässt.
+ */
 function _umsatzZeile(x) {
     var b = x.amount || 0;
+    var stueck = x.quantity
+        ? '<span class="k-badge">' + (x.quantity > 0 ? '+' : '') + zahlKurz(x.quantity)
+          + ' Stk</span>' : '';
     return '<tr><td>' + escHtml(x.date || '') + '</td>'
-         + '<td>' + escHtml(x.name || x.kind || '—') + '</td>'
+         + '<td>' + escHtml(x.name || x.kind || '—') + stueck
+         + (x.isin ? '<br><span style="color:var(--muted);font-size:10px">'
+                     + escHtml(x.isin) + '</span>' : '') + '</td>'
          + '<td class="k-umsatz-zweck" title="' + escHtml(x.purpose || '') + '">'
-         + escHtml(x.purpose || '') + '</td>'
+         + escHtml(x.purpose || '')
+         + (x.datei ? '<br><span style="color:var(--muted);font-size:10px">'
+                      + escHtml(x.datei) + '</span>' : '') + '</td>'
          + '<td style="text-align:right;color:' + (b >= 0 ? 'var(--green)' : 'var(--red)') + '">'
          + fmtEurSign(b) + '</td>'
          + '<td style="text-align:right;color:var(--muted)">'
          + (x.saldo == null ? '—' : fmtEur(x.saldo, 2)) + '</td></tr>';
+}
+
+/** Stückzahl ohne überflüssige Nullen: 35, 1,5, 0,125 */
+function zahlKurz(v) {
+    var n = Math.abs(Number(v) || 0);
+    return (Math.round(n * 1000) / 1000).toLocaleString('de-DE');
 }
 
 async function kontenUmsatzUebernehmen(id, btn) {
@@ -6710,19 +6753,35 @@ async function renderUmsatzListe(a) {
     var el = document.getElementById('k-umsatz-liste');
     if (!el) return;
     var daten = { umsaetze: [], anzahl: 0 };
-    try { daten = await kontenUmsaetzeLaden(a.id, 100); }
+    // Alle holen, nicht nur die jüngsten hundert: nach einem Stapel Monats-
+    // auszüge will man nachsehen können, ob jede Buchung angekommen ist.
+    try { daten = await kontenUmsaetzeLaden(a.id, 2000); }
     catch (e) { return; }
     if (!daten.anzahl) { el.innerHTML = ''; return; }
 
-    var h = '<h2 class="settings-h" style="margin-top:18px">Buchungen (' + daten.anzahl + ')</h2>'
-          + '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
-          + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
-          + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
+    var h = '<h2 class="settings-h" style="margin-top:18px">Buchungen (' + daten.anzahl + ')</h2>';
+    // Je Herkunftsdatei eine Zeile zum Abhaken
+    var jeDatei = {};
+    (daten.umsaetze || []).forEach(function(x) {
+        var d = x.datei || '—';
+        jeDatei[d] = (jeDatei[d] || 0) + 1;
+    });
+    var namen = Object.keys(jeDatei).sort();
+    if (namen.length > 1) {
+        h += '<p class="settings-hint">Aus ' + namen.length + ' Dateien: '
+           + namen.map(function(n) {
+                 return escHtml(n) + ' (' + jeDatei[n] + ')';
+             }).join(' · ') + '</p>';
+    }
+    h += '<div class="k-umsatz-liste"><table class="konten-tab k-umsatz-tab">'
+       + '<thead><tr><th>Tag</th><th>Wer</th>'
+       + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
+       + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
     (daten.umsaetze || []).forEach(function(x) { h += _umsatzZeile(x); });
-    h += '</tbody></table>';
+    h += '</tbody></table></div>';
     if (daten.anzahl > (daten.umsaetze || []).length) {
         h += '<p class="settings-hint">… ' + (daten.anzahl - daten.umsaetze.length)
-           + ' ältere Buchungen</p>';
+           + ' ältere Buchungen werden nicht angezeigt</p>';
     }
     h += '<div class="settings-actions"><button class="refresh-btn k-mini" '
        + 'onclick="kontenUmsaetzeWeg(\'' + a.id + '\')">Buchungen verwerfen</button>'
