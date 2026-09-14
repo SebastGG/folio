@@ -6833,16 +6833,38 @@ async function kontenRueckKlick(id, btn, schreiben) {
 function renderRueckErgebnis(id, res, geschrieben) {
     var el = document.getElementById('k-rueck-ergebnis');
     if (!el) return;
-    var stimmt = Math.abs((res.heute_errechnet || 0) - (res.heute_auszug || 0)) < 0.01;
     var h = '<p class="settings-hint">' + res.tage + ' Tage von ' + escHtml(res.von) + ' bis '
           + escHtml(res.bis) + ', aus ' + res.trades + ' Wertpapierbuchungen über '
-          + res.titel + ' Titel.</p>'
-          + '<div class="k-prognose">Heute errechnet <b>' + fmtEur(res.heute_errechnet, 2)
-          + '</b> · laut Depotauszug <b>' + fmtEur(res.heute_auszug, 2) + '</b>'
-          + (stimmt ? ' <span style="color:var(--green)">✓ deckungsgleich</span>'
-                    : ' <span style="color:var(--red)">Abweichung '
-                      + fmtEurSign((res.heute_errechnet || 0) - (res.heute_auszug || 0), 2)
-                      + '</span>') + '</div>';
+          + res.titel + ' Titel.</p>';
+    if (res.heute_auszug == null) {
+        // Kein Depotauszug eingelesen — der Bestand kommt allein aus den Buchungen
+        h += '<div class="k-prognose">Heute errechnet <b>' + fmtEur(res.heute_errechnet, 2)
+           + '</b> · Bestand aus den Buchungen aufgebaut, kein Depotauszug zum Abgleich.</div>';
+    } else {
+        var stimmt = Math.abs((res.heute_errechnet || 0) - (res.heute_auszug || 0)) < 0.01;
+        h += '<div class="k-prognose">Heute errechnet <b>' + fmtEur(res.heute_errechnet, 2)
+           + '</b> · laut Depotauszug <b>' + fmtEur(res.heute_auszug, 2) + '</b>'
+           + (stimmt ? ' <span style="color:var(--green)">✓ deckungsgleich</span>'
+                     : ' <span style="color:var(--red)">Abweichung '
+                       + fmtEurSign((res.heute_errechnet || 0) - (res.heute_auszug || 0), 2)
+                       + '</span>') + '</div>';
+    }
+    // Woraus sich der heutige Wert zusammensetzt — besonders wichtig, wenn der
+    // Bestand allein aus den Buchungen stammt.
+    if ((res.bestand || []).length) {
+        h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>ISIN</th><th>Symbol</th>'
+           + '<th style="text-align:right">Stück</th><th style="text-align:right">Kurs</th>'
+           + '<th style="text-align:right">Wert</th></tr></thead><tbody>';
+        res.bestand.forEach(function(b) {
+            h += '<tr><td>' + escHtml(b.isin) + '</td>'
+               + '<td style="color:var(--muted)">' + escHtml(b.symbol || '— kein Kurssymbol') + '</td>'
+               + '<td style="text-align:right">' + zahlKurz(b.stueck) + '</td>'
+               + '<td style="text-align:right;color:var(--muted)">'
+               + (b.kurs ? fmtEur(b.kurs, 2) : '—') + '</td>'
+               + '<td style="text-align:right"><b>' + fmtEur(b.wert, 2) + '</b></td></tr>';
+        });
+        h += '</tbody></table>';
+    }
     (res.warnungen || []).forEach(function(w) {
         h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + escHtml(w) + '</p>';
     });

@@ -4324,6 +4324,8 @@ def _depot_bargeld_reihe(conn, account_id: str, von: str, bis: str) -> dict:
 def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) -> dict:
     """Rechnet den Wertpapierbestand rückwärts und schreibt den Depotverlauf."""
     _init_account_tables(db_file)
+    _init_ibkr_tables(db_file)      # isin_map — ohne die gibt es keine Kurssymbole
+    init_db(db_file)                # prices
     conn = get_db(db_file)
     acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
     if not acc:
@@ -4355,6 +4357,17 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
         return {"ok": False, "status": 400,
                 "error": "Keine Buchungen mit Stückzahl vorhanden — bitte zuerst die "
                          "Kontoauszüge einlesen."}
+
+    # Liegt kein Bestand vor, wird er aus den Buchungen selbst aufgebaut: das
+    # Konto begann leer, jeder Kauf legt zu, jeder Verkauf nimmt weg. Dann
+    # braucht es den Depotauszug gar nicht — die Auszüge allein genügen. Der
+    # Preis dafür: es gibt nichts, wogegen sich das Ergebnis prüfen ließe.
+    aus_buchungen = not heute_bestand
+    if aus_buchungen:
+        for t in trades:
+            key = (t["isin"] or "").upper()
+            heute_bestand[key] = heute_bestand.get(key, 0.0) + float(t["quantity"])
+        heute_bestand = {k: v for k, v in heute_bestand.items() if abs(v) > 0.0001}
 
     for t in trades:
         key = (t["isin"] or "").upper()
@@ -4450,15 +4463,28 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
     # Kontrolle gegen den heutigen Stand aus dem Depotauszug
     heute_soll = _account_value(conn, acc)
     heute_ist  = reihe_out[-1]["total"] if reihe_out else 0.0
-    if abs(heute_soll - heute_ist) > max(1.0, abs(heute_soll) * 0.01):
+    if aus_buchungen:
+        warnungen.append("Für dieses Konto ist kein Depotauszug eingelesen — der Bestand "
+                         "wurde aus den Buchungen aufgebaut (das Konto begann leer). "
+                         "Damit gibt es keine unabhängige Gegenprobe; stimmt die Reihe "
+                         "der Auszüge, stimmt auch das Ergebnis.")
+    elif abs(heute_soll - heute_ist) > max(1.0, abs(heute_soll) * 0.01):
         warnungen.append(f"Der errechnete Wert von heute ({heute_ist:,.2f}) weicht vom "
                          f"Depotauszug ({heute_soll:,.2f}) ab. Meist fehlen Kurse für "
                          f"einen Titel.")
+    bestand = sorted(({"isin": k, "symbol": symbole.get(k) or "", "stueck": round(v, 4),
+                       "kurs": round(kurs(k, bis), 4),
+                       "wert": round(v * kurs(k, bis) * fx.get(k, 1.0), 2)}
+                      for k, v in heute_bestand.items() if abs(v) > 0.0001),
+                     key=lambda x: -x["wert"])
     conn.close()
-    return {"ok": True, "von": von, "bis": bis, "tage": geschrieben,
+    return {"ok": True, "von": von, "bis": bis, "tage": len(reihe_out),
+            "geschrieben": geschrieben,
             "trades": len(trades), "titel": len([s for s in symbole.values() if s]),
-            "warnungen": warnungen, "reihe": reihe_out[-90:],
-            "heute_errechnet": round(heute_ist, 2), "heute_auszug": round(heute_soll, 2)}
+            "warnungen": warnungen, "reihe": reihe_out[-90:], "bestand": bestand,
+            "aus_buchungen": aus_buchungen,
+            "heute_errechnet": round(heute_ist, 2),
+            "heute_auszug": None if aus_buchungen else round(heute_soll, 2)}
 
 @app.post("/api/konten/{account_id}/rueckrechnung")
 async def konten_rueckrechnung(account_id: str, request: Request, probe: str = ""):
