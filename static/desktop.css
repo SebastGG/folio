@@ -1084,3 +1084,28 @@ footer {
   border-radius: 4px; padding: 8px 10px; outline: none; resize: vertical;
 }
 .k-import-feld:focus { border-color: var(--accent); }
+
+/* Umsätze: Dateiwahl, eingeklapptes Einfügefeld, Buchungstabelle */
+.k-datei {
+  display: block; width: 100%; margin-top: 10px; font-size: 11px; color: var(--muted);
+  border: 1px dashed var(--border); background: var(--bg); border-radius: 4px;
+  padding: 10px; cursor: pointer;
+}
+.k-datei:hover { border-color: var(--accent); }
+.k-datei::file-selector-button {
+  font: inherit; font-size: 11px; margin-right: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 4px; padding: 4px 10px;
+}
+.k-einfuegen { margin-top: 10px; }
+.k-einfuegen summary {
+  font-size: 11px; color: var(--muted); cursor: pointer; padding: 2px 0;
+  list-style: none;
+}
+.k-einfuegen summary::-webkit-details-marker { display: none; }
+.k-einfuegen summary:hover { color: var(--accent); }
+.k-umsatz-tab td { vertical-align: top; }
+.k-umsatz-zweck {
+  color: var(--muted); max-width: 260px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}

@@ -1750,6 +1750,10 @@ var KONTO_ARTEN = {
     sachwert:  'Sachwert'
 };
 
+// Kontoarten, für die es Buchungen gibt (alles außer Sachwerten). Beim Depot
+// betreffen sie nur das Verrechnungskonto — siehe UMSATZ_ARTEN in main.py.
+var KONTO_UMSATZ_ARTEN = ['giro', 'tagesgeld', 'darlehen', 'depot'];
+
 /** Nur die IBKR-Positionen (ohne die Depots aus der Konten-Seite). */
 function ibkrPositionsIbkr() {
     return (ibkrPositions || []).filter(function(p) {
@@ -2074,6 +2078,45 @@ async function kontenImport(id, text, positionen) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body)
     });
+    return await r.json();
+}
+
+// ── Kontoumsätze (camt / CSV) ────────────────────────────────────────────────
+// Siehe main.py, Abschnitt „Kontoumsätze einlesen". Ohne `bestaetigt` ist jeder
+// Aufruf eine reine Vorschau — es wird nichts geschrieben.
+
+async function kontenUmsaetzeLaden(id, limit) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/umsaetze'
+                        + (limit ? '?limit=' + limit : ''));
+    return await r.json();
+}
+
+/**
+ * Dateien einlesen — camt-XML, das ZIP der Bank oder eine CSV, auch mehrere auf
+ * einmal. Der Stapel wird zweimal hochgeladen (Vorschau, dann Übernehmen);
+ * dafür hält der Server nichts zwischen den beiden Aufrufen vor.
+ */
+async function kontenUmsaetzeDateien(id, dateien, bestaetigt) {
+    var fd = new FormData();
+    for (var i = 0; i < dateien.length; i++) fd.append('dateien', dateien[i]);
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/umsaetze/dateien'
+                        + (bestaetigt ? '?bestaetigt=1' : ''), { method: 'POST', body: fd });
+    return await r.json();
+}
+
+/** Umsätze aus eingefügtem Text (CSV oder eine einzelne camt-XML). */
+async function kontenUmsaetzeText(id, text, bestaetigt) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/umsaetze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text: text, bestaetigt: !!bestaetigt })
+    });
+    return await r.json();
+}
+
+async function kontenUmsaetzeLoeschen(id) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/umsaetze',
+                        { method: 'DELETE' });
     return await r.json();
 }
 

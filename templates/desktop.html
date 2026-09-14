@@ -1176,7 +1176,8 @@
         </p>
         <dl class="help-def">
           <dt>Girokonto / Tagesgeld</dt>
-          <dd>Name, Institut, Saldo, Stand vom. Mehr braucht es nicht.</dd>
+          <dd>Name, Institut, Saldo, Stand vom. Mehr braucht es nicht — oder du lässt die
+              Bank die Arbeit machen, siehe <b>Umsätze einlesen</b> unten.</dd>
           <dt>Depot</dt>
           <dd>Der Bestand kommt per <b>Depotauszug einlesen</b> hinein: Tabelle im Online-Banking
               markieren, kopieren, ins Feld einfügen, prüfen, übernehmen. Erkannt werden ISIN,
@@ -1192,12 +1193,39 @@
           <dd>Ein Gegenstand mit geschätztem Verkaufserlös — Haus, Fahrzeug, Anlage. Ordnest du
               ihn einem Darlehen zu, steht unter dem Kredit die Nettoposition aus beidem.</dd>
         </dl>
+        <p>
+          <b>Umsätze einlesen</b> — der bequeme Weg zu Kontostand <i>und</i> Verlauf. Im
+          Online-Banking den Umsatzexport als <b>camt</b> holen; die GLS liefert ein ZIP mit
+          einer Datei je Tag, das kommt unausgepackt ins Dateifeld (mehrere Dateien auf einmal
+          gehen auch). Aus den Salden in der Datei entsteht für jeden Tag ein Stand — die
+          Vermögenskurve reicht damit so weit zurück wie der Export. Erst Vorschau, dann
+          übernehmen; schon bekannte Buchungen werden übersprungen, überlappende Zeiträume
+          sind also unbedenklich.
+        </p>
+        <dl class="help-def">
+          <dt>Warum camt und nicht CSV</dt>
+          <dd>In der camt-Datei stehen Anfangs- und Schlusssaldo mit Datum, jede Buchung hat
+              eine eindeutige Bankreferenz und ein eigenes Soll/Haben-Feld. CSV geht auch —
+              für den Verlauf braucht es dort aber die Spalte <i>Saldo nach Buchung</i>.
+              Fehlt sie, wird vom hinterlegten Kontostand rückwärts gerechnet, und das
+              klappt nur, wenn der Stand nicht älter ist als die letzte Buchung. Wo nur CSV
+              angeboten wird (Smartbroker), ist das der Weg.</dd>
+          <dt>Was geprüft wird</dt>
+          <dd>Passt der Schlusssaldo nicht zu Anfangssaldo plus Buchungen, oder klafft
+              zwischen zwei Dateien eine Lücke, sagt die Vorschau das — dann fehlen Tage im
+              Export. Steht in der Notiz des Kontos eine IBAN, wird sie mit der aus der Datei
+              verglichen, damit kein Auszug im falschen Konto landet.</dd>
+          <dt>Depot</dt>
+          <dd>Dort betreffen die Umsätze nur das Verrechnungskonto. Der Verlauf bekommt
+              deshalb keine Tagessalden — sonst fielen die Wertpapiere rückwirkend aus der
+              Kurve; der Depotwert kommt weiter aus dem Depotauszug.</dd>
+        </dl>
         <p class="help-tip">
-          <b>Die Entwicklung über die Zeit</b> entsteht dadurch, dass die Seite benutzt wird: bei
-          jedem Öffnen wird der Stand des Tages festgehalten. Damit die Kurve weiter zurückreicht,
-          trägst du bei einem Konto unter <b>Verlauf</b> ältere Stände mit Datum nach — etwa den
-          Jahresanfangsstand aus dem Kontoauszug. Ein Konto ohne neuen Eintrag behält seinen
-          letzten Stand, fällt also nicht auf null.
+          <b>Die Entwicklung über die Zeit</b> entsteht auch ohne Import dadurch, dass die Seite
+          benutzt wird: bei jedem Öffnen wird der Stand des Tages festgehalten. Damit die Kurve
+          weiter zurückreicht, trägst du bei einem Konto unter <b>Verlauf</b> ältere Stände mit
+          Datum nach — etwa den Jahresanfangsstand aus dem Kontoauszug. Ein Konto ohne neuen
+          Eintrag behält seinen letzten Stand, fällt also nicht auf null.
         </p>
         <p class="help-tip">
           Im Portfolio-Report auf der IBKR-Seite steht unter „NET Gesamt" ein Block

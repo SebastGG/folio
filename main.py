@@ -2536,6 +2536,27 @@ def _init_account_tables(db_file: str):
         date TEXT PRIMARY KEY,
         ibkr REAL
     )''')
+    # Einzelbuchungen aus camt/CSV. `saldo` ist der Stand NACH der Buchung —
+    # daraus entsteht der Tagesverlauf, siehe _umsatz_verlauf_schreiben.
+    conn.execute('''CREATE TABLE IF NOT EXISTS account_transactions (
+        account_id TEXT,
+        tx_id      TEXT,
+        date       TEXT,
+        valuta     TEXT,
+        amount     REAL,
+        currency   TEXT DEFAULT 'EUR',
+        saldo      REAL,
+        name       TEXT,
+        purpose    TEXT,
+        kind       TEXT,
+        ref        TEXT,
+        seq        INTEGER DEFAULT 0,
+        source     TEXT,
+        imported   TEXT,
+        PRIMARY KEY (account_id, tx_id)
+    )''')
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_acc_tx_datum "
+                 "ON account_transactions (account_id, date)")
     conn.commit()
     conn.close()
 
@@ -3022,6 +3043,710 @@ async def konten_import(account_id: str, request: Request):
     res = _positionen_schreiben(files["db"], account_id, positionen)
     res["hinweise"] = ergebnis.get("hinweise", [])
     return JSONResponse(res, status_code=res.pop("status", 200))
+
+# ── Kontoumsätze einlesen (camt.052/053 und CSV) ───────────────────────────────
+# Damit Kontostand und Vermögenskurve nicht von Hand kommen.
+#
+# camt ist der bevorzugte Weg: Salden (OPBD/CLBD) stehen mit Datum drin, Beträge
+# sind ISO-Dezimalzahlen, Soll/Haben ist ein eigenes Feld und jede Buchung trägt
+# eine Bankreferenz — daraus wird der Schlüssel gegen Doppeleinträge. CSV bleibt
+# der schnelle Weg aus der Zwischenablage; dort werden die Spalten wie beim
+# Depotauszug über die Kopfzeile erraten.
+#
+# Die GLS liefert den camt-Export als ZIP mit EINER XML JE ABRUFTAG. Darum wird
+# nicht eine Datei gelesen, sondern ein Stapel: jede Datei bringt ihre eigenen
+# Salden mit, die Buchungen werden zusammengelegt und der Saldoverlauf am Ende
+# über den ganzen Stapel gefüllt.
+#
+# Depotkonten (Smartbroker/Baader gibt es nur als CSV) sind dabei, aber mit einer
+# Einschränkung: `account_history` hält den GESAMTBEITRAG eines Kontos, beim Depot
+# also Verrechnungskonto + Wertpapiere. Ein Saldoverlauf des Verrechnungskontos
+# würde die Positionen rückwirkend aus der Kurve werfen — darum werden dort nur
+# die Buchungen abgelegt und der Verrechnungsstand nachgezogen; der Verlauf
+# bekommt einen Eintrag für heute, mit dem Depotwert von heute.
+
+UMSATZ_ARTEN = ("giro", "tagesgeld", "darlehen", "depot")
+
+_UMSATZ_MUSTER = [
+    # Reihenfolge zählt: „Saldo nach Buchung" muss vor „Betrag" abgeräumt sein,
+    # und die Währung erst danach, damit „Waehrung Saldo" nicht die Betrags-
+    # währung belegt.
+    ("saldo",      (r"saldo nach", r"^saldo", r"kontostand", r"balance")),
+    ("date",       (r"buchungstag", r"buchung", r"^datum", r"date")),
+    ("valuta",     (r"valuta", r"wertstellung")),
+    ("amount",     (r"^betrag", r"betrag$", r"umsatz", r"^amount")),
+    ("soll_haben", (r"soll.?haben", r"^s/h", r"haben.?kennz", r"cdtdbtind")),
+    ("currency",   (r"w.?hrung", r"whg", r"currency")),
+    ("name",       (r"zahlungsbeteiligter", r"beg.?nstigter", r"auftraggeber",
+                    r"zahlungspflichtiger", r"empf.?nger", r"^name", r"gegenkonto")),
+    ("purpose",    (r"verwendungszweck", r"zweck", r"vwz", r"referenz")),
+    ("kind",       (r"buchungstext", r"umsatzart", r"vorgang", r"^art")),
+]
+
+def _datum_iso(v):
+    """'12.03.2026', '12.03.26', '2026-03-12', '2026-03-12T09:00:00' → '2026-03-12'."""
+    s = (str(v or "")).strip()
+    if not s:
+        return None
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.match(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})", s)
+    if m:
+        tag, monat, jahr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if jahr < 100:
+            jahr += 2000 if jahr < 70 else 1900
+        if not (1 <= monat <= 12 and 1 <= tag <= 31):
+            return None
+        return f"{jahr:04d}-{monat:02d}-{tag:02d}"
+    return None
+
+def _iso_num(v):
+    """Betrag aus einer camt-Datei — immer ISO mit Punkt, NIE deutsch gelesen.
+
+    Nicht `_de_num` benutzen: das hält '1.234' für einen Tausenderpunkt und
+    macht aus 1,23 EUR stillschweigend 1234 EUR.
+    """
+    try:
+        return float(str(v or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+def _umsatz_id(account_id: str, u: dict) -> str:
+    """Schlüssel gegen Doppeleinträge bei überlappenden Zeiträumen.
+
+    Bevorzugt die Bankreferenz (in camt eindeutig je Buchung). Ohne sie bleibt
+    ein Fingerabdruck aus Tag, Betrag, Name und Zweck — und zusätzlich die
+    laufende Nummer INNERHALB DES TAGES: sonst verschluckt ein zweites Abheben
+    über 50 € am selben Tag das erste, und beim erneuten Einlesen desselben
+    Zeitraums müssen dieselben Nummern wieder herauskommen.
+    """
+    if u.get("ref"):
+        roh = f"{account_id}|ref|{u['ref']}"
+    else:
+        roh = "|".join([account_id, u.get("date") or "", f"{float(u.get('amount') or 0):.2f}",
+                        (u.get("name") or "")[:60], (u.get("purpose") or "")[:120],
+                        str(u.get("seq") or 0)])
+    return hashlib.sha1(roh.encode("utf-8", "replace")).hexdigest()[:20]
+
+# ── camt.052 / camt.053 ────────────────────────────────────────────────────────
+
+def _lok(tag) -> str:
+    """'{urn:iso:std:iso:20022:…}Ntry' → 'Ntry'. camt trägt je Version einen
+    anderen Namensraum; über den lokalen Namen läuft der Parser über alle."""
+    return str(tag).rsplit("}", 1)[-1]
+
+def _kind_el(el, *namen):
+    """Erstes direktes Kind mit einem dieser lokalen Namen."""
+    if el is None:
+        return None
+    for c in el:
+        if _lok(c.tag) in namen:
+            return c
+    return None
+
+def _tief_el(el, *namen):
+    """Erster Nachfahre mit einem dieser lokalen Namen."""
+    if el is None:
+        return None
+    for c in el.iter():
+        if c is not el and _lok(c.tag) in namen:
+            return c
+    return None
+
+def _txt(el) -> str:
+    return (el.text or "").strip() if el is not None and el.text else ""
+
+def _camt_saldo(bal):
+    """Ein <Bal>-Block → (Code, Wert mit Vorzeichen, Datum)."""
+    code = _txt(_tief_el(bal, "Cd", "Prtry")).upper()
+    amt  = _kind_el(bal, "Amt")
+    wert = _iso_num(_txt(amt))
+    if wert is None:
+        return None
+    if _txt(_kind_el(bal, "CdtDbtInd")).upper() == "DBIT":
+        wert = -wert
+    dt    = _kind_el(bal, "Dt")
+    datum = _datum_iso(_txt(_kind_el(dt, "Dt", "DtTm"))) or _datum_iso(_txt(dt))
+    return (code, wert, datum)
+
+def _umsatz_camt_parsen(daten) -> dict:
+    """Liest camt.052 (untertägiger Bericht) oder camt.053 (Tagesauszug).
+
+    Eine Sammelbuchung (mehrere <TxDtls> unter einem <Ntry>) bleibt EINE Buchung
+    — nur so stimmt der Saldo; die Einzelheiten wandern in Name und Zweck.
+    """
+    import xml.etree.ElementTree as ET
+    if isinstance(daten, str):
+        # ET lehnt Unicode-Text mit Encoding-Angabe ab; die Angabe stimmt nach
+        # dem Dekodieren ohnehin nicht mehr, also fliegt sie raus.
+        daten = re.sub(r"^\s*<\?xml[^>]*\?>", "", daten, count=1).encode("utf-8")
+    try:
+        wurzel = ET.fromstring(daten)
+    except Exception as e:
+        return {"ok": False, "error": f"XML nicht lesbar: {e}"}
+
+    hinweise, umsaetze, salden = [], [], {}
+    iban = waehrung = ""
+
+    for rpt in [e for e in wurzel.iter() if _lok(e.tag) in ("Rpt", "Stmt")]:
+        acct = _kind_el(rpt, "Acct")
+        if acct is not None:
+            iban     = iban or _txt(_tief_el(acct, "IBAN"))
+            waehrung = waehrung or _txt(_kind_el(acct, "Ccy"))
+
+        for bal in [e for e in rpt if _lok(e.tag) == "Bal"]:
+            s = _camt_saldo(bal)
+            if not s or not s[0]:
+                continue
+            code, wert, datum = s
+            alt = salden.get(code)
+            # Mehrere Berichte in einer Datei: der früheste Eröffnungs- und der
+            # späteste Schlusssaldo spannen den Zeitraum auf.
+            if alt is None or (datum and alt[1] and (
+                    (code in ("OPBD", "PRCD") and datum < alt[1]) or
+                    (code not in ("OPBD", "PRCD") and datum > alt[1]))):
+                salden[code] = (wert, datum)
+
+        for seq, ntry in enumerate([e for e in rpt if _lok(e.tag) == "Ntry"]):
+            sts_el = _kind_el(ntry, "Sts")
+            sts    = _txt(sts_el) or _txt(_kind_el(sts_el, "Cd"))
+            if sts and sts.upper() != "BOOK":
+                continue                     # Vormerkungen zählen nicht zum Saldo
+            amt    = _kind_el(ntry, "Amt")
+            betrag = _iso_num(_txt(amt))
+            if betrag is None:
+                continue
+            if _txt(_kind_el(ntry, "CdtDbtInd")).upper() == "DBIT":
+                betrag = -betrag
+            ccy = (amt.get("Ccy") if amt is not None else "") or waehrung or "EUR"
+
+            bd     = _kind_el(ntry, "BookgDt")
+            vd     = _kind_el(ntry, "ValDt")
+            datum  = _datum_iso(_txt(_kind_el(bd, "Dt", "DtTm")))
+            valuta = _datum_iso(_txt(_kind_el(vd, "Dt", "DtTm")))
+            datum  = datum or valuta
+            if not datum:
+                continue
+
+            namen, zwecke, refs = [], [], []
+            for txd in [e for e in ntry.iter() if _lok(e.tag) == "TxDtls"]:
+                parteien = _tief_el(txd, "RltdPties") or txd
+                # Gegenkonto: bei einer Gutschrift der Zahler, bei einer
+                # Abbuchung der Empfänger.
+                partei = _kind_el(parteien, "Dbtr" if betrag > 0 else "Cdtr") \
+                         or _kind_el(parteien, "Cdtr" if betrag > 0 else "Dbtr")
+                nm = _txt(_tief_el(partei, "Nm"))
+                if nm and nm not in namen:
+                    namen.append(nm)
+                for u in [e for e in txd.iter() if _lok(e.tag) == "Ustrd"]:
+                    if _txt(u):
+                        zwecke.append(_txt(u))
+                e2e = _txt(_tief_el(txd, "EndToEndId"))
+                if e2e and e2e.upper() not in ("NOTPROVIDED", "NICHT ANGEGEBEN"):
+                    refs.append(e2e)
+
+            art = _txt(_kind_el(ntry, "AddtlNtryInf")) \
+                  or _txt(_tief_el(_kind_el(ntry, "BkTxCd") or ntry, "Prtry"))
+
+            umsaetze.append({
+                "date": datum, "valuta": valuta, "amount": round(betrag, 2),
+                "currency": (ccy or "EUR").upper()[:3] or "EUR",
+                "name": " / ".join(namen)[:200] or None,
+                "purpose": " ".join(zwecke)[:500] or None,
+                "kind": (art or "")[:80] or None,
+                "ref": _txt(_kind_el(ntry, "AcctSvcrRef")) or (refs[0] if refs else None),
+                "seq": seq, "saldo": None,
+            })
+
+    if not umsaetze and not salden:
+        return {"ok": False, "error": "Keine Buchungen gefunden — ist das eine camt-Datei?"}
+    if not umsaetze:
+        hinweise.append("Die Datei enthält nur Salden, keine Buchungen.")
+
+    umsaetze.sort(key=lambda u: (u["date"], u["seq"]))
+    art = "camt.053" if any(_lok(e.tag) == "Stmt" for e in wurzel.iter()) else "camt.052"
+    return {"ok": True, "quelle": art, "umsaetze": umsaetze, "iban": iban,
+            "eroeffnung": salden.get("OPBD") or salden.get("PRCD"),
+            "schluss": salden.get("CLBD") or salden.get("CLAV") or salden.get("ITBD"),
+            "hinweise": hinweise}
+
+# ── CSV / Zwischenablage ───────────────────────────────────────────────────────
+
+def _spalten_zuordnen_umsatz(kopf: list) -> dict:
+    zuordnung, belegt = {}, set()
+    for feld, muster in _UMSATZ_MUSTER:
+        for i, titel in enumerate(kopf):
+            if i in belegt:
+                continue
+            t = titel.strip().strip('"').lower()
+            if any(re.search(m, t) for m in muster):
+                zuordnung[feld] = i
+                belegt.add(i)
+                break
+    return zuordnung
+
+def _umsatz_kopfzeile(tab: list):
+    """Findet die Kopfzeile — Bankexporte stellen ihr gern eine Zeile mit
+    Kontoangaben voran. Gewählt wird die Zeile mit den meisten Treffern, die
+    mindestens Datum und Betrag (oder Saldo) trägt. → (index, zuordnung)"""
+    bester, beste_z, bester_i = 0, {}, -1
+    for i, zeile in enumerate(tab[:15]):
+        z = _spalten_zuordnen_umsatz(zeile)
+        if "date" in z and ("amount" in z or "saldo" in z) and len(z) > bester:
+            bester, beste_z, bester_i = len(z), z, i
+    return bester_i, beste_z
+
+def _umsatz_csv_parsen(text: str) -> dict:
+    zeilen = [z for z in (text or "").splitlines() if z.strip()]
+    if not zeilen:
+        return {"ok": False, "error": "Kein Inhalt"}
+    sep = _trennzeichen(text)
+    tab = [[f.strip().strip('"') for f in z.split(sep)] for z in zeilen]
+    kopf_i, zuordnung = _umsatz_kopfzeile(tab)
+    if kopf_i < 0:
+        return {"ok": False, "error": "Spalten nicht erkannt — bitte mit Kopfzeile "
+                                      "einfügen (Buchungstag, Betrag, …)"}
+
+    hinweise, umsaetze = [], []
+    for z in tab[kopf_i + 1:]:
+        def feld(name):
+            i = zuordnung.get(name)
+            return z[i] if i is not None and i < len(z) else ""
+        datum = _datum_iso(feld("date"))
+        if not datum:
+            continue                         # Vorspann, Summen- und Leerzeilen
+        betrag = _de_num(feld("amount"))
+        if betrag is None:
+            continue
+        sh = feld("soll_haben").strip().upper()[:1]
+        if sh in ("S", "D", "-"):
+            betrag = -abs(betrag)
+        elif sh in ("H", "C", "+"):
+            betrag = abs(betrag)
+        umsaetze.append({
+            "date": datum, "valuta": _datum_iso(feld("valuta")),
+            "amount": round(betrag, 2),
+            "currency": (feld("currency") or "EUR").upper()[:3] or "EUR",
+            "saldo": _de_num(feld("saldo")),
+            "name": feld("name") or None, "purpose": feld("purpose") or None,
+            "kind": feld("kind") or None, "ref": None, "seq": 0,
+        })
+    if not umsaetze:
+        return {"ok": False, "error": "Keine Buchungen erkannt"}
+
+    # Viele Banken liefern die neueste Buchung zuerst — für den Saldoverlauf
+    # muss es aufsteigend sein. Innerhalb eines Tages bleibt die Dateireihenfolge.
+    if umsaetze[0]["date"] > umsaetze[-1]["date"]:
+        umsaetze.reverse()
+    for i, u in enumerate(umsaetze):
+        u["seq"] = i
+
+    if "saldo" not in zuordnung:
+        hinweise.append("Keine Spalte „Saldo nach Buchung“ — der Verlauf wird vom "
+                        "hinterlegten Kontostand rückwärts gerechnet.")
+    if "soll_haben" not in zuordnung and all((u["amount"] or 0) >= 0 for u in umsaetze):
+        hinweise.append("Alle Beträge sind positiv und es gibt keine Soll/Haben-Spalte "
+                        "— bitte prüfen, ob die Abbuchungen fehlen.")
+    return {"ok": True, "quelle": "csv", "umsaetze": umsaetze,
+            "spalten": tab[kopf_i], "zuordnung": zuordnung,
+            "trennzeichen": {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[sep],
+            "eroeffnung": None, "schluss": None, "hinweise": hinweise}
+
+def _umsatz_datei_parsen(name: str, daten: bytes) -> dict:
+    """Erkennt camt oder CSV an Inhalt und Endung und liest die Datei ein."""
+    kopf = daten[:2000].lstrip()
+    if kopf.startswith(b"<") or b"urn:iso:std:iso:20022" in kopf:
+        return _umsatz_camt_parsen(daten)
+    # CSV: die deutschen Bankexporte kommen in Windows-1252, neuere in UTF-8.
+    try:
+        text = daten.decode("utf-8")
+    except UnicodeDecodeError:
+        text = daten.decode("cp1252", "replace")
+    return _umsatz_csv_parsen(text.lstrip("﻿"))
+
+# ── Stapel: ZIP und mehrere Dateien ────────────────────────────────────────────
+
+def _dateien_entpacken(dateien: list) -> list:
+    """Packt ZIPs aus. `dateien` = [(name, bytes)] → [(name, bytes)] ohne Archive.
+
+    Die GLS liefert den camt-Export als ZIP mit einer XML je Abruftag.
+    """
+    import zipfile, io
+    raus = []
+    for name, daten in dateien:
+        if not daten:
+            continue
+        if daten[:2] == b"PK":
+            try:
+                with zipfile.ZipFile(io.BytesIO(daten)) as z:
+                    for info in sorted(z.infolist(), key=lambda i: i.filename):
+                        if info.is_dir() or info.file_size == 0:
+                            continue
+                        if info.filename.rsplit("/", 1)[-1].startswith((".", "__")):
+                            continue          # macOS-Beiwerk
+                        raus.append((f"{name}:{info.filename}", z.read(info)))
+            except Exception as e:
+                raus.append((name, b""))      # unten als Fehler gemeldet
+                print(f"[Konten] ZIP {name} nicht lesbar: {e}")
+        else:
+            raus.append((name, daten))
+    return raus
+
+def _umsaetze_sammeln(dateien: list) -> dict:
+    """Liest einen Stapel Dateien und legt die Buchungen zusammen.
+
+    Jede Datei bringt ihre eigenen Salden mit; die werden gleich hier in die
+    Buchungen der jeweiligen Datei gerechnet. Was danach noch ohne Saldo ist,
+    füllt `_salden_fuellen` über den ganzen Stapel.
+    """
+    dateien = _dateien_entpacken(dateien)
+    if not dateien:
+        return {"ok": False, "error": "Keine Datei erhalten"}
+
+    alle, hinweise, quellen, ibans, gelesen = [], [], [], [], 0
+    fehler = []
+    for name, daten in dateien:
+        kurz = name.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+        if not daten:
+            fehler.append(f"{kurz}: leer oder nicht lesbar")
+            continue
+        res = _umsatz_datei_parsen(kurz, daten)
+        if not res.get("ok"):
+            fehler.append(f"{kurz}: {res.get('error')}")
+            continue
+        gelesen += 1
+        quellen.append(res["quelle"])
+        if res.get("iban"):
+            ibans.append(res["iban"])
+        # Salden der EINZELNEN Datei anwenden — so bleiben Lücken zwischen zwei
+        # Tagesauszügen folgenlos, statt eine durchgehende Rechnung zu verfälschen.
+        _salden_aus_raendern(res["umsaetze"], res.get("eroeffnung"), res.get("schluss"),
+                             hinweise, kurz)
+        for u in res["umsaetze"]:
+            u["datei"] = kurz
+        alle.extend(res["umsaetze"])
+        hinweise.extend(f"{kurz}: {h}" if gelesen and len(dateien) > 1 else h
+                        for h in res.get("hinweise") or [])
+
+    if not alle:
+        return {"ok": False, "error": "; ".join(fehler) or "Keine Buchungen gefunden"}
+    if fehler:
+        hinweise.extend(fehler)
+
+    # Doppelte aus überlappenden Dateien: über die Bankreferenz eindeutig.
+    gesehen, sauber = set(), []
+    for u in alle:
+        if u.get("ref"):
+            if u["ref"] in gesehen:
+                continue
+            gesehen.add(u["ref"])
+        sauber.append(u)
+    doppelt = len(alle) - len(sauber)
+
+    sauber.sort(key=lambda u: (u["date"], u.get("datei") or "", u.get("seq") or 0))
+    # Laufende Nummer JE TAG — der Schlüssel in _umsatz_id hängt daran und muss
+    # beim erneuten Einlesen desselben Tages wieder gleich herauskommen.
+    lauf = {}
+    for u in sauber:
+        lauf[u["date"]] = lauf.get(u["date"], -1) + 1
+        u["seq"] = lauf[u["date"]]
+
+    quelle = quellen[0] if len(set(quellen)) == 1 else "gemischt"
+    return {"ok": True, "quelle": quelle, "umsaetze": sauber,
+            "iban": ibans[0] if ibans else "", "ibans": sorted(set(ibans)),
+            "dateien": gelesen, "doppelt": doppelt, "hinweise": hinweise}
+
+# ── Saldo je Buchung ───────────────────────────────────────────────────────────
+
+def _salden_aus_raendern(umsaetze: list, eroeffnung, schluss, hinweise: list, quelle: str):
+    """Rechnet die Salden EINER Datei aus ihrem Eröffnungs- bzw. Schlusssaldo.
+
+    Vorwärts ab der Eröffnung ist der Normalfall; gibt es nur den Schlusssaldo,
+    wird rückwärts gerechnet. Stimmen beide nicht überein, fehlen Buchungen —
+    das muss man sehen, statt es stillschweigend glattzuziehen.
+    """
+    if not umsaetze or all(u.get("saldo") is not None for u in umsaetze):
+        return
+    reihe = sorted(umsaetze, key=lambda u: (u["date"], u.get("seq") or 0))
+    if eroeffnung and eroeffnung[0] is not None:
+        stand = float(eroeffnung[0])
+        for u in reihe:
+            stand += float(u["amount"] or 0)
+            u["saldo"] = round(stand, 2)
+        if schluss and schluss[0] is not None and abs(stand - float(schluss[0])) > 0.01:
+            hinweise.append(f"{quelle}: Eröffnungssaldo plus Buchungen ergibt {stand:.2f}, "
+                            f"die Datei nennt {float(schluss[0]):.2f} als Schlusssaldo "
+                            f"(Differenz {stand - float(schluss[0]):+.2f}).")
+    elif schluss and schluss[0] is not None:
+        stand = float(schluss[0])
+        for u in reversed(reihe):
+            u["saldo"] = round(stand, 2)
+            stand -= float(u["amount"] or 0)
+
+def _salden_fuellen(umsaetze: list, anker=None) -> list:
+    """Füllt die noch offenen Salden über den ganzen Stapel.
+
+    Ausgehend von jeder bekannten Buchung wird vorwärts weitergerechnet, vor der
+    ersten bekannten rückwärts. Ist gar nichts bekannt, dient der hinterlegte
+    Kontostand als Anker (`anker` = (wert, datum)) — aber nur, wenn er nicht ÄLTER
+    ist als die letzte Buchung, sonst rechnete man an einem Stand herum, der die
+    Buchungen noch gar nicht kennt.
+    """
+    hinweise = []
+    if not umsaetze:
+        return hinweise
+    reihe = sorted(umsaetze, key=lambda u: (u["date"], u.get("seq") or 0))
+    bekannt = [i for i, u in enumerate(reihe) if u.get("saldo") is not None]
+
+    if not bekannt:
+        if not anker or anker[0] is None:
+            hinweise.append("Kein Saldo bekannt — es werden nur die Buchungen gespeichert, "
+                            "der Verlauf bleibt unverändert.")
+            return hinweise
+        if anker[1] and anker[1] < reihe[-1]["date"]:
+            hinweise.append("Der hinterlegte Kontostand ist älter als die letzte Buchung — "
+                            "ohne Saldo in der Datei bleibt der Verlauf offen. Trag den "
+                            "aktuellen Stand oben ein und lies die Dateien nochmal ein.")
+            return hinweise
+        reihe[-1]["saldo"] = round(float(anker[0]), 2)
+        bekannt = [len(reihe) - 1]
+
+    # Vorwärts ab dem ersten bekannten Saldo. `stand` ist immer der Saldo NACH
+    # der zuletzt gesehenen Buchung. Wo ein weiterer bekannter Saldo auftaucht,
+    # gilt der — er kommt aus der Datei und ist die bessere Quelle; passt er
+    # nicht zum Erwartungswert, fehlen Buchungen dazwischen.
+    luecken, stand = [], None
+    for u in reihe[bekannt[0]:]:
+        erwartet = None if stand is None else round(stand + float(u["amount"] or 0), 2)
+        if u.get("saldo") is not None:
+            if erwartet is not None and abs(float(u["saldo"]) - erwartet) > 0.01:
+                luecken.append(u["date"])
+            stand = float(u["saldo"])
+        else:
+            stand = erwartet
+            u["saldo"] = stand
+
+    # Rückwärts vor den ersten bekannten Saldo
+    stand = float(reihe[bekannt[0]]["saldo"])
+    for i in range(bekannt[0] - 1, -1, -1):
+        stand = round(stand - float(reihe[i + 1]["amount"] or 0), 2)
+        reihe[i]["saldo"] = stand
+
+    if luecken:
+        hinweise.append("Zwischen den Buchungen klafft eine Lücke (" +
+                        ", ".join(sorted(set(luecken))[:5]) +
+                        ") — dort fehlen offenbar Tage im Export.")
+    return hinweise
+
+# ── Speichern ──────────────────────────────────────────────────────────────────
+
+def _umsatz_verlauf_schreiben(conn, acc) -> int:
+    """Schreibt aus den gespeicherten Buchungen je Tag einen Stand in
+    `account_history` — den Saldo der letzten Buchung des Tages.
+
+    Darlehen liegen dort positiv (siehe `_account_value`), der Saldo eines
+    Darlehenskontos kommt aber negativ aus der Bank.
+
+    Beim Depot ist der Saldo nur das Verrechnungskonto; was historisch in den
+    Wertpapieren steckte, weiß niemand. Darum dort kein Tagesverlauf aus den
+    Buchungen, sondern ein einzelner Eintrag für heute über den gesamten
+    Depotwert — so wie ihn auch das Speichern des Kontos schreibt.
+    """
+    if acc["kind"] == "depot":
+        _write_account_history(conn, acc["id"], _account_value(conn, acc))
+        return 1
+    rows = conn.execute(
+        "SELECT date, saldo FROM account_transactions "
+        "WHERE account_id = ? AND saldo IS NOT NULL ORDER BY date, seq, rowid",
+        (acc["id"],)).fetchall()
+    if not rows:
+        return 0
+    je_tag = {}
+    for r in rows:
+        je_tag[r["date"]] = float(r["saldo"])
+    fx = float(acc["fx_rate"] or 1.0)
+    for tag, saldo in je_tag.items():
+        wert = abs(saldo) if acc["kind"] == "darlehen" else saldo
+        _write_account_history(conn, acc["id"], wert * fx, tag)
+    return len(je_tag)
+
+def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list) -> dict:
+    """Legt die Buchungen ab, schreibt den Tagesverlauf und zieht den Stand nach."""
+    _init_account_tables(db_file)
+    conn = get_db(db_file)
+    acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        conn.close()
+        return {"ok": False, "error": "Konto nicht gefunden", "status": 404}
+    if acc["kind"] not in UMSATZ_ARTEN:
+        conn.close()
+        return {"ok": False, "status": 400,
+                "error": "Für Sachwerte gibt es keine Umsätze"}
+
+    now, neu, bekannt = time.strftime("%Y-%m-%d %H:%M:%S"), 0, 0
+    for u in umsaetze:
+        tx_id = _umsatz_id(account_id, u)
+        da = conn.execute("SELECT saldo FROM account_transactions "
+                          "WHERE account_id = ? AND tx_id = ?", (account_id, tx_id)).fetchone()
+        if da is not None:
+            bekannt += 1
+            # Beim zweiten Lauf kann ein Saldo bekannt sein, der vorher fehlte
+            if u.get("saldo") is not None and da["saldo"] is None:
+                conn.execute("UPDATE account_transactions SET saldo = ? "
+                             "WHERE account_id = ? AND tx_id = ?",
+                             (float(u["saldo"]), account_id, tx_id))
+            continue
+        conn.execute(
+            "INSERT INTO account_transactions (account_id, tx_id, date, valuta, amount, "
+            "currency, saldo, name, purpose, kind, ref, seq, source, imported) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (account_id, tx_id, u.get("date"), u.get("valuta"),
+             float(u.get("amount") or 0), (u.get("currency") or "EUR")[:3],
+             None if u.get("saldo") is None else float(u["saldo"]),
+             u.get("name"), u.get("purpose"), u.get("kind"), u.get("ref"),
+             int(u.get("seq") or 0), u.get("source") or "", now))
+        neu += 1
+    conn.commit()
+
+    # Erst den Kontostand nachziehen, wenn die Buchungen neuer sind als der
+    # hinterlegte Stand — der Depot-Verlauf unten rechnet damit weiter.
+    juengste = conn.execute(
+        "SELECT date, saldo FROM account_transactions WHERE account_id = ? AND saldo IS NOT NULL "
+        "ORDER BY date DESC, seq DESC, rowid DESC LIMIT 1", (account_id,)).fetchone()
+    stand = None
+    if juengste and (not acc["balance_date"] or juengste["date"] >= acc["balance_date"]):
+        stand = float(juengste["saldo"])
+        if acc["kind"] == "darlehen":
+            stand = abs(stand)
+        conn.execute("UPDATE accounts SET balance = ?, balance_date = ?, updated = ? WHERE id = ?",
+                     (stand, juengste["date"], now, account_id))
+        conn.commit()
+        acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+
+    tage = _umsatz_verlauf_schreiben(conn, acc)
+    conn.commit()
+    row = _account_row(conn, acc)
+    conn.close()
+    return {"ok": True, "neu": neu, "bekannt": bekannt, "tage": tage,
+            "saldo": stand, "account": row}
+
+def _umsatz_vorschau(db_file: str, account_id: str, dateien: list) -> dict:
+    """Liest den Stapel und ergänzt alles, was die Vorschau zeigen soll."""
+    conn = get_db(db_file)
+    acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    conn.close()
+    if not acc:
+        return {"ok": False, "error": "Konto nicht gefunden", "status": 404}
+
+    res = _umsaetze_sammeln(dateien)
+    if not res.get("ok"):
+        res["status"] = 400
+        return res
+
+    anker = (float(acc["balance"] or 0), acc["balance_date"])
+    if acc["kind"] == "darlehen":
+        anker = (-abs(anker[0]), anker[1])    # Restschuld liegt positiv in der DB
+    res["hinweise"] = list(res.get("hinweise") or []) + _salden_fuellen(res["umsaetze"], anker)
+    for u in res["umsaetze"]:
+        u["source"] = res["quelle"]
+
+    # Ein Auszug im falschen Konto verdirbt den Verlauf lautlos — darum der
+    # Abgleich mit einer IBAN, die in der Notiz des Kontos steht.
+    for iban in res.get("ibans") or []:
+        andere = re.findall(r"[A-Z]{2}\d{2}[A-Z0-9]{10,30}",
+                            (acc["note"] or "").replace(" ", "").upper())
+        if andere and iban.replace(" ", "").upper() not in andere:
+            res["hinweise"].append(f"Die Datei gehört zu {iban}, in der Notiz des Kontos "
+                                   f"steht {andere[0]}.")
+            break
+
+    res["summe"] = round(sum(float(u["amount"] or 0) for u in res["umsaetze"]), 2)
+    res["von"]   = min((u["date"] for u in res["umsaetze"]), default=None)
+    res["bis"]   = max((u["date"] for u in res["umsaetze"]), default=None)
+    res["konto"] = acc["name"]
+    return res
+
+@app.get("/api/konten/{account_id}/umsaetze")
+async def konten_umsaetze(account_id: str, request: Request, limit: int = 200):
+    """Gespeicherte Buchungen eines Kontos, neueste zuerst."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    rows = conn.execute(
+        "SELECT * FROM account_transactions WHERE account_id = ? "
+        "ORDER BY date DESC, seq DESC, rowid DESC LIMIT ?",
+        (account_id, max(1, min(int(limit or 200), 2000)))).fetchall()
+    anzahl = conn.execute("SELECT COUNT(*) AS c FROM account_transactions WHERE account_id = ?",
+                          (account_id,)).fetchone()["c"]
+    conn.close()
+    return JSONResponse({"umsaetze": [dict(r) for r in rows], "anzahl": anzahl})
+
+@app.delete("/api/konten/{account_id}/umsaetze")
+async def konten_umsaetze_loeschen(account_id: str, request: Request):
+    """Verwirft alle Buchungen eines Kontos. Der Verlauf bleibt stehen — er wird
+    auch von Hand gepflegt und soll nicht an einem Fehlimport hängen."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    conn = get_db(files["db"])
+    conn.execute("DELETE FROM account_transactions WHERE account_id = ?", (account_id,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+@app.post("/api/konten/{account_id}/umsaetze")
+async def konten_umsaetze_import(account_id: str, request: Request):
+    """Umsätze aus eingefügtem Text (CSV oder eine camt-XML). Vorschau, bis
+    `bestaetigt` gesetzt ist. Für Dateien und ZIPs siehe /umsaetze/dateien."""
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+    body  = await request.json()
+    text  = body.get("text") or ""
+    if not text.strip():
+        return JSONResponse({"ok": False, "error": "Nichts eingefügt"}, status_code=400)
+
+    res = _umsatz_vorschau(files["db"], account_id, [("Eingefügt", text.encode("utf-8"))])
+    if not res.get("ok"):
+        return JSONResponse(res, status_code=res.pop("status", 400))
+    if not body.get("bestaetigt"):
+        return JSONResponse(res)
+
+    erg = _umsaetze_schreiben(files["db"], account_id, res["umsaetze"])
+    erg["hinweise"] = res["hinweise"]
+    return JSONResponse(erg, status_code=erg.pop("status", 200))
+
+@app.post("/api/konten/{account_id}/umsaetze/dateien")
+async def konten_umsaetze_dateien(account_id: str, request: Request,
+                                  dateien: list[UploadFile] = File(default=[]),
+                                  bestaetigt: str = ""):
+    """camt-Dateien oder das ZIP der Bank einlesen. Ohne `bestaetigt` nur Vorschau.
+
+    Die Oberfläche lädt denselben Stapel zweimal hoch — einmal für die Vorschau,
+    einmal zum Übernehmen. Das ist billiger als die Dateien serverseitig zwischen
+    zwei Aufrufen vorzuhalten, und es gibt keinen Zustand, der ablaufen kann.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    _init_account_tables(files["db"])
+
+    stapel = []
+    for f in dateien or []:
+        stapel.append((f.filename or "Datei", await f.read()))
+    if not stapel:
+        return JSONResponse({"ok": False, "error": "Keine Datei erhalten"}, status_code=400)
+
+    res = await run_in_threadpool(_umsatz_vorschau, files["db"], account_id, stapel)
+    if not res.get("ok"):
+        return JSONResponse(res, status_code=res.pop("status", 400))
+    if not bestaetigt:
+        return JSONResponse(res)
+
+    erg = await run_in_threadpool(_umsaetze_schreiben, files["db"], account_id, res["umsaetze"])
+    erg["hinweise"] = res["hinweise"]
+    return JSONResponse(erg, status_code=erg.pop("status", 200))
 
 @app.get("/api/vermoegen")
 async def vermoegen(request: Request, ibkr: str = ""):
