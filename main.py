@@ -3697,9 +3697,14 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         # Anfangs- und Schlusssaldo sind für sich schon Stände mit Datum — bei
         # einem Monatsauszug oft genauer und jünger als die letzte Buchung, und
         # in buchungsfreien Monaten das Einzige, was es gibt.
-        for rand in (res.get("eroeffnung"), res.get("schluss")):
+        #
+        # Die Rolle muss mit: im camt tragen BEIDE dasselbe Datum, und der
+        # Eröffnungssaldo ist der Stand VOR den Buchungen des Tages. Ohne
+        # Rangfolge gewinnt sonst der falsche — der Kontostand stand danach auf
+        # dem Anfangs- statt auf dem Schlusssaldo.
+        for rolle, rand in (("start", res.get("eroeffnung")), ("ende", res.get("schluss"))):
             if rand and rand[0] is not None and rand[1]:
-                raender.append((rand[1], float(rand[0])))
+                raender.append((rand[1], float(rand[0]), rolle))
         for u in res["umsaetze"]:
             u["datei"] = kurz
         alle.extend(res["umsaetze"])
@@ -3733,7 +3738,13 @@ def _umsaetze_sammeln(dateien: list) -> dict:
     return {"ok": True, "quelle": quelle, "umsaetze": sauber,
             "iban": ibans[0] if ibans else "", "ibans": sorted(set(ibans)),
             "dateien": gelesen, "doppelt": doppelt, "hinweise": hinweise,
-            "salden": sorted(set(raender))}
+            "salden": sorted(set(raender), key=_saldo_rang)}
+
+def _saldo_rang(rand):
+    """Sortierschlüssel für (datum, wert, rolle): je Tag zuerst der Anfangs-,
+    dann der Schlusssaldo. Wer später kommt, gewinnt — beim Schreiben in den
+    Verlauf wie beim Nachziehen des Kontostands."""
+    return (rand[0] or "", 0 if rand[2] == "start" else 1)
 
 # ── Saldo je Buchung ───────────────────────────────────────────────────────────
 
@@ -3896,7 +3907,7 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
     # nicht: dort hält account_history Verrechnungskonto PLUS Wertpapiere.
     if acc["kind"] != "depot":
         fx = float(acc["fx_rate"] or 1.0)
-        for datum, wert in (salden or []):
+        for datum, wert, _rolle in sorted(salden or [], key=_saldo_rang):
             if not datum:
                 continue
             w = abs(float(wert)) if acc["kind"] == "darlehen" else float(wert)
@@ -3913,12 +3924,15 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
     row = conn.execute(
         "SELECT date, saldo FROM account_transactions WHERE account_id = ? AND saldo IS NOT NULL "
         "ORDER BY date DESC, seq DESC, rowid DESC LIMIT 1", (account_id,)).fetchone()
-    juengste = (row["date"], float(row["saldo"])) if row else None
     # Ein Schlusssaldo ohne Buchung kann jünger sein als die letzte Buchung —
-    # bei einem Monatsauszug ist er das fast immer.
-    for datum, wert in (salden or []):
-        if datum and (juengste is None or datum >= juengste[0]):
-            juengste = (datum, float(wert))
+    # bei einem Monatsauszug ist er das fast immer. Bei Gleichstand am selben Tag
+    # gilt die Rangfolge Anfangssaldo < Schlusssaldo < Buchung.
+    kandidaten = [(datum, 0 if rolle == "start" else 1, float(wert))
+                  for datum, wert, rolle in (salden or []) if datum]
+    if row:
+        kandidaten.append((row["date"], 2, float(row["saldo"])))
+    bester   = max(kandidaten, key=lambda k: (k[0], k[1])) if kandidaten else None
+    juengste = (bester[0], bester[2]) if bester else None
 
     stand = None
     leer  = not float(acc["balance"] or 0) and not float(acc["valuation"] or 0)
