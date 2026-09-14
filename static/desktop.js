@@ -6084,6 +6084,8 @@ function kontenFormOeffnen(id) {
 function kontenFormSchliessen() {
     _kontenOffen = null;
     _kontenVorschau = null;
+    _umsatzVorschau = null;
+    _umsatzQuelle   = null;
     var el = document.getElementById('kontenForm');
     if (el) el.innerHTML = '';
 }
@@ -6125,16 +6127,19 @@ function renderKontenFormular() {
     h += '<input type="hidden" id="k-id" value="' + escHtml(a.id || '') + '">';
     h += '</div>';
 
-    // Depot: Import + Positionen; jedes Konto: Verlauf
+    // Depot: Depotauszug + Positionen; alles außer Sachwert: Umsätze; jedes Konto: Verlauf
+    var mitUmsatz = KONTO_UMSATZ_ARTEN.indexOf(a.kind) >= 0;
     if (!neu) {
-        h += '<div class="settings-card" id="k-verlauf-karte"></div>';
         if (a.kind === 'depot') h += '<div class="settings-card" id="k-import-karte"></div>';
+        if (mitUmsatz)          h += '<div class="settings-card" id="k-umsatz-karte"></div>';
+        h += '<div class="settings-card" id="k-verlauf-karte"></div>';
     }
     el.innerHTML = h;
     renderKontenFormularFelder();
     if (!neu) {
-        renderKontenVerlaufKarte(a);
         if (a.kind === 'depot') renderKontenImportKarte(a);
+        if (mitUmsatz)          renderKontenUmsatzKarte(a);
+        renderKontenVerlaufKarte(a);
     }
 }
 
@@ -6456,6 +6461,206 @@ function renderDepotPositionen(a) {
     h += '</tbody></table>';
     var el = document.getElementById('k-import-karte');
     if (el) el.insertAdjacentHTML('beforeend', h);
+}
+
+// ── Kontoumsätze einlesen (camt / CSV) ───────────────────────────────────────
+// camt ist der gute Weg: die Datei bringt ihre Salden mit, daraus entsteht der
+// Tagesverlauf und damit die Vermögenskurve. Die GLS liefert ein ZIP mit einer
+// XML je Abruftag — das geht unausgepackt hinein. CSV bleibt für alles, was nur
+// das anbietet (Smartbroker).
+//
+// Vorschau und Übernehmen laden denselben Stapel zweimal hoch; der Server hält
+// zwischen den Aufrufen nichts vor, was ablaufen könnte.
+
+var _umsatzVorschau = null;   // Ergebnis des letzten Probelaufs
+var _umsatzQuelle   = null;   // { dateien: FileList } oder { text: '…' }
+
+function renderKontenUmsatzKarte(a) {
+    var el = document.getElementById('k-umsatz-karte');
+    if (!el) return;
+    _umsatzVorschau = null;
+    _umsatzQuelle   = null;
+    var depot = a.kind === 'depot';
+
+    var h = '<h2 class="settings-h">Umsätze einlesen</h2>'
+          + '<p class="settings-hint">'
+          + (depot
+             ? 'Buchungen des <b>Verrechnungskontos</b>. Der Depotwert selbst kommt aus dem '
+               + 'Depotauszug darüber — aus den Umsätzen wird nur der Verrechnungsstand '
+               + 'nachgezogen, damit die Wertpapiere nicht rückwirkend aus der Kurve fallen.'
+             : 'Am besten <b>camt</b> aus dem Online-Banking — gern das ganze ZIP der Bank '
+               + '(eine Datei je Tag), mehrere Dateien auf einmal gehen auch. Die Salden aus '
+               + 'der Datei ergeben den Tagesverlauf und damit die Vermögenskurve. '
+               + 'CSV geht ebenso, braucht für den Verlauf aber die Spalte „Saldo nach Buchung“.')
+          + '</p>'
+          + '<input type="file" id="k-umsatz-datei" class="k-datei" multiple '
+          + 'accept=".zip,.xml,.csv,.txt,application/zip,text/xml,text/csv" '
+          + 'onchange="kontenUmsatzPruefen(\'' + a.id + '\')">'
+          + '<details class="k-einfuegen"><summary>… oder Tabelle einfügen</summary>'
+          + '<textarea id="k-umsatz-text" class="k-import-feld" rows="5" '
+          + 'placeholder="Buchungstag;Verwendungszweck;Betrag;Saldo nach Buchung&#10;'
+          + '12.09.2026;Gehalt;1.200,00;3.450,00"></textarea>'
+          + '<div class="settings-actions"><button class="refresh-btn k-mini" '
+          + 'onclick="kontenUmsatzTextPruefen(\'' + a.id + '\', this)">Prüfen</button></div>'
+          + '</details>'
+          + '<div class="settings-actions"><span id="k-umsatz-msg" class="settings-msg"></span></div>'
+          + '<div id="k-umsatz-vorschau"></div>'
+          + '<div id="k-umsatz-liste"></div>';
+    el.innerHTML = h;
+    renderUmsatzListe(a);
+}
+
+function _umsatzMsg(t, c) {
+    var el = document.getElementById('k-umsatz-msg');
+    if (el) { el.textContent = t; el.className = 'settings-msg ' + (c || ''); }
+}
+
+async function kontenUmsatzPruefen(id) {
+    var feld = document.getElementById('k-umsatz-datei');
+    if (!feld || !feld.files || !feld.files.length) return;
+    _umsatzQuelle = { dateien: feld.files };
+    await _umsatzProbe(id, function() { return kontenUmsaetzeDateien(id, feld.files, false); });
+}
+
+async function kontenUmsatzTextPruefen(id, btn) {
+    var text = (document.getElementById('k-umsatz-text') || {}).value || '';
+    if (!text.trim()) { _umsatzMsg('Nichts eingefügt', 'err'); return; }
+    _umsatzQuelle = { text: text };
+    btn.disabled = true;
+    await _umsatzProbe(id, function() { return kontenUmsaetzeText(id, text, false); });
+    btn.disabled = false;
+}
+
+/** Gemeinsamer Ablauf für beide Wege: prüfen, melden, Vorschau zeichnen. */
+async function _umsatzProbe(id, lauf) {
+    _umsatzMsg('Lese…', 'run');
+    try {
+        var res = await lauf();
+        if (!res.ok) {
+            _umsatzMsg(res.error || 'Nicht erkannt', 'err');
+            _umsatzVorschau = null;
+            var v = document.getElementById('k-umsatz-vorschau');
+            if (v) v.innerHTML = '';
+            return;
+        }
+        _umsatzVorschau = res;
+        _umsatzMsg('', '');
+        logIt(3, 'Konten', res.umsaetze.length + ' Buchungen erkannt (' + res.quelle
+              + (res.dateien ? ', ' + res.dateien + ' Dateien' : '') + ')');
+        renderUmsatzVorschau(id, res);
+    } catch (e) {
+        _umsatzMsg('Fehler: ' + e.message, 'err');
+    }
+}
+
+function renderUmsatzVorschau(id, res) {
+    var el = document.getElementById('k-umsatz-vorschau');
+    if (!el) return;
+    var u = res.umsaetze || [];
+    var ohneSaldo = u.filter(function(x) { return x.saldo == null; }).length;
+
+    var h = '<p class="settings-hint">Erkannt: <b>' + u.length + ' Buchungen</b>'
+          + (res.dateien > 1 ? ' aus ' + res.dateien + ' Dateien' : '')
+          + ' (' + escHtml(res.quelle) + ')'
+          + (res.von ? ', ' + escHtml(res.von) + ' bis ' + escHtml(res.bis) : '')
+          + ', Saldenänderung <b>' + fmtEurSign(res.summe || 0) + '</b>'
+          + (res.doppelt ? ', ' + res.doppelt + ' doppelte übersprungen' : '') + '.</p>';
+    (res.hinweise || []).forEach(function(w) {
+        h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + escHtml(w) + '</p>';
+    });
+    if (ohneSaldo) {
+        h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + ohneSaldo
+           + ' Buchungen ohne Saldo — diese Tage kommen nicht in die Kurve.</p>';
+    }
+
+    h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
+       + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
+       + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
+    u.slice(-60).reverse().forEach(function(x) {
+        h += _umsatzZeile(x);
+    });
+    h += '</tbody></table>';
+    if (u.length > 60) h += '<p class="settings-hint">… und ' + (u.length - 60) + ' weitere</p>';
+
+    h += '<div class="settings-actions">'
+       + '<button class="refresh-btn" onclick="kontenUmsatzUebernehmen(\'' + id + '\', this)">Übernehmen</button>'
+       + '<span class="settings-hint" style="margin:0">schon vorhandene Buchungen werden übersprungen</span></div>';
+    el.innerHTML = h;
+}
+
+/** Eine Zeile — gleich für Vorschau und gespeicherte Liste. */
+function _umsatzZeile(x) {
+    var b = x.amount || 0;
+    return '<tr><td>' + escHtml(x.date || '') + '</td>'
+         + '<td>' + escHtml(x.name || x.kind || '—') + '</td>'
+         + '<td class="k-umsatz-zweck" title="' + escHtml(x.purpose || '') + '">'
+         + escHtml(x.purpose || '') + '</td>'
+         + '<td style="text-align:right;color:' + (b >= 0 ? 'var(--green)' : 'var(--red)') + '">'
+         + fmtEurSign(b) + '</td>'
+         + '<td style="text-align:right;color:var(--muted)">'
+         + (x.saldo == null ? '—' : fmtEur(x.saldo, 2)) + '</td></tr>';
+}
+
+async function kontenUmsatzUebernehmen(id, btn) {
+    if (!_umsatzVorschau || !_umsatzQuelle) return;
+    btn.disabled = true;
+    btn.textContent = 'Übernehme…';
+    try {
+        var res = _umsatzQuelle.dateien
+            ? await kontenUmsaetzeDateien(id, _umsatzQuelle.dateien, true)
+            : await kontenUmsaetzeText(id, _umsatzQuelle.text, true);
+        if (res.ok) {
+            logIt(3, 'Konten', res.neu + ' Buchungen übernommen, ' + res.bekannt
+                  + ' schon bekannt, ' + res.tage + ' Tage im Verlauf'
+                  + (res.saldo == null ? '' : ', Stand ' + fmtEur(res.saldo)));
+            _umsatzVorschau = null;
+            _umsatzQuelle   = null;
+            await kontenLoad();      // zeichnet Karte, Liste und Kurve neu
+        } else {
+            logIt(1, 'Konten', 'Übernehmen fehlgeschlagen: ' + (res.error || '?'));
+            _umsatzMsg(res.error || 'Fehler', 'err');
+        }
+    } catch (e) {
+        logIt(1, 'Konten', 'Übernehmen fehlgeschlagen: ' + e.message);
+        _umsatzMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Übernehmen';
+    }
+}
+
+/** Die schon gespeicherten Buchungen eines Kontos. */
+async function renderUmsatzListe(a) {
+    var el = document.getElementById('k-umsatz-liste');
+    if (!el) return;
+    var daten = { umsaetze: [], anzahl: 0 };
+    try { daten = await kontenUmsaetzeLaden(a.id, 100); }
+    catch (e) { return; }
+    if (!daten.anzahl) { el.innerHTML = ''; return; }
+
+    var h = '<h2 class="settings-h" style="margin-top:18px">Buchungen (' + daten.anzahl + ')</h2>'
+          + '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
+          + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
+          + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
+    (daten.umsaetze || []).forEach(function(x) { h += _umsatzZeile(x); });
+    h += '</tbody></table>';
+    if (daten.anzahl > (daten.umsaetze || []).length) {
+        h += '<p class="settings-hint">… ' + (daten.anzahl - daten.umsaetze.length)
+           + ' ältere Buchungen</p>';
+    }
+    h += '<div class="settings-actions"><button class="refresh-btn k-mini" '
+       + 'onclick="kontenUmsaetzeWeg(\'' + a.id + '\')">Buchungen verwerfen</button>'
+       + '<span class="settings-hint" style="margin:0">der eingetragene Verlauf bleibt stehen</span></div>';
+    el.innerHTML = h;
+}
+
+async function kontenUmsaetzeWeg(id) {
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === id; });
+    if (!confirm('Alle gespeicherten Buchungen von „' + (a ? a.name : id) + '" verwerfen?\n\n'
+                 + 'Der Verlauf des Kontos bleibt erhalten.')) return;
+    await kontenUmsaetzeLoeschen(id);
+    logIt(3, 'Konten', 'Buchungen verworfen');
+    await kontenLoad();
 }
 
 // ── Vermögenskurve ───────────────────────────────────────────────────────────
