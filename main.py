@@ -835,8 +835,35 @@ def load_config(config_file: str) -> dict:
             return json.load(f)
     return {"baskets": {}, "currentBasket": ""}
 
+CONFIG_SICHERUNGEN = 14        # Tagessicherungen der Config, die aufgehoben werden
+
+def _config_sichern(config_file: str):
+    """Legt eine Tagessicherung der Config an, bevor sie überschrieben wird.
+
+    Eine einzelne „vorherige Fassung" nützt nichts: wird ein kaputter Stand
+    mehrfach gespeichert, ist auch die Sicherung kaputt. Darum eine je Tag, die
+    erste Änderung des Tages gewinnt — damit bleibt der Stand von gestern heil,
+    egal wie oft heute noch geschrieben wird.
+    """
+    if not os.path.exists(config_file):
+        return
+    ordner = os.path.dirname(config_file)
+    ziel   = os.path.join(ordner, f"config_{time.strftime('%Y-%m-%d')}.json")
+    try:
+        if not os.path.exists(ziel):
+            shutil.copy2(config_file, ziel)
+        # Ausdünnen unabhängig davon, ob gerade eine neue entstanden ist — sonst
+        # räumt nur das erste Speichern eines Tages auf.
+        alte = sorted(f for f in os.listdir(ordner)
+                      if re.fullmatch(r"config_\d{4}-\d{2}-\d{2}\.json", f))
+        for f in alte[:-CONFIG_SICHERUNGEN]:
+            os.remove(os.path.join(ordner, f))
+    except Exception as e:
+        print(f"[Config] Sicherung fehlgeschlagen: {e}")   # Speichern geht trotzdem
+
 def save_config_data(config_file: str, cfg: dict):
     """Atomares Speichern via tempfile + rename — kein Datenverlust bei Crash."""
+    _config_sichern(config_file)
     tmp = config_file + ".tmp"
     with open(tmp, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1410,10 +1437,38 @@ async def set_config(request: Request):
     user  = get_user(request)
     files = get_user_files(user)
     neu   = await request.json()
+
+    # Notbremse: einen vorhandenen Bestand an Portfolios nicht durch nichts
+    # ersetzen. Am 2026-09-14 hat die Oberfläche beim Laden einer leer
+    # angekommenen Config selbsttätig ein „Mein Portfolio" angelegt und
+    # zurückgeschrieben — damit waren die echten Baskets weg. Die Ursache ist
+    # behoben, aber ein alter Browser-Tab kann dasselbe jederzeit wieder tun,
+    # und das Löschen aller Portfolios auf einmal ist über die Oberfläche
+    # ohnehin nicht vorgesehen.
+    alt = load_config(files["config"])
+    alt_n = len(alt.get("baskets") or {})
+    neu_n = len(neu.get("baskets") or {})
+    if alt_n and not neu_n:
+        print(f"[Config] Speichern abgelehnt: {alt_n} Portfolios -> 0 (Benutzer {user})")
+        return JSONResponse({"ok": False, "abgelehnt": "leer",
+                             "error": f"Speichern abgelehnt: Der Server hat {alt_n} Portfolios, "
+                                      f"gesendet wurden 0. Bitte die Seite neu laden."},
+                            status_code=409)
+    if alt_n > 1 and neu_n == 1 and not request.query_params.get("bestaetigt"):
+        einziger = list((neu.get("baskets") or {}).values())[0]
+        if (einziger.get("name") == "Mein Portfolio") and not (einziger.get("weights") or {}):
+            print(f"[Config] Speichern abgelehnt: {alt_n} Portfolios -> leeres "
+                  f"Mein Portfolio (Benutzer {user})")
+            return JSONResponse({"ok": False, "abgelehnt": "notbasket",
+                                 "error": f"Speichern abgelehnt: Der Server hat {alt_n} Portfolios, "
+                                          f"gesendet wurde nur ein leeres „Mein Portfolio“. "
+                                          f"Bitte die Seite neu laden."},
+                                status_code=409)
+
     gesperrt = []
     if request.query_params.get("quelle") != "screener":
         try:
-            gesperrt = _screener_protokolliere_entfernte(user, load_config(files["config"]), neu)
+            gesperrt = _screener_protokolliere_entfernte(user, alt, neu)
         except Exception as e:
             print(f"Blacklist-Protokoll fehlgeschlagen: {e}")   # Speichern geht trotzdem weiter
     save_config_data(files["config"], neu)

@@ -931,12 +931,23 @@ async function loadConfig() {
             currentBasket = keys.length > 0 ? keys[0] : '';
         }
 
-        // Neuer Basket falls keine vorhanden
+        // Ohne Basket ist die App nicht bedienbar — also einen anlegen, wenn
+        // keiner kam. Aber NUR im Speicher, NIEMALS zurückspeichern.
+        //
+        // Vorher stand hier ein `await saveBasketsToServer()`. Kam die Config
+        // aus irgendeinem Grund einmal leer an — der Server schaute in ein
+        // frisches Benutzerverzeichnis, ein Netzfehler, was auch immer —, dann
+        // schrieb die Oberfläche diesen leeren Stand ungefragt fest und die
+        // echten Baskets waren überschrieben. Genau das ist am 2026-09-14
+        // passiert. Ein Notbasket im Speicher kostet nichts: er entsteht bei
+        // jedem Laden neu und wird erst mit dem nächsten bewussten Speichern
+        // dauerhaft.
         if (Object.keys(baskets).length === 0) {
             var id = 'basket_' + Date.now();
             baskets[id] = { name: 'Mein Portfolio', weights: {}, period: 180, tf: '1D', indicators: { ma50: false, ma200: false, reg: false }, logScale: false };
             currentBasket = id;
-            await saveBasketsToServer();
+            logIt(2, 'Config', 'Keine Portfolios vom Server — Notbasket angelegt, '
+                  + 'NICHT gespeichert. Falls du welche hattest: nichts speichern, erst prüfen.');
         }
 
         chartPrefsLoad();   // vor loadBasketState: setzt Zeitraum, TF und Indikatoren
@@ -968,6 +979,16 @@ async function saveBasketsToServer(quelle) {
         // Aus einem Screener-Basket entfernte Werte wandern serverseitig auf die
         // Blacklist. Ins Protokoll, damit das nicht unsichtbar passiert.
         var res = await r.json();
+        // Der Server lehnt ab, wenn ein vorhandener Bestand an Portfolios durch
+        // nichts ersetzt werden soll. Das muss laut sein — sonst denkt man,
+        // gespeichert zu haben, und merkt den Verlust erst Tage später.
+        if (res && res.ok === false) {
+            logIt(1, 'Config', res.error || 'Speichern abgelehnt');
+            if (typeof alert === 'function' && res.abgelehnt) {
+                console.error('[Config] ' + res.error);
+            }
+            return res;
+        }
         var gesperrt = (res && res.blacklisted) || [];
         if (gesperrt.length && typeof logIt === 'function') {
             logIt(3, 'Screener', gesperrt.length + ' aussortiert und gesperrt: ' + gesperrt.join(', '));
