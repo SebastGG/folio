@@ -3297,6 +3297,21 @@ def _umsatz_kopfzeile(tab: list):
             bester, beste_z, bester_i = len(z), z, i
     return bester_i, beste_z
 
+def _saldo_richtung(umsaetze: list) -> int:
+    """Wie viele Übergänge erfüllen saldo[i] = saldo[i-1] + betrag[i]?
+
+    Damit lässt sich die Sortierrichtung einer Umsatzliste ablesen, ohne aufs
+    Datum angewiesen zu sein.
+    """
+    treffer = 0
+    for i in range(1, len(umsaetze)):
+        vor, ist = umsaetze[i - 1].get("saldo"), umsaetze[i].get("saldo")
+        if vor is None or ist is None:
+            continue
+        if abs((float(vor) + float(umsaetze[i].get("amount") or 0)) - float(ist)) < 0.011:
+            treffer += 1
+    return treffer
+
 def _umsatz_csv_parsen(text: str) -> dict:
     zeilen = [z for z in (text or "").splitlines() if z.strip()]
     if not zeilen:
@@ -3335,9 +3350,16 @@ def _umsatz_csv_parsen(text: str) -> dict:
     if not umsaetze:
         return {"ok": False, "error": "Keine Buchungen erkannt"}
 
-    # Viele Banken liefern die neueste Buchung zuerst — für den Saldoverlauf
-    # muss es aufsteigend sein. Innerhalb eines Tages bleibt die Dateireihenfolge.
-    if umsaetze[0]["date"] > umsaetze[-1]["date"]:
+    # Viele Banken liefern die neueste Buchung zuerst — für den Saldoverlauf muss
+    # es aufsteigend sein. Gibt es eine Saldospalte, sagt sie die Richtung genau:
+    # aufsteigend gilt saldo[i] = saldo[i-1] + betrag[i]. Das Datum allein reicht
+    # nicht, denn ein Export über einen einzigen Tag hat gar kein Gefälle — die
+    # Buchungen stünden dann verkehrt herum, und in die Kurve käme der Saldo der
+    # ÄLTESTEN statt der letzten Buchung des Tages.
+    if "saldo" in zuordnung and len(umsaetze) > 1:
+        if _saldo_richtung(umsaetze[::-1]) > _saldo_richtung(umsaetze):
+            umsaetze.reverse()
+    elif umsaetze[0]["date"] > umsaetze[-1]["date"]:
         umsaetze.reverse()
     for i, u in enumerate(umsaetze):
         u["seq"] = i
@@ -3611,16 +3633,25 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list) -> dict:
 
     # Erst den Kontostand nachziehen, wenn die Buchungen neuer sind als der
     # hinterlegte Stand — der Depot-Verlauf unten rechnet damit weiter.
+    #
+    # Ausnahme: ein Stand von 0 sagt nichts aus. Ein frisch angelegtes Konto trägt
+    # „0 € von heute", und der ist zwangsläufig neuer als jeder Auszug — ohne die
+    # Ausnahme bliebe der Kontostand 0 und die Vermögenskurve fiele nach dem
+    # Import auf null zurück. Die Platzhalter-Nullen danach fliegen mit raus.
     juengste = conn.execute(
         "SELECT date, saldo FROM account_transactions WHERE account_id = ? AND saldo IS NOT NULL "
         "ORDER BY date DESC, seq DESC, rowid DESC LIMIT 1", (account_id,)).fetchone()
     stand = None
-    if juengste and (not acc["balance_date"] or juengste["date"] >= acc["balance_date"]):
+    leer  = not float(acc["balance"] or 0) and not float(acc["valuation"] or 0)
+    if juengste and (not acc["balance_date"] or juengste["date"] >= acc["balance_date"] or leer):
         stand = float(juengste["saldo"])
         if acc["kind"] == "darlehen":
             stand = abs(stand)
         conn.execute("UPDATE accounts SET balance = ?, balance_date = ?, updated = ? WHERE id = ?",
                      (stand, juengste["date"], now, account_id))
+        if leer:
+            conn.execute("DELETE FROM account_history WHERE account_id = ? AND date > ? "
+                         "AND COALESCE(value, 0) = 0", (account_id, juengste["date"]))
         conn.commit()
         acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
 
