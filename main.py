@@ -3711,10 +3711,17 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         hinweise.extend(f"{kurz}: {h}" if gelesen and len(dateien) > 1 else h
                         for h in res.get("hinweise") or [])
 
-    if not alle:
-        return {"ok": False, "error": "; ".join(fehler) or "Keine Buchungen gefunden"}
+    # Ein buchungsfreier Monat ist kein Fehler: der Auszug bringt trotzdem einen
+    # Saldo mit Datum mit, und genau der ist dann das Einzige, was den Verlauf
+    # weiterträgt. Nur wenn auch kein Saldo dabei ist, gibt es nichts zu holen.
+    if not alle and not raender:
+        return {"ok": False, "error": "; ".join(fehler)
+                or "Weder Buchungen noch Salden gefunden"}
     if fehler:
         hinweise.extend(fehler)
+    if not alle:
+        hinweise.append("Keine Buchungen in diesem Zeitraum — übernommen werden nur "
+                        "die Salden.")
 
     # Doppelte aus überlappenden Dateien: über die Bankreferenz eindeutig.
     gesehen, sauber = set(), []
@@ -3830,7 +3837,7 @@ def _salden_fuellen(umsaetze: list, anker=None) -> list:
 
 # ── Speichern ──────────────────────────────────────────────────────────────────
 
-def _umsatz_verlauf_schreiben(conn, acc) -> int:
+def _umsatz_verlauf_schreiben(conn, acc) -> set:
     """Schreibt aus den gespeicherten Buchungen je Tag einen Stand in
     `account_history` — den Saldo der letzten Buchung des Tages.
 
@@ -3844,13 +3851,13 @@ def _umsatz_verlauf_schreiben(conn, acc) -> int:
     """
     if acc["kind"] == "depot":
         _write_account_history(conn, acc["id"], _account_value(conn, acc))
-        return 1
+        return {_heute()}
     rows = conn.execute(
         "SELECT date, saldo FROM account_transactions "
         "WHERE account_id = ? AND saldo IS NOT NULL ORDER BY date, seq, rowid",
         (acc["id"],)).fetchall()
     if not rows:
-        return 0
+        return set()
     je_tag = {}
     for r in rows:
         je_tag[r["date"]] = float(r["saldo"])
@@ -3858,7 +3865,7 @@ def _umsatz_verlauf_schreiben(conn, acc) -> int:
     for tag, saldo in je_tag.items():
         wert = abs(saldo) if acc["kind"] == "darlehen" else saldo
         _write_account_history(conn, acc["id"], wert * fx, tag)
-    return len(je_tag)
+    return set(je_tag)
 
 def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
                         salden: list = None) -> dict:
@@ -3905,6 +3912,7 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
 
     # Anfangs-/Schlusssalden der Dateien als eigene Stände ablegen. Beim Depot
     # nicht: dort hält account_history Verrechnungskonto PLUS Wertpapiere.
+    rand_tage = set()
     if acc["kind"] != "depot":
         fx = float(acc["fx_rate"] or 1.0)
         for datum, wert, _rolle in sorted(salden or [], key=_saldo_rang):
@@ -3912,6 +3920,7 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
                 continue
             w = abs(float(wert)) if acc["kind"] == "darlehen" else float(wert)
             _write_account_history(conn, account_id, w * fx, datum)
+            rand_tage.add(datum)
         conn.commit()
 
     # Erst den Kontostand nachziehen, wenn die Buchungen neuer sind als der
@@ -3946,7 +3955,7 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
         conn.commit()
         acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
 
-    tage = _umsatz_verlauf_schreiben(conn, acc)
+    tage = len(rand_tage | _umsatz_verlauf_schreiben(conn, acc))
     conn.commit()
     row = _account_row(conn, acc)
     conn.close()

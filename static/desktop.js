@@ -6628,7 +6628,7 @@ function renderUmsatzVorschau(id, res) {
           + (res.dateien > 1 ? ' aus ' + res.dateien + ' Dateien' : '')
           + ' (' + escHtml(res.quelle) + ')'
           + (res.von ? ', ' + escHtml(res.von) + ' bis ' + escHtml(res.bis) : '')
-          + ', Saldenänderung <b>' + fmtEurSign(res.summe || 0) + '</b>'
+          + (u.length ? ', Saldenänderung <b>' + fmtEurSign(res.summe || 0) + '</b>' : '')
           + (res.doppelt ? ', ' + res.doppelt + ' doppelte übersprungen' : '') + '.</p>';
     (res.hinweise || []).forEach(function(w) {
         h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + escHtml(w) + '</p>';
@@ -6638,14 +6638,25 @@ function renderUmsatzVorschau(id, res) {
            + ' Buchungen ohne Saldo — diese Tage kommen nicht in die Kurve.</p>';
     }
 
-    h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
-       + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
-       + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
-    u.slice(-60).reverse().forEach(function(x) {
-        h += _umsatzZeile(x);
-    });
-    h += '</tbody></table>';
-    if (u.length > 60) h += '<p class="settings-hint">… und ' + (u.length - 60) + ' weitere</p>';
+    // Anfangs- und Schlusssalden der Dateien. In einem buchungsfreien Monat ist
+    // das alles, was der Auszug hergibt — dann muss es erst recht dastehen.
+    if ((res.salden || []).length) {
+        h += '<p class="settings-hint">Salden aus den Dateien: '
+           + res.salden.map(function(s) {
+                 return escHtml(s[0]) + ' <b>' + fmtEur(s[1], 2) + '</b>';
+             }).join(' · ') + '</p>';
+    }
+
+    if (u.length) {
+        h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th><th>Wer</th>'
+           + '<th>Zweck</th><th style="text-align:right">Betrag</th>'
+           + '<th style="text-align:right">Saldo</th></tr></thead><tbody>';
+        u.slice(-60).reverse().forEach(function(x) {
+            h += _umsatzZeile(x);
+        });
+        h += '</tbody></table>';
+        if (u.length > 60) h += '<p class="settings-hint">… und ' + (u.length - 60) + ' weitere</p>';
+    }
 
     h += '<div class="settings-actions">'
        + '<button class="refresh-btn" onclick="kontenUmsatzUebernehmen(\'' + id + '\', this)">Übernehmen</button>'
