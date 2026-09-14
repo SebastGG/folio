@@ -3074,14 +3074,39 @@ _UMSATZ_MUSTER = [
     ("saldo",      (r"saldo nach", r"^saldo", r"kontostand", r"balance")),
     ("date",       (r"buchungstag", r"buchung", r"^datum", r"date")),
     ("valuta",     (r"valuta", r"wertstellung")),
-    ("amount",     (r"^betrag", r"betrag$", r"umsatz", r"^amount")),
+    # „Gesamtbetrag" zuerst: der Smartbroker-Auszug führt daneben Anlagebetrag,
+    # Gebühren, Steuern und Zinsen — nur der Gesamtbetrag ist das, was das
+    # Verrechnungskonto tatsächlich bewegt.
+    ("amount",     (r"gesamtbetrag", r"^betrag", r"betrag$", r"^umsatz", r"^amount",
+                    r"betrag")),
     ("soll_haben", (r"soll.?haben", r"^s/h", r"haben.?kennz", r"cdtdbtind")),
-    ("currency",   (r"w.?hrung", r"whg", r"currency")),
+    ("currency",   (r"kontow.?hrung", r"w.?hrung", r"whg", r"currency")),
     ("name",       (r"zahlungsbeteiligter", r"beg.?nstigter", r"auftraggeber",
                     r"zahlungspflichtiger", r"empf.?nger", r"^name", r"gegenkonto")),
     ("purpose",    (r"verwendungszweck", r"zweck", r"vwz", r"referenz")),
-    ("kind",       (r"buchungstext", r"umsatzart", r"vorgang", r"^art")),
+    ("kind",       (r"buchungstext", r"transaktionstyp", r"umsatzart", r"vorgang", r"^art")),
 ]
+
+# Vorzeichen aus der Umsatzart, wenn die Datei keine Minuszeichen mitbringt
+# (Smartbroker/Baader liefert die Beträge teils vorzeichenlos). Die Liste wird
+# der REIHE NACH geprüft — „Verkauf" enthält „kauf", und ein „Zinsabschlag" ist
+# eine Steuer, kein Zinsertrag.
+_UMSATZ_TYP_VORZEICHEN = [
+    (r"verkauf|ver.?u.?er",                                              +1),
+    (r"kauf|zeichnung|sparplan",                                         -1),
+    (r"steuer|abschlag|geb.?hr|entgelt|provision|pauschale|spesen",      -1),
+    (r"dividend|aussch.?tt|ertrag|zins|gutschrift|einzahlung|eingang|"
+     r"tilgung|r.?ckzahlung|erstattung",                                 +1),
+    (r"lastschrift|auszahlung|abbuchung|belastung|.?berweisung|entnahme", -1),
+]
+
+def _umsatz_typ_vorzeichen(typ: str) -> int:
+    """+1, -1 oder 0 (unbekannt) anhand der Umsatzart."""
+    t = (typ or "").lower()
+    for muster, vz in _UMSATZ_TYP_VORZEICHEN:
+        if re.search(muster, t):
+            return vz
+    return 0
 
 def _datum_iso(v):
     """'12.03.2026', '12.03.26', '2026-03-12', '2026-03-12T09:00:00' → '2026-03-12'."""
@@ -3274,15 +3299,22 @@ def _umsatz_camt_parsen(daten) -> dict:
 # ── CSV / Zwischenablage ───────────────────────────────────────────────────────
 
 def _spalten_zuordnen_umsatz(kopf: list) -> dict:
+    """Ordnet Kopfzeilen-Beschriftungen den bekannten Feldern zu. {feld: index}
+
+    Das Muster entscheidet vor der Spaltenposition: erst wird das beste Muster
+    über ALLE Spalten probiert, dann das nächste. Andersherum schnappte sich
+    „Anlagebetrag" die Rolle des Betrags, nur weil es weiter links steht als
+    „Gesamtbetrag".
+    """
+    titel = [t.strip().strip('"').lower() for t in kopf]
     zuordnung, belegt = {}, set()
     for feld, muster in _UMSATZ_MUSTER:
-        for i, titel in enumerate(kopf):
-            if i in belegt:
-                continue
-            t = titel.strip().strip('"').lower()
-            if any(re.search(m, t) for m in muster):
-                zuordnung[feld] = i
-                belegt.add(i)
+        for m in muster:
+            treffer = next((i for i, t in enumerate(titel)
+                            if i not in belegt and re.search(m, t)), None)
+            if treffer is not None:
+                zuordnung[feld] = treffer
+                belegt.add(treffer)
                 break
     return zuordnung
 
@@ -3313,11 +3345,21 @@ def _saldo_richtung(umsaetze: list) -> int:
     return treffer
 
 def _umsatz_csv_parsen(text: str) -> dict:
-    zeilen = [z for z in (text or "").splitlines() if z.strip()]
-    if not zeilen:
+    if not (text or "").strip():
         return {"ok": False, "error": "Kein Inhalt"}
     sep = _trennzeichen(text)
-    tab = [[f.strip().strip('"') for f in z.split(sep)] for z in zeilen]
+    # Mit dem csv-Modul statt split(): der Smartbroker-Auszug trennt mit Komma
+    # und setzt die Felder in Anführungszeichen — ein naives Zerlegen zerreißt
+    # dort jeden Betrag mit Dezimalkomma.
+    import csv as _csv, io as _io
+    try:
+        tab = [[f.strip() for f in z] for z in _csv.reader(_io.StringIO(text), delimiter=sep)
+               if any((f or "").strip() for f in z)]
+    except Exception:
+        tab = [[f.strip().strip('"') for f in z.split(sep)]
+               for z in text.splitlines() if z.strip()]
+    if not tab:
+        return {"ok": False, "error": "Kein Inhalt"}
     kopf_i, zuordnung = _umsatz_kopfzeile(tab)
     if kopf_i < 0:
         return {"ok": False, "error": "Spalten nicht erkannt — bitte mit Kopfzeile "
@@ -3350,6 +3392,29 @@ def _umsatz_csv_parsen(text: str) -> dict:
     if not umsaetze:
         return {"ok": False, "error": "Keine Buchungen erkannt"}
 
+    # Vorzeichen VOR der Richtungserkennung: die liest sich aus dem Verhältnis
+    # von Saldo und Betrag, und das stimmt nur mit richtigem Vorzeichen.
+    # Kommt die Datei ganz ohne Minuszeichen, muss es aus der Umsatzart kommen —
+    # sonst zählte ein Wertpapierkauf als Geldeingang.
+    if all((u["amount"] or 0) >= 0 for u in umsaetze) and "soll_haben" not in zuordnung:
+        if "kind" in zuordnung and any(_umsatz_typ_vorzeichen(u["kind"]) for u in umsaetze):
+            unklar = set()
+            for u in umsaetze:
+                vz = _umsatz_typ_vorzeichen(u["kind"])
+                if vz:
+                    u["amount"] = round(abs(u["amount"]) * vz, 2)
+                elif u["amount"]:
+                    unklar.add((u["kind"] or "?").strip())
+            hinweise.append("Die Datei führt keine Vorzeichen — sie stammen aus der Spalte "
+                            "„" + tab[kopf_i][zuordnung["kind"]] + "“. Bitte in der Vorschau "
+                            "prüfen, ob Ein- und Ausgänge richtig herum stehen.")
+            if unklar:
+                hinweise.append("Diese Umsatzarten kenne ich nicht, sie zählen als Eingang: "
+                                + ", ".join(sorted(unklar)[:8]) + ".")
+        else:
+            hinweise.append("Alle Beträge sind positiv und es gibt keine Soll/Haben-Spalte "
+                            "— bitte prüfen, ob die Abbuchungen fehlen.")
+
     # Viele Banken liefern die neueste Buchung zuerst — für den Saldoverlauf muss
     # es aufsteigend sein. Gibt es eine Saldospalte, sagt sie die Richtung genau:
     # aufsteigend gilt saldo[i] = saldo[i-1] + betrag[i]. Das Datum allein reicht
@@ -3367,9 +3432,6 @@ def _umsatz_csv_parsen(text: str) -> dict:
     if "saldo" not in zuordnung:
         hinweise.append("Keine Spalte „Saldo nach Buchung“ — der Verlauf wird vom "
                         "hinterlegten Kontostand rückwärts gerechnet.")
-    if "soll_haben" not in zuordnung and all((u["amount"] or 0) >= 0 for u in umsaetze):
-        hinweise.append("Alle Beträge sind positiv und es gibt keine Soll/Haben-Spalte "
-                        "— bitte prüfen, ob die Abbuchungen fehlen.")
     return {"ok": True, "quelle": "csv", "umsaetze": umsaetze,
             "spalten": tab[kopf_i], "zuordnung": zuordnung,
             "trennzeichen": {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[sep],

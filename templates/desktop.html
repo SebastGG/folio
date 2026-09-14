@@ -1173,6 +1173,9 @@
           Die Seite <b>Konten</b> nimmt alles auf, was nicht bei IBKR liegt: Girokonto,
           Tagesgeld, ein zweites Depot (etwa Smartbroker/Baader), Darlehen und Sachwerte.
           Zusammen mit dem IBKR-Depot ergibt das <b>Vermögen gesamt</b> — Schulden abgezogen.
+          Das IBKR-Depot steht in der Liste mit obenan, damit die Aufstellung vollständig ist;
+          gepflegt wird es aber weiter über den Flex-Sync auf der IBKR-Seite, darum führt dort
+          ein <i>Öffnen</i> statt eines <i>Bearbeiten</i> hin.
         </p>
         <dl class="help-def">
           <dt>Girokonto / Tagesgeld</dt>
@@ -1210,6 +1213,13 @@
               Fehlt sie, wird vom hinterlegten Kontostand rückwärts gerechnet, und das
               klappt nur, wenn der Stand nicht älter ist als die letzte Buchung. Wo nur CSV
               angeboten wird (Smartbroker), ist das der Weg.</dd>
+          <dt>Smartbroker/Baader</dt>
+          <dd>Der Transaktionsexport wird erkannt: Komma als Trennzeichen, Felder in
+              Anführungszeichen, und von den vier Betragsspalten zählt
+              <i>Gesamtbetrag in Kontowährung</i> — nur der bewegt das Verrechnungskonto.
+              Führt die Datei keine Minuszeichen, kommt das Vorzeichen aus der Spalte
+              <i>Transaktionstyp</i> (Kauf raus, Verkauf und Dividende rein). Das steht dann
+              als Hinweis über der Vorschau — bitte einmal durchsehen.</dd>
           <dt>Was geprüft wird</dt>
           <dd>Passt der Schlusssaldo nicht zu Anfangssaldo plus Buchungen, oder klafft
               zwischen zwei Dateien eine Lücke, sagt die Vorschau das — dann fehlen Tage im

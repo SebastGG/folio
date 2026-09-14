@@ -6030,14 +6030,32 @@ function renderKontenListe() {
     var el = document.getElementById('kontenListe');
     if (!el) return;
     var accs = kontenState.accounts || [];
-    if (!accs.length) {
-        el.innerHTML = '<div class="v-hint">Noch keine Konten angelegt. '
-                     + '„Konto anlegen" öffnet das Formular.</div>';
-        return;
-    }
     var h = '<table class="konten-tab"><thead><tr>'
           + '<th>Konto</th><th>Institut</th><th>Art</th><th style="text-align:right">Wert</th>'
           + '<th>Stand</th><th></th></tr></thead><tbody>';
+
+    // IBKR steht mit in der Liste, obwohl es kein Konto in `accounts` ist —
+    // sonst fehlt in der Aufstellung ausgerechnet der größte Posten. Gepflegt
+    // wird es nicht hier, sondern über den Flex-Sync; darum kein „Bearbeiten".
+    var ibkrPos  = ibkrPositionsIbkr();
+    var ibkrWert = ibkrPos.length ? kontenIbkrLive()
+                                  : ((kontenState.summary || {}).ibkr || 0);
+    if (ibkrWert || ibkrPos.length) {
+        h += '<tr>'
+           + '<td><b>IBKR-Depot</b>'
+           + (ibkrPos.length ? ' <span class="k-badge">' + ibkrPos.length + ' Titel</span>' : '')
+           + (ibkrPos.length ? ' <span class="k-badge">live</span>' : '')
+           + '</td>'
+           + '<td style="color:var(--muted)">Interactive Brokers</td>'
+           + '<td style="color:var(--muted)">Depot</td>'
+           + '<td style="text-align:right">' + fmtEur(ibkrWert) + '</td>'
+           + '<td style="color:var(--muted);font-size:10px">'
+           + escHtml(ibkrLastSync ? String(ibkrLastSync).slice(0, 10) : '—') + '</td>'
+           + '<td style="text-align:right"><button class="refresh-btn k-mini" '
+           + 'onclick="location.hash=\'#/ibkr\'">Öffnen</button></td>'
+           + '</tr>';
+    }
+
     accs.forEach(function(a) {
         var w = kontoWert(a);
         var minus = a.kind === 'darlehen';
@@ -6068,6 +6086,10 @@ function renderKontenListe() {
         }
     });
     h += '</tbody></table>';
+    if (!accs.length) {
+        h += '<div class="v-hint">Daneben ist noch nichts angelegt. '
+           + '„Konto anlegen" öffnet das Formular.</div>';
+    }
     el.innerHTML = h;
 }
 
