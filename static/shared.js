@@ -2135,6 +2135,17 @@ async function kontenUmsaetzeText(id, text, bestaetigt) {
     return await r.json();
 }
 
+/**
+ * Depotverlauf aus Bestand und Buchungen rückwärts rechnen. Ohne `schreiben`
+ * ist es eine reine Probe — dann lässt sich vorher sehen, ob die Gegenproben
+ * aufgehen, bevor der Verlauf überschrieben wird.
+ */
+async function kontenRueckrechnung(id, schreiben) {
+    var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/rueckrechnung'
+                        + (schreiben ? '' : '?probe=1'), { method: 'POST' });
+    return await r.json();
+}
+
 async function kontenUmsaetzeLoeschen(id) {
     var r = await fetch('/api/konten/' + encodeURIComponent(id) + '/umsaetze',
                         { method: 'DELETE' });

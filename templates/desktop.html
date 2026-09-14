@@ -1242,7 +1242,29 @@
           <dt>Depot</dt>
           <dd>Dort betreffen die Umsätze nur das Verrechnungskonto. Der Verlauf bekommt
               deshalb keine Tagessalden — sonst fielen die Wertpapiere rückwirkend aus der
-              Kurve; der Depotwert kommt weiter aus dem Depotauszug.</dd>
+              Kurve; der Depotwert kommt aus dem Depotauszug. Für die Vergangenheit gibt es
+              <b>Depotverlauf zurückrechnen</b>, siehe unten.</dd>
+        </dl>
+        <p>
+          <b>Depotverlauf zurückrechnen</b> — die Kurve eines weiteren Depots beginnt sonst
+          an dem Tag, an dem du den Bestand eingelesen hast. Sie lässt sich aber rückwärts
+          herstellen, denn jede Veränderung steht in den Auszügen:
+          <i>Bestand(t) = Bestand heute − alle Käufe und Verkäufe danach</i>. Bewertet wird
+          mit den Kursen, die folio ohnehin gespeichert hat; das Verrechnungskonto kommt aus
+          den Salden der Buchungen. Voraussetzung ist, dass die Auszüge <b>lückenlos</b>
+          sind — deshalb gibt es erst <i>Prüfen</i> und danach <i>In den Verlauf schreiben</i>.
+        </p>
+        <dl class="help-def">
+          <dt>Die Gegenproben</dt>
+          <dd>Vor der ersten bekannten Wertpapierbuchung muss das Depot leer sein. Bleibt
+              dort ein Bestand übrig, fehlen Auszüge, und folio sagt genau, wie viele Stück
+              von welcher ISIN. Zweitens muss der errechnete Wert von heute dem Depotauszug
+              entsprechen; weicht er ab, fehlen meist Kurse für einen Titel. Beides steht in
+              der Vorschau, bevor irgendetwas geschrieben wird.</dd>
+          <dt>Was geschrieben wird</dt>
+          <dd>Je Tag ein Stand im Verlauf dieses Kontos, vom ältesten bekannten Tag bis
+              heute. Von Hand nachgetragene Stände in diesem Zeitraum werden dabei ersetzt —
+              die Rechnung gilt als die genauere Quelle.</dd>
         </dl>
         <p class="help-tip">
           <b>Die Entwicklung über die Zeit</b> entsteht auch ohne Import dadurch, dass die Seite

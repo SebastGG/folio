@@ -6154,6 +6154,7 @@ function renderKontenFormular() {
     if (!neu) {
         if (a.kind === 'depot') h += '<div class="settings-card" id="k-import-karte"></div>';
         if (mitUmsatz)          h += '<div class="settings-card" id="k-umsatz-karte"></div>';
+        if (a.kind === 'depot') h += '<div class="settings-card" id="k-rueck-karte"></div>';
         h += '<div class="settings-card" id="k-verlauf-karte"></div>';
     }
     el.innerHTML = h;
@@ -6161,6 +6162,7 @@ function renderKontenFormular() {
     if (!neu) {
         if (a.kind === 'depot') renderKontenImportKarte(a);
         if (mitUmsatz)          renderKontenUmsatzKarte(a);
+        if (a.kind === 'depot') renderRueckrechnungKarte(a);
         renderKontenVerlaufKarte(a);
     }
 }
@@ -6786,6 +6788,88 @@ async function renderUmsatzListe(a) {
     h += '<div class="settings-actions"><button class="refresh-btn k-mini" '
        + 'onclick="kontenUmsaetzeWeg(\'' + a.id + '\')">Buchungen verwerfen</button>'
        + '<span class="settings-hint" style="margin:0">der eingetragene Verlauf bleibt stehen</span></div>';
+    el.innerHTML = h;
+}
+
+// ── Depotverlauf rückwärts rechnen ───────────────────────────────────────────
+// Was heute im Depot liegt, sagt der Depotauszug; was früher drinlag, steht
+// nirgends. Es lässt sich aber ausrechnen: Bestand heute minus alle Käufe und
+// Verkäufe danach, bewertet mit den Kursen aus folios Datenbank.
+
+function renderRueckrechnungKarte(a) {
+    var el = document.getElementById('k-rueck-karte');
+    if (!el) return;
+    el.innerHTML = '<h2 class="settings-h">Depotverlauf zurückrechnen</h2>'
+        + '<p class="settings-hint">Aus dem heutigen Bestand und den Käufen und Verkäufen '
+        + 'in den Buchungen entsteht der Depotwert für jeden Tag rückwärts — bewertet mit '
+        + 'den Kursen, die folio ohnehin hat. Ohne das beginnt die Kurve eines Depots erst '
+        + 'heute. <b>Erst prüfen</b>: die Rechnung sagt selbst, ob sie aufgeht.</p>'
+        + '<div class="settings-actions">'
+        + '<button class="refresh-btn" onclick="kontenRueckKlick(\'' + a.id + '\', this, false)">Prüfen</button>'
+        + '<span id="k-rueck-msg" class="settings-msg"></span></div>'
+        + '<div id="k-rueck-ergebnis"></div>';
+}
+
+async function kontenRueckKlick(id, btn, schreiben) {
+    var msg = document.getElementById('k-rueck-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    btn.disabled = true;
+    setMsg(schreiben ? 'Schreibe…' : 'Rechne…', 'run');
+    try {
+        var res = await kontenRueckrechnung(id, schreiben);
+        if (!res.ok) { setMsg(res.error || 'Fehler', 'err'); return; }
+        setMsg('', '');
+        logIt(3, 'Konten', (schreiben ? 'Verlauf geschrieben: ' : 'Probe: ')
+              + res.tage + ' Tage, ' + res.trades + ' Buchungen, ' + res.titel + ' Titel');
+        renderRueckErgebnis(id, res, schreiben);
+        if (schreiben) await kontenLoad();
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function renderRueckErgebnis(id, res, geschrieben) {
+    var el = document.getElementById('k-rueck-ergebnis');
+    if (!el) return;
+    var stimmt = Math.abs((res.heute_errechnet || 0) - (res.heute_auszug || 0)) < 0.01;
+    var h = '<p class="settings-hint">' + res.tage + ' Tage von ' + escHtml(res.von) + ' bis '
+          + escHtml(res.bis) + ', aus ' + res.trades + ' Wertpapierbuchungen über '
+          + res.titel + ' Titel.</p>'
+          + '<div class="k-prognose">Heute errechnet <b>' + fmtEur(res.heute_errechnet, 2)
+          + '</b> · laut Depotauszug <b>' + fmtEur(res.heute_auszug, 2) + '</b>'
+          + (stimmt ? ' <span style="color:var(--green)">✓ deckungsgleich</span>'
+                    : ' <span style="color:var(--red)">Abweichung '
+                      + fmtEurSign((res.heute_errechnet || 0) - (res.heute_auszug || 0), 2)
+                      + '</span>') + '</div>';
+    (res.warnungen || []).forEach(function(w) {
+        h += '<p class="settings-hint" style="color:var(--red)">⚠ ' + escHtml(w) + '</p>';
+    });
+    // Die letzten Tage zum Draufschauen
+    var reihe = (res.reihe || []).slice(-14).reverse();
+    if (reihe.length) {
+        h += '<table class="konten-tab k-umsatz-tab"><thead><tr><th>Tag</th>'
+           + '<th style="text-align:right">Wertpapiere</th>'
+           + '<th style="text-align:right">Verrechnungskonto</th>'
+           + '<th style="text-align:right">Zusammen</th></tr></thead><tbody>';
+        reihe.forEach(function(x) {
+            h += '<tr><td>' + escHtml(x.date) + '</td>'
+               + '<td style="text-align:right">' + fmtEur(x.wertpapiere, 2) + '</td>'
+               + '<td style="text-align:right;color:var(--muted)">' + fmtEur(x.bargeld, 2) + '</td>'
+               + '<td style="text-align:right"><b>' + fmtEur(x.total, 2) + '</b></td></tr>';
+        });
+        h += '</tbody></table>';
+    }
+    if (!geschrieben) {
+        h += '<div class="settings-actions">'
+           + '<button class="refresh-btn" onclick="kontenRueckKlick(\'' + id + '\', this, true)">'
+           + 'In den Verlauf schreiben</button>'
+           + '<span class="settings-hint" style="margin:0">ersetzt die Stände dieses Kontos '
+           + 'im gerechneten Zeitraum</span></div>';
+    } else {
+        h += '<p class="settings-hint" style="color:var(--green)">✓ In den Verlauf geschrieben.</p>';
+    }
     el.innerHTML = h;
 }
 

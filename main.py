@@ -2622,6 +2622,17 @@ def _init_account_tables(db_file: str):
             pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_acc_tx_datum "
                  "ON account_transactions (account_id, date)")
+    # Kontostände des Verrechnungskontos aus den Auszügen (OPBD/CLBD).
+    # Beim Depot gehören die NICHT in account_history — dort steht der
+    # Gesamtbeitrag inklusive Wertpapiere. Für die Rückrechnung werden sie
+    # trotzdem gebraucht, und in einem buchungsfreien Monat sind sie das
+    # Einzige, was über den Zeitraum bekannt ist.
+    conn.execute('''CREATE TABLE IF NOT EXISTS account_cash_balances (
+        account_id TEXT,
+        date       TEXT,
+        saldo      REAL,
+        PRIMARY KEY (account_id, date)
+    )''')
     conn.commit()
     conn.close()
 
@@ -2852,6 +2863,8 @@ async def konten_delete(account_id: str, request: Request):
     conn.execute("DELETE FROM accounts         WHERE id = ?",         (account_id,))
     conn.execute("DELETE FROM account_history  WHERE account_id = ?", (account_id,))
     conn.execute("DELETE FROM depot_positions  WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM account_transactions  WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM account_cash_balances WHERE account_id = ?", (account_id,))
     # Verweise von Darlehen auf einen gelöschten Sachwert aufräumen
     conn.execute("UPDATE accounts SET asset_id = NULL WHERE asset_id = ?", (account_id,))
     conn.commit()
@@ -3234,6 +3247,25 @@ _STUECK_RICHTUNG = [
 # Geldbuchungen, bei denen manche Banken trotzdem eine Stückzahl mitdrucken
 _NUR_GELD = (r"dividend|aussch.?tt|zins|ertrag|steuer|geb.?hr|entgelt|"
              r".?berweisung|lastschrift|gutschrift|einzahlung|auszahlung")
+
+def _wertpapier_aus_text(u: dict):
+    """Holt ISIN und Stückzahl aus Zweck und Name, falls die Quelle sie nicht
+    als eigene Felder liefert.
+
+    Der Transaktionsexport hat eigene Spalten; camt und der PDF-Kontoauszug
+    schreiben beides in den Text („ISIN IE00B5BMR087  STK 35"). Aus diesen
+    Angaben entsteht der Bestandsverlauf, siehe `_depot_rueckrechnung`.
+    """
+    text = " ".join(x for x in (u.get("purpose"), u.get("name"), u.get("kind")) if x)
+    if not u.get("isin"):
+        m = re.search(r"\bISIN[:\s]+([A-Z]{2}[A-Z0-9]{9}\d)\b", text)
+        if m:
+            u["isin"] = m.group(1)
+    if not u.get("quantity"):
+        m = re.search(r"\b(?:STK|ST|STCK|STÜCK|STUECK|NOM)\.?[:\s]+([\d.]*\d(?:,\d+)?)\b",
+                      text, re.I)
+        if m:
+            u["quantity"] = _de_num(m.group(1))
 
 def _stueck_richtung(typ: str, betrag: float) -> int:
     """+1 = Stücke kommen ins Depot, -1 = gehen heraus, 0 = keine Bestandsänderung.
@@ -3695,14 +3727,9 @@ def _umsatz_pdf_parsen(daten: bytes) -> dict:
         m = re.search(r"Vorgangs-?Nr\.?:?\s*([A-Z0-9 ]{6,40})", text, re.I)
         if m:
             u["ref"] = re.sub(r"\s+", "", m.group(1))
-        # ISIN und Stückzahl stehen im Auszug als eigene Zeilen unter der Buchung.
-        # Aus ihnen entsteht später der Bestandsverlauf (_depot_rueckrechnung).
-        m = re.search(r"\bISIN\s+([A-Z]{2}[A-Z0-9]{9}\d)\b", text)
-        if m:
-            u["isin"] = m.group(1)
-        m = re.search(r"\b(?:STK|ST\.|NOM)\.?\s+([\d.]*\d(?:,\d+)?)", text)
-        if m:
-            u["quantity"] = _de_num(m.group(1))
+        # ISIN und Stückzahl holt _wertpapier_aus_text zentral heraus — im PDF
+        # stehen sie als eigene Zeilen unter der Buchung, im camt im
+        # Verwendungszweck, und beides landet hier im selben Feld.
 
     if not umsaetze and not salden:
         return {"ok": False, "error": "Im PDF wurden weder Buchungen noch Salden gefunden — "
@@ -3840,6 +3867,11 @@ def _umsaetze_sammeln(dateien: list) -> dict:
     if not alle:
         hinweise.append("Keine Buchungen in diesem Zeitraum — übernommen werden nur "
                         "die Salden.")
+
+    # Wertpapierangaben aus dem Text nachziehen, wo die Quelle keine eigenen
+    # Spalten hat (camt und PDF schreiben ISIN und Stückzahl in den Text).
+    for u in alle:
+        _wertpapier_aus_text(u)
 
     # Stückzahlen mit Richtung versehen: Kauf bringt Stücke ins Depot, Verkauf
     # holt sie heraus. Die Umsatzart entscheidet, nicht das Geld allein.
@@ -4042,15 +4074,19 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
     # Anfangs-/Schlusssalden der Dateien als eigene Stände ablegen. Beim Depot
     # nicht: dort hält account_history Verrechnungskonto PLUS Wertpapiere.
     rand_tage = set()
-    if acc["kind"] != "depot":
-        fx = float(acc["fx_rate"] or 1.0)
-        for datum, wert, _rolle in sorted(salden or [], key=_saldo_rang):
-            if not datum:
-                continue
+    fx = float(acc["fx_rate"] or 1.0)
+    for datum, wert, _rolle in sorted(salden or [], key=_saldo_rang):
+        if not datum:
+            continue
+        # Der reine Kontostand — für jede Kontoart, auch fürs Depot.
+        conn.execute("INSERT INTO account_cash_balances (account_id, date, saldo) "
+                     "VALUES (?,?,?) ON CONFLICT(account_id, date) DO UPDATE SET "
+                     "saldo = excluded.saldo", (account_id, datum, float(wert)))
+        if acc["kind"] != "depot":
             w = abs(float(wert)) if acc["kind"] == "darlehen" else float(wert)
             _write_account_history(conn, account_id, w * fx, datum)
             rand_tage.add(datum)
-        conn.commit()
+    conn.commit()
 
     # Erst den Kontostand nachziehen, wenn die Buchungen neuer sind als der
     # hinterlegte Stand — der Depot-Verlauf unten rechnet damit weiter.
@@ -4155,7 +4191,8 @@ async def konten_umsaetze_loeschen(account_id: str, request: Request):
     files = get_user_files(user)
     _init_account_tables(files["db"])
     conn = get_db(files["db"])
-    conn.execute("DELETE FROM account_transactions WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM account_transactions  WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM account_cash_balances WHERE account_id = ?", (account_id,))
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
@@ -4212,6 +4249,228 @@ async def konten_umsaetze_dateien(account_id: str, request: Request,
                                   res["umsaetze"], res.get("salden"))
     erg["hinweise"] = res["hinweise"]
     return JSONResponse(erg, status_code=erg.pop("status", 200))
+
+# ── Depotverlauf rückwärts rechnen ─────────────────────────────────────────────
+# Ein Depot ist Verrechnungskonto + Wertpapiere. Was heute drinliegt, weiß folio
+# aus dem Depotauszug; was früher drinlag, hat niemand aufgeschrieben. Es lässt
+# sich aber ausrechnen, denn jede Veränderung steht in den Kontoauszügen:
+#
+#     Bestand(t) = Bestand heute − alle Käufe/Verkäufe nach t
+#
+# Bewertet wird mit den Kursen aus folios eigener Datenbank. Dasselbe Verfahren
+# nutzt die App bereits für die IBKR-Trades.
+#
+# Die Rechnung trägt ihre eigene Prüfung: läuft sie vor der ersten bekannten
+# Buchung nicht auf null aus, fehlen Auszüge — dann wird gewarnt, statt eine
+# hübsche, falsche Kurve zu zeichnen.
+
+def _depot_symbol(conn, isin: str, symbol_fallback: str = "") -> str:
+    """ISIN → Yahoo-Symbol über dieselbe isin_map wie die IBKR-Positionen."""
+    if isin:
+        r = conn.execute("SELECT yahoo_symbol FROM isin_map WHERE isin = ?", (isin,)).fetchone()
+        if r and r["yahoo_symbol"]:
+            return r["yahoo_symbol"]
+    return (symbol_fallback or "").upper()
+
+def _kurse_je_tag(conn, symbol: str) -> list:
+    """Alle bekannten Schlusskurse eines Symbols, aufsteigend. [(datum, kurs)]"""
+    return [(r["date"], float(r["close"])) for r in conn.execute(
+        "SELECT date, close FROM prices WHERE ticker = ? AND close > 0 ORDER BY date",
+        (symbol,)).fetchall()]
+
+def _tage_zwischen(von: str, bis: str):
+    """Alle Kalendertage von..bis einschließlich, als JJJJ-MM-TT."""
+    from datetime import date, timedelta
+    j, m, t = (int(x) for x in von.split("-"))
+    d, ende = date(j, m, t), bis
+    while True:
+        s = d.isoformat()
+        yield s
+        if s >= ende:
+            return
+        d += timedelta(days=1)
+
+def _depot_bargeld_reihe(conn, account_id: str, von: str, bis: str) -> dict:
+    """Verrechnungskonto je Tag, aus den Salden der Buchungen vorwärts gefüllt.
+
+    Vor der ersten Buchung gilt deren Saldo minus deren Betrag — das ist der
+    Stand, mit dem der Zeitraum begonnen hat.
+    """
+    rows = conn.execute(
+        "SELECT date, saldo, amount FROM account_transactions "
+        "WHERE account_id = ? AND saldo IS NOT NULL ORDER BY date, seq, rowid",
+        (account_id,)).fetchall()
+    # Kontostände aus den Auszügen zuerst — Buchungen überschreiben sie gleich
+    # wieder, denn am selben Tag ist der Stand NACH der Buchung der genauere.
+    je_tag = {r["date"]: float(r["saldo"]) for r in conn.execute(
+        "SELECT date, saldo FROM account_cash_balances WHERE account_id = ? ORDER BY date",
+        (account_id,)).fetchall()}
+    if not rows and not je_tag:
+        return {}
+    start = None
+    if rows:
+        start = float(rows[0]["saldo"]) - float(rows[0]["amount"] or 0)
+    for r in rows:
+        je_tag[r["date"]] = float(r["saldo"])
+    if start is None:
+        start = je_tag[min(je_tag)]
+    reihe, stand = {}, start
+    for tag in _tage_zwischen(von, bis):
+        if tag in je_tag:
+            stand = je_tag[tag]
+        reihe[tag] = stand
+    return reihe
+
+def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) -> dict:
+    """Rechnet den Wertpapierbestand rückwärts und schreibt den Depotverlauf."""
+    _init_account_tables(db_file)
+    conn = get_db(db_file)
+    acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    if not acc:
+        conn.close()
+        return {"ok": False, "error": "Konto nicht gefunden", "status": 404}
+    if acc["kind"] != "depot":
+        conn.close()
+        return {"ok": False, "status": 400,
+                "error": "Die Rückrechnung gibt es nur für Depotkonten"}
+
+    # Heutiger Bestand je ISIN + das Symbol, unter dem die Kurse liegen
+    heute_bestand, symbole, fx = {}, {}, {}
+    for p in conn.execute("SELECT * FROM depot_positions WHERE account_id = ?",
+                          (account_id,)).fetchall():
+        key = (p["isin"] or p["symbol"] or "").upper()
+        if not key:
+            continue
+        heute_bestand[key] = heute_bestand.get(key, 0.0) + float(p["quantity"] or 0)
+        symbole[key] = p["yahoo_symbol"] or _depot_symbol(conn, p["isin"], p["symbol"])
+        fx[key] = float(p["fx_rate_to_base"] or 1.0)
+
+    # Buchungen mit Stückzahl — daraus entstehen die Veränderungen
+    trades = conn.execute(
+        "SELECT date, isin, quantity, name FROM account_transactions "
+        "WHERE account_id = ? AND quantity IS NOT NULL AND quantity <> 0 "
+        "AND isin IS NOT NULL ORDER BY date, seq, rowid", (account_id,)).fetchall()
+    if not trades:
+        conn.close()
+        return {"ok": False, "status": 400,
+                "error": "Keine Buchungen mit Stückzahl vorhanden — bitte zuerst die "
+                         "Kontoauszüge einlesen."}
+
+    for t in trades:
+        key = (t["isin"] or "").upper()
+        symbole.setdefault(key, _depot_symbol(conn, key))
+        fx.setdefault(key, 1.0)
+        heute_bestand.setdefault(key, 0.0)
+
+    # Zeitraum: so weit zurück, wie über dieses Konto überhaupt etwas bekannt ist
+    # — nicht erst ab der ersten Wertpapierbuchung. Sonst fehlt der Blick auf den
+    # Bestand DAVOR, und genau der ist bei einem Verkauf die interessante Hälfte.
+    grenzen = [min(t["date"] for t in trades)]
+    for sql in ("SELECT MIN(date) AS d FROM account_transactions WHERE account_id = ?",
+                "SELECT MIN(date) AS d FROM account_cash_balances WHERE account_id = ?",
+                "SELECT MIN(date) AS d FROM account_history WHERE account_id = ?"):
+        r = conn.execute(sql, (account_id,)).fetchone()
+        if r and r["d"]:
+            grenzen.append(r["d"])
+    von = min(grenzen)
+    bis = _heute()
+    warnungen = []
+
+    # Rückwärts: am Ende jedes Tages den Bestand festhalten, dann die Buchungen
+    # dieses Tages wieder herausrechnen — übrig bleibt der Stand vom Vortag.
+    trades_je_tag = {}
+    for t in trades:
+        trades_je_tag.setdefault(t["date"], []).append(
+            ((t["isin"] or "").upper(), float(t["quantity"])))
+
+    laufend = dict(heute_bestand)
+    bestand_je_tag = {}
+    for tag in reversed(list(_tage_zwischen(von, bis))):
+        bestand_je_tag[tag] = dict(laufend)
+        for key, menge in trades_je_tag.get(tag, []):
+            laufend[key] = laufend.get(key, 0.0) - menge
+
+    # Gegenprobe: vor der ersten bekannten Buchung muss das Depot leer sein.
+    offen = {k: round(v, 4) for k, v in laufend.items() if abs(v) > 0.0001}
+    if offen:
+        erster_trade = min(t["date"] for t in trades)
+        warnungen.append(
+            "Vor der ersten bekannten Wertpapierbuchung (" + erster_trade + ") bleibt ein "
+            "Bestand übrig ("
+            + ", ".join(f"{k}: {v:g} Stück" for k, v in sorted(offen.items())[:5])
+            + "). Es fehlen Auszüge — davor wird dieser Bestand als unverändert "
+              "angenommen, der Verlauf dort ist also nur eine Schätzung.")
+
+    # Kurse je Symbol, vorwärts gefüllt (Wochenenden, Feiertage)
+    kurse = {}
+    for key, sym in symbole.items():
+        if not sym:
+            warnungen.append(f"Für {key} ist kein Kurssymbol hinterlegt — "
+                             f"die Position wird mit 0 bewertet.")
+            continue
+        reihe = _kurse_je_tag(conn, sym)
+        if not reihe:
+            warnungen.append(f"Für {sym} ({key}) liegen keine Kurse in der Datenbank — "
+                             f"die Position wird mit 0 bewertet.")
+            continue
+        if reihe[0][0] > von:
+            warnungen.append(f"Kurse für {sym} beginnen erst am {reihe[0][0]}, der Verlauf "
+                             f"davor bewertet diese Position mit 0.")
+        kurse[key] = reihe
+
+    def kurs(key, tag):
+        reihe = kurse.get(key)
+        if not reihe:
+            return 0.0
+        # letzter Kurs am oder vor dem Tag
+        lo, hi, treffer = 0, len(reihe) - 1, None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if reihe[mid][0] <= tag:
+                treffer, lo = reihe[mid][1], mid + 1
+            else:
+                hi = mid - 1
+        return treffer or 0.0
+
+    bargeld = _depot_bargeld_reihe(conn, account_id, von, bis)
+    reihe_out, geschrieben = [], 0
+    for tag in _tage_zwischen(von, bis):
+        wp = sum(menge * kurs(key, tag) * fx.get(key, 1.0)
+                 for key, menge in bestand_je_tag.get(tag, {}).items() if menge)
+        gesamt = wp + bargeld.get(tag, 0.0)
+        reihe_out.append({"date": tag, "wertpapiere": round(wp, 2),
+                          "bargeld": round(bargeld.get(tag, 0.0), 2),
+                          "total": round(gesamt, 2)})
+        if schreiben:
+            _write_account_history(conn, account_id, gesamt, tag)
+            geschrieben += 1
+    if schreiben:
+        conn.commit()
+
+    # Kontrolle gegen den heutigen Stand aus dem Depotauszug
+    heute_soll = _account_value(conn, acc)
+    heute_ist  = reihe_out[-1]["total"] if reihe_out else 0.0
+    if abs(heute_soll - heute_ist) > max(1.0, abs(heute_soll) * 0.01):
+        warnungen.append(f"Der errechnete Wert von heute ({heute_ist:,.2f}) weicht vom "
+                         f"Depotauszug ({heute_soll:,.2f}) ab. Meist fehlen Kurse für "
+                         f"einen Titel.")
+    conn.close()
+    return {"ok": True, "von": von, "bis": bis, "tage": geschrieben,
+            "trades": len(trades), "titel": len([s for s in symbole.values() if s]),
+            "warnungen": warnungen, "reihe": reihe_out[-90:],
+            "heute_errechnet": round(heute_ist, 2), "heute_auszug": round(heute_soll, 2)}
+
+@app.post("/api/konten/{account_id}/rueckrechnung")
+async def konten_rueckrechnung(account_id: str, request: Request, probe: str = ""):
+    """Depotverlauf aus Bestand und Buchungen rückwärts rechnen.
+
+    Mit `probe=1` wird nur gerechnet und nichts geschrieben — dann lässt sich
+    vorher sehen, ob die Gegenproben aufgehen.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    res = await run_in_threadpool(_depot_rueckrechnung, files["db"], account_id, not probe)
+    return JSONResponse(res, status_code=res.pop("status", 200))
 
 @app.get("/api/vermoegen")
 async def vermoegen(request: Request, ibkr: str = ""):
