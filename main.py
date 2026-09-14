@@ -3461,9 +3461,172 @@ def _umsatz_csv_parsen(text: str) -> dict:
             "trennzeichen": {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[sep],
             "eroeffnung": None, "schluss": None, "hinweise": hinweise}
 
+# ── Kontoauszug als PDF ────────────────────────────────────────────────────────
+# Smartbroker/Baader gibt für das Verrechnungskonto keine Umsatz-CSV aus, nur den
+# monatlichen Kontoauszug als PDF. Der trägt aber alles, was gebraucht wird:
+# Anfangs- und Schlusssaldo mit Datum und die Buchungen dazwischen.
+#
+# Gelesen wird im LAYOUT-Modus von pypdf. Im normalen Textmodus purzeln die
+# Spalten durcheinander, und genau daran hängt hier das Vorzeichen: ob ein Betrag
+# eine Belastung oder eine Gutschrift ist, sagt allein seine waagerechte Lage.
+# Darum wird aus der Kopfzeile die Grenze zwischen beiden Spalten bestimmt und
+# jeder Betrag danach eingeordnet.
+
+_PDF_SOLL  = (r"belastung", r"\bsoll\b", r"abgang", r"ausgang", r"lastschrift")
+_PDF_HABEN = (r"gutschrift", r"\bhaben\b", r"zugang", r"eingang")
+_PDF_BETRAG = r"(?<![\d.,])\d{1,3}(?:\.\d{3})*,\d{2}(?![\d])"
+_PDF_DATUM  = r"\d{2}\.\d{2}\.\d{4}"
+
+def _pdf_spaltengrenze(zeile: str):
+    """Aus einer Kopfzeile die Grenze zwischen Soll- und Habenspalte. → (grenze, ok)
+
+    Maßgeblich ist das ENDE der Beschriftung, weil die Beträge rechtsbündig
+    stehen. Die Grenze liegt in der Mitte zwischen beiden Enden.
+    """
+    t = zeile.lower()
+    soll  = next((re.search(m, t) for m in _PDF_SOLL  if re.search(m, t)), None)
+    haben = next((re.search(m, t) for m in _PDF_HABEN if re.search(m, t)), None)
+    if not soll or not haben or soll.end() == haben.end():
+        return (None, False)
+    return ((soll.end() + haben.end()) / 2.0, soll.end() < haben.end())
+
+def _pdf_vorzeichen(ende: int, grenze: float, soll_links: bool) -> int:
+    """Betrag links der Grenze = Soll, rechts = Haben (oder umgekehrt)."""
+    links = ende <= grenze
+    return -1 if links == soll_links else 1
+
+def _umsatz_pdf_parsen(daten: bytes) -> dict:
+    """Liest einen Kontoauszug im PDF-Format (Baader/Smartbroker-Bauart)."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return {"ok": False, "error": "PDF-Unterstützung fehlt auf dem Server (pypdf)."}
+    import io as _io
+    try:
+        leser = PdfReader(_io.BytesIO(daten))
+        seiten = [(s.extract_text(extraction_mode="layout") or "") for s in leser.pages]
+    except Exception as e:
+        return {"ok": False, "error": f"PDF nicht lesbar: {e}"}
+
+    zeilen = [z for s in seiten for z in s.splitlines()]
+    if not any(z.strip() for z in zeilen):
+        return {"ok": False, "error": "Der Auszug enthält keinen Text — ist er eingescannt?"}
+
+    grenze, soll_links, hinweise = None, True, []
+    for z in zeilen:
+        g, sl = _pdf_spaltengrenze(z)
+        if g is not None:
+            grenze, soll_links = g, sl
+            break
+
+    iban = ""
+    m = re.search(r"IBAN[:\s]+((?:[A-Z]{2}\d{2}\s?)(?:[A-Z0-9]{4}\s?){2,7}[A-Z0-9]{0,4})", "\n".join(zeilen))
+    if m:
+        iban = m.group(1).replace(" ", "").upper()
+    waehrung = "EUR"
+    m = re.search(r"Kontoauszug[:\s]+([A-Z]{3})-Konto", "\n".join(zeilen))
+    if m:
+        waehrung = m.group(1)
+
+    def betrag_aus(zeile):
+        """Letzter Betrag der Zeile samt Vorzeichen aus der Spaltenlage."""
+        treffer = list(re.finditer(_PDF_BETRAG, zeile))
+        if not treffer:
+            return None
+        letzter = treffer[-1]
+        wert = _de_num(letzter.group())
+        if wert is None:
+            return None
+        if grenze is None:
+            return wert
+        return abs(wert) * _pdf_vorzeichen(letzter.end(), grenze, soll_links)
+
+    salden, umsaetze = [], []
+    offen = None          # Buchung, die gerade noch Fortsetzungszeilen annimmt
+    for seite in seiten:
+        offen = None      # Seitenwechsel beendet den Block (darunter steht die Fußzeile)
+        for z in seite.splitlines():
+            if not z.strip():
+                continue
+            # Saldozeile: „Kontostand in EUR am 31.07.2026"
+            m = re.search(r"(?:kontostand|kontosaldo|saldo)\b[^\d]*?(" + _PDF_DATUM + ")", z, re.I)
+            if m and re.search(_PDF_BETRAG, z):
+                wert = betrag_aus(z)
+                if wert is not None:
+                    salden.append((_datum_iso(m.group(1)), wert))
+                offen = None
+                continue
+            # Buchungszeile: beginnt mit dem Buchungstag
+            m = re.match(r"\s*(" + _PDF_DATUM + r")\s", z)
+            if m:
+                wert = betrag_aus(z)
+                if wert is None:
+                    continue
+                datumsfelder = list(re.finditer(_PDF_DATUM, z))
+                valuta = _datum_iso(datumsfelder[1].group()) if len(datumsfelder) > 1 else None
+                # Zwischen Buchungstag und Valuta steht die Erläuterung
+                bis = datumsfelder[1].start() if len(datumsfelder) > 1 else len(z)
+                rest = z[m.end(1):bis]
+                art  = rest.strip() or z[m.end(1):].strip()
+                umsaetze.append({
+                    "date": _datum_iso(m.group(1)), "valuta": valuta,
+                    "amount": round(wert, 2), "currency": waehrung,
+                    "name": None, "purpose": None,
+                    "kind": re.sub(r"\s{2,}", " ", art) or None,
+                    "ref": None, "seq": len(umsaetze), "saldo": None,
+                    "_zeilen": [],
+                    # Spalte, in der die Erläuterung beginnt — nur was bündig
+                    # darunter steht, gehört zur Buchung. Sonst sammelt eine
+                    # Buchung am Seitenende die ganze Fußzeile ein.
+                    "_spalte": m.end(1) + (len(rest) - len(rest.lstrip())),
+                })
+                offen = umsaetze[-1]
+                continue
+            # Fortsetzungszeile: Titel, ISIN, Stück, Vorgangs-Nr.
+            if offen is not None:
+                einzug = len(z) - len(z.lstrip())
+                if abs(einzug - offen["_spalte"]) <= 3:
+                    offen["_zeilen"].append(re.sub(r"\s{2,}", " ", z.strip()))
+
+    for u in umsaetze:
+        teile = u.pop("_zeilen", [])
+        u.pop("_spalte", None)
+        if teile:
+            u["purpose"] = " · ".join(teile)[:500]
+            u["name"] = teile[0][:200]
+        # Vorgangs-Nr. ist je Buchung eindeutig — der beste Schlüssel gegen Doppelte
+        m = re.search(r"Vorgangs-?Nr\.?:?\s*([A-Z0-9 ]{6,40})", u["purpose"] or "", re.I)
+        if m:
+            u["ref"] = re.sub(r"\s+", "", m.group(1))
+
+    if not umsaetze and not salden:
+        return {"ok": False, "error": "Im PDF wurden weder Buchungen noch Salden gefunden — "
+                                      "ist das ein Kontoauszug?"}
+    if grenze is None:
+        hinweise.append("Belastung und Gutschrift waren im PDF nicht auseinanderzuhalten — "
+                        "bitte die Vorzeichen in der Vorschau prüfen.")
+
+    umsaetze.sort(key=lambda u: (u["date"], u["seq"]))
+    salden.sort(key=lambda s: s[0] or "")
+    # Der früheste Saldo eröffnet, der späteste schließt. Bei nur einem Saldo
+    # entscheidet der Vergleich mit den Buchungstagen, wofür er steht.
+    eroeffnung = schluss = None
+    if len(salden) >= 2:
+        eroeffnung, schluss = (salden[0][1], salden[0][0]), (salden[-1][1], salden[-1][0])
+    elif len(salden) == 1:
+        datum, wert = salden[0][0], salden[0][1]
+        if umsaetze and datum and datum < umsaetze[0]["date"]:
+            eroeffnung = (wert, datum)
+        else:
+            schluss = (wert, datum)
+    return {"ok": True, "quelle": "pdf", "umsaetze": umsaetze, "iban": iban,
+            "eroeffnung": eroeffnung, "schluss": schluss, "hinweise": hinweise}
+
 def _umsatz_datei_parsen(name: str, daten: bytes) -> dict:
     """Erkennt camt oder CSV an Inhalt und Endung und liest die Datei ein."""
     kopf = daten[:2000].lstrip()
+    if kopf.startswith(b"%PDF") or name.lower().endswith(".pdf"):
+        return _umsatz_pdf_parsen(daten)
     if kopf.startswith(b"<") or b"urn:iso:std:iso:20022" in kopf:
         return _umsatz_camt_parsen(daten)
     # CSV: die deutschen Bankexporte kommen in Windows-1252, neuere in UTF-8.
@@ -3513,7 +3676,7 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         return {"ok": False, "error": "Keine Datei erhalten"}
 
     alle, hinweise, quellen, ibans, gelesen = [], [], [], [], 0
-    fehler = []
+    fehler, raender = [], []
     for name, daten in dateien:
         kurz = name.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
         if not daten:
@@ -3531,6 +3694,12 @@ def _umsaetze_sammeln(dateien: list) -> dict:
         # Tagesauszügen folgenlos, statt eine durchgehende Rechnung zu verfälschen.
         _salden_aus_raendern(res["umsaetze"], res.get("eroeffnung"), res.get("schluss"),
                              hinweise, kurz)
+        # Anfangs- und Schlusssaldo sind für sich schon Stände mit Datum — bei
+        # einem Monatsauszug oft genauer und jünger als die letzte Buchung, und
+        # in buchungsfreien Monaten das Einzige, was es gibt.
+        for rand in (res.get("eroeffnung"), res.get("schluss")):
+            if rand and rand[0] is not None and rand[1]:
+                raender.append((rand[1], float(rand[0])))
         for u in res["umsaetze"]:
             u["datei"] = kurz
         alle.extend(res["umsaetze"])
@@ -3563,7 +3732,8 @@ def _umsaetze_sammeln(dateien: list) -> dict:
     quelle = quellen[0] if len(set(quellen)) == 1 else "gemischt"
     return {"ok": True, "quelle": quelle, "umsaetze": sauber,
             "iban": ibans[0] if ibans else "", "ibans": sorted(set(ibans)),
-            "dateien": gelesen, "doppelt": doppelt, "hinweise": hinweise}
+            "dateien": gelesen, "doppelt": doppelt, "hinweise": hinweise,
+            "salden": sorted(set(raender))}
 
 # ── Saldo je Buchung ───────────────────────────────────────────────────────────
 
@@ -3679,8 +3849,13 @@ def _umsatz_verlauf_schreiben(conn, acc) -> int:
         _write_account_history(conn, acc["id"], wert * fx, tag)
     return len(je_tag)
 
-def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list) -> dict:
-    """Legt die Buchungen ab, schreibt den Tagesverlauf und zieht den Stand nach."""
+def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
+                        salden: list = None) -> dict:
+    """Legt die Buchungen ab, schreibt den Tagesverlauf und zieht den Stand nach.
+
+    `salden` sind die Anfangs- und Schlusssalden der eingelesenen Dateien —
+    Stände mit Datum, die ohne eigene Buchung dastehen.
+    """
     _init_account_tables(db_file)
     conn = get_db(db_file)
     acc  = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
@@ -3717,6 +3892,17 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list) -> dict:
         neu += 1
     conn.commit()
 
+    # Anfangs-/Schlusssalden der Dateien als eigene Stände ablegen. Beim Depot
+    # nicht: dort hält account_history Verrechnungskonto PLUS Wertpapiere.
+    if acc["kind"] != "depot":
+        fx = float(acc["fx_rate"] or 1.0)
+        for datum, wert in (salden or []):
+            if not datum:
+                continue
+            w = abs(float(wert)) if acc["kind"] == "darlehen" else float(wert)
+            _write_account_history(conn, account_id, w * fx, datum)
+        conn.commit()
+
     # Erst den Kontostand nachziehen, wenn die Buchungen neuer sind als der
     # hinterlegte Stand — der Depot-Verlauf unten rechnet damit weiter.
     #
@@ -3724,20 +3910,25 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list) -> dict:
     # „0 € von heute", und der ist zwangsläufig neuer als jeder Auszug — ohne die
     # Ausnahme bliebe der Kontostand 0 und die Vermögenskurve fiele nach dem
     # Import auf null zurück. Die Platzhalter-Nullen danach fliegen mit raus.
-    juengste = conn.execute(
+    row = conn.execute(
         "SELECT date, saldo FROM account_transactions WHERE account_id = ? AND saldo IS NOT NULL "
         "ORDER BY date DESC, seq DESC, rowid DESC LIMIT 1", (account_id,)).fetchone()
+    juengste = (row["date"], float(row["saldo"])) if row else None
+    # Ein Schlusssaldo ohne Buchung kann jünger sein als die letzte Buchung —
+    # bei einem Monatsauszug ist er das fast immer.
+    for datum, wert in (salden or []):
+        if datum and (juengste is None or datum >= juengste[0]):
+            juengste = (datum, float(wert))
+
     stand = None
     leer  = not float(acc["balance"] or 0) and not float(acc["valuation"] or 0)
-    if juengste and (not acc["balance_date"] or juengste["date"] >= acc["balance_date"] or leer):
-        stand = float(juengste["saldo"])
-        if acc["kind"] == "darlehen":
-            stand = abs(stand)
+    if juengste and (not acc["balance_date"] or juengste[0] >= acc["balance_date"] or leer):
+        stand = abs(juengste[1]) if acc["kind"] == "darlehen" else juengste[1]
         conn.execute("UPDATE accounts SET balance = ?, balance_date = ?, updated = ? WHERE id = ?",
-                     (stand, juengste["date"], now, account_id))
+                     (stand, juengste[0], now, account_id))
         if leer:
             conn.execute("DELETE FROM account_history WHERE account_id = ? AND date > ? "
-                         "AND COALESCE(value, 0) = 0", (account_id, juengste["date"]))
+                         "AND COALESCE(value, 0) = 0", (account_id, juengste[0]))
         conn.commit()
         acc = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
 
@@ -3831,7 +4022,7 @@ async def konten_umsaetze_import(account_id: str, request: Request):
     if not body.get("bestaetigt"):
         return JSONResponse(res)
 
-    erg = _umsaetze_schreiben(files["db"], account_id, res["umsaetze"])
+    erg = _umsaetze_schreiben(files["db"], account_id, res["umsaetze"], res.get("salden"))
     erg["hinweise"] = res["hinweise"]
     return JSONResponse(erg, status_code=erg.pop("status", 200))
 
@@ -3861,7 +4052,8 @@ async def konten_umsaetze_dateien(account_id: str, request: Request,
     if not bestaetigt:
         return JSONResponse(res)
 
-    erg = await run_in_threadpool(_umsaetze_schreiben, files["db"], account_id, res["umsaetze"])
+    erg = await run_in_threadpool(_umsaetze_schreiben, files["db"], account_id,
+                                  res["umsaetze"], res.get("salden"))
     erg["hinweise"] = res["hinweise"]
     return JSONResponse(erg, status_code=erg.pop("status", 200))
 
