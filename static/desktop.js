@@ -6379,17 +6379,57 @@ async function renderKontenImportKarte(a) {
     var el = document.getElementById('k-import-karte');
     if (!el) return;
     var h = '<h2 class="settings-h">Depotauszug einlesen</h2>'
-          + '<p class="settings-hint">Tabelle aus dem Online-Banking markieren, kopieren und hier '
-          + 'einfügen — mit Kopfzeile. CSV mit Semikolon, Komma oder Tabulator geht genauso. '
-          + 'Erkannt werden ISIN, Bezeichnung, Stück, Einstand, Kurs, Wert und Währung.</p>'
+          + '<p class="settings-hint">Die Bestandsdatei aus dem Online-Banking hier ablegen — '
+          + 'CSV mit Semikolon, Komma oder Tabulator, mit Kopfzeile. Erkannt werden ISIN, '
+          + 'Bezeichnung, Stück, Einstand, Kurs, Wert und Währung. Wer lieber kopiert, klappt '
+          + 'das Feld darunter auf.</p>'
+          + '<input type="file" id="k-depot-datei" class="k-datei" '
+          + 'accept=".csv,.txt,.tsv,text/csv,text/plain" '
+          + 'onchange="kontenDepotDatei(\'' + a.id + '\')">'
+          + '<details class="k-einfuegen"><summary>… oder Tabelle einfügen</summary>'
           + '<textarea id="k-import-text" class="k-import-feld" rows="6" '
           + 'placeholder="ISIN;Bezeichnung;Stück;Einstand;Kurs;Wert&#10;DE0007164600;SAP SE;40;98,50;215,30;8612,00"></textarea>'
-          + '<div class="settings-actions">'
-          + '<button class="refresh-btn" onclick="kontenImportPruefen(\'' + a.id + '\', this)">Prüfen</button>'
-          + '<span id="k-import-msg" class="settings-msg"></span></div>'
+          + '<div class="settings-actions"><button class="refresh-btn k-mini" id="k-depot-pruef" '
+          + 'onclick="kontenImportPruefen(\'' + a.id + '\', this)">Prüfen</button></div>'
+          + '</details>'
+          + '<div class="settings-actions"><span id="k-import-msg" class="settings-msg"></span></div>'
           + '<div id="k-import-vorschau"></div>';
     el.innerHTML = h;
     renderDepotPositionen(a);
+}
+
+/**
+ * Datei als Text lesen. Deutsche Bankexporte kommen mal in UTF-8 (oft mit BOM),
+ * mal in Windows-1252 — wird eine 1252-Datei als UTF-8 gelesen, zerfallen die
+ * Umlaute. `fatal: true` lässt den ersten Versuch scheitern statt still zu raten.
+ */
+async function dateiText(datei) {
+    var puffer = await datei.arrayBuffer();
+    var text;
+    try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(puffer);
+    } catch (e) {
+        text = new TextDecoder('windows-1252').decode(puffer);
+    }
+    return text.replace(/^﻿/, '');
+}
+
+/** Depotauszug aus einer Datei: einlesen, ins Feld legen, gleich prüfen. */
+async function kontenDepotDatei(id) {
+    var feld = document.getElementById('k-depot-datei');
+    if (!feld || !feld.files || !feld.files.length) return;
+    var msg = document.getElementById('k-import-msg');
+    try {
+        var text = await dateiText(feld.files[0]);
+        var ta = document.getElementById('k-import-text');
+        if (ta) ta.value = text;
+        logIt(4, 'Konten', 'Depotauszug ' + feld.files[0].name + ' gelesen ('
+              + text.length + ' Zeichen)');
+        await kontenImportPruefen(id, document.getElementById('k-depot-pruef')
+                                      || { disabled: false });
+    } catch (e) {
+        if (msg) { msg.textContent = 'Datei nicht lesbar: ' + e.message; msg.className = 'settings-msg err'; }
+    }
 }
 
 async function kontenImportPruefen(id, btn) {

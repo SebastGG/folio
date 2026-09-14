@@ -2937,19 +2937,26 @@ async def konten_positionen_set(account_id: str, request: Request):
 # Die Spalten werden über die Kopfzeile erraten, die Zuordnung ist in der
 # Oberfläche korrigierbar.
 
+# Je Feld die Muster in der Reihenfolge ihrer Güte — das erste, das irgendwo in
+# der Kopfzeile greift, gewinnt. Genaue Muster gehören darum nach vorn: der
+# Smartbroker-Bestand führt neben „WÄHRUNG" auch „WÄHRUNGSGEWINN", und neben
+# „EINSTANDSKURS PRO STÜCK" noch „EINSTANDSWERT".
 _SPALTEN_MUSTER = [
     ("isin",             (r"isin",)),
     ("wkn",              (r"wkn",)),
-    ("name",             (r"bezeichnung", r"wertpapier", r"instrument", r"titel",
-                          r"produkt", r"^name$", r"security")),
-    ("quantity",         (r"st.?ck", r"anzahl", r"nominal", r"menge", r"bestand",
-                          r"quantity", r"^stk")),
-    ("cost_basis_price", (r"einstand", r"einkaufs", r"kaufkurs", r"durchschnitt",
-                          r"^ek", r"cost")),
-    ("mark_price",       (r"aktueller kurs", r"letzter", r"kurs", r"preis", r"price")),
+    ("name",             (r"^name 1$", r"bezeichnung", r"wertpapier", r"instrument",
+                          r"titel", r"produkt", r"^name$", r"^name", r"security")),
+    ("quantity",         (r"^st.?cke?$", r"st.?ck", r"anzahl", r"nominal", r"menge",
+                          r"bestand", r"quantity", r"^stk")),
+    ("cost_basis_price", (r"einstandskurs", r"einstandspreis", r"einkaufs", r"kaufkurs",
+                          r"durchschnitt", r"^ek", r"einstand", r"cost")),
+    ("mark_price",       (r"marktkurs", r"aktueller kurs", r"letzter", r"kurs", r"preis",
+                          r"price")),
     ("position_value",   (r"kurswert", r"marktwert", r"gesamtwert", r"^wert",
                           r"value", r"volumen")),
-    ("currency",         (r"w.?hrung", r"whg", r"currency")),
+    ("cost_basis_money", (r"einstandswert", r"einstandssumme", r"kaufwert")),
+    ("currency",         (r"^w.?hrung$", r"^whg$", r"^currency$", r"kontow.?hrung",
+                          r"w.?hrung(?!sgewinn)", r"whg", r"currency")),
 ]
 
 def _trennzeichen(text: str) -> str:
@@ -2957,27 +2964,56 @@ def _trennzeichen(text: str) -> str:
     kopf = text.splitlines()[0] if text.splitlines() else ""
     return max(("\t", ";", ","), key=kopf.count) if any(c in kopf for c in "\t;,") else ";"
 
-def _spalten_zuordnen(kopf: list) -> dict:
-    """Ordnet Kopfzeilen-Beschriftungen den bekannten Feldern zu. {feld: index}"""
+def _spalten_zuordnen_nach(kopf: list, muster_liste) -> dict:
+    """Ordnet Kopfzeilen-Beschriftungen den Feldern zu. {feld: index}
+
+    Das Muster entscheidet VOR der Spaltenposition: erst wird das beste Muster
+    über alle Spalten probiert, dann das nächste. Andersherum schnappte sich
+    „Währungsgewinn" die Rolle der Währung, nur weil es weiter links steht.
+    Eine einmal belegte Spalte ist für die folgenden Felder gesperrt.
+    """
+    titel = [t.strip().strip('"').lower() for t in kopf]
     zuordnung, belegt = {}, set()
-    for feld, muster in _SPALTEN_MUSTER:
-        for i, titel in enumerate(kopf):
-            if i in belegt:
-                continue
-            t = titel.strip().lower()
-            if any(re.search(m, t) for m in muster):
-                zuordnung[feld] = i
-                belegt.add(i)
+    for feld, muster in muster_liste:
+        for m in muster:
+            treffer = next((i for i, t in enumerate(titel)
+                            if i not in belegt and re.search(m, t)), None)
+            if treffer is not None:
+                zuordnung[feld] = treffer
+                belegt.add(treffer)
                 break
     return zuordnung
 
+def _spalten_zuordnen(kopf: list) -> dict:
+    """Spalten eines Depotauszugs (Bestandsliste)."""
+    return _spalten_zuordnen_nach(kopf, _SPALTEN_MUSTER)
+
+def _tabelle_lesen(text: str, sep: str) -> list:
+    """Zerlegt eine Tabelle unter Beachtung von Anführungszeichen.
+
+    Nicht mit split(): der Smartbroker-Export trennt mit Komma und setzt die
+    Felder in Anführungszeichen — dort steckt in jedem Betrag ein Dezimalkomma,
+    und ein naives Zerlegen verschiebt die ganze Zeile. Das fiel nicht einmal
+    auf, weil hinterher trotzdem Zahlen dastanden: aus 30.252 € wurden 1,00 €.
+    """
+    import csv as _csv, io as _io
+    try:
+        return [[f.strip() for f in z]
+                for z in _csv.reader(_io.StringIO(text), delimiter=sep)
+                if any((f or "").strip() for f in z)]
+    except Exception:
+        return [[f.strip().strip('"') for f in z.split(sep)]
+                for z in text.splitlines() if z.strip()]
+
 def _depot_text_parsen(text: str) -> dict:
     """Zerlegt einen eingefügten Depotauszug in Zeilen + erkannte Spalten."""
-    zeilen = [z for z in (text or "").splitlines() if z.strip()]
-    if not zeilen:
+    text = (text or "").lstrip("﻿")
+    if not text.strip():
         return {"ok": False, "error": "Kein Inhalt"}
     sep  = _trennzeichen(text)
-    tab  = [[f.strip().strip('"') for f in z.split(sep)] for z in zeilen]
+    tab  = _tabelle_lesen(text, sep)
+    if not tab:
+        return {"ok": False, "error": "Kein Inhalt"}
     kopf = tab[0]
     zuordnung = _spalten_zuordnen(kopf)
     daten = tab[1:]
@@ -3009,6 +3045,7 @@ def _depot_text_parsen(text: str) -> dict:
             "isin": isin or None, "wkn": feld("wkn") or None, "name": name or None,
             "quantity": qty or 0.0,
             "cost_basis_price": _de_num(feld("cost_basis_price")),
+            "cost_basis_money": _de_num(feld("cost_basis_money")),
             "mark_price":       _de_num(feld("mark_price")),
             "position_value":   _de_num(feld("position_value")),
             "currency": (feld("currency") or "EUR").upper()[:3] or "EUR",
@@ -3021,6 +3058,18 @@ def _depot_text_parsen(text: str) -> dict:
         hinweise.append("Keine Stück-Spalte gefunden.")
     if "position_value" not in zuordnung and "mark_price" not in zuordnung:
         hinweise.append("Weder Kurs noch Wert gefunden — der Depotwert bleibt 0.")
+    # Stück × Kurs muss ungefähr den Wert ergeben. Tut es das reihenweise nicht,
+    # sind die Spalten verrutscht — genau das passierte vor dem csv-Modul bei
+    # Beträgen mit Dezimalkomma, und zwar ohne dass es jemand merkte.
+    pruefbar = [p for p in positionen
+                if p["quantity"] and p["mark_price"] and p["position_value"]]
+    schief = [p for p in pruefbar
+              if abs(p["quantity"] * p["mark_price"] - p["position_value"])
+                 > max(1.0, abs(p["position_value"]) * 0.05)]
+    if pruefbar and len(schief) > len(pruefbar) / 2:
+        hinweise.append("Stück × Kurs passt bei den meisten Zeilen nicht zum Wert — "
+                        "die Spalten sind vermutlich falsch zugeordnet. Bitte die "
+                        "Vorschau genau ansehen.")
     return {"ok": True, "spalten": kopf, "zuordnung": zuordnung,
             "trennzeichen": {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[sep],
             "positionen": positionen, "hinweise": hinweise}
@@ -3299,24 +3348,8 @@ def _umsatz_camt_parsen(daten) -> dict:
 # ── CSV / Zwischenablage ───────────────────────────────────────────────────────
 
 def _spalten_zuordnen_umsatz(kopf: list) -> dict:
-    """Ordnet Kopfzeilen-Beschriftungen den bekannten Feldern zu. {feld: index}
-
-    Das Muster entscheidet vor der Spaltenposition: erst wird das beste Muster
-    über ALLE Spalten probiert, dann das nächste. Andersherum schnappte sich
-    „Anlagebetrag" die Rolle des Betrags, nur weil es weiter links steht als
-    „Gesamtbetrag".
-    """
-    titel = [t.strip().strip('"').lower() for t in kopf]
-    zuordnung, belegt = {}, set()
-    for feld, muster in _UMSATZ_MUSTER:
-        for m in muster:
-            treffer = next((i for i, t in enumerate(titel)
-                            if i not in belegt and re.search(m, t)), None)
-            if treffer is not None:
-                zuordnung[feld] = treffer
-                belegt.add(treffer)
-                break
-    return zuordnung
+    """Spalten einer Umsatzliste — dieselbe Regel wie beim Depotauszug."""
+    return _spalten_zuordnen_nach(kopf, _UMSATZ_MUSTER)
 
 def _umsatz_kopfzeile(tab: list):
     """Findet die Kopfzeile — Bankexporte stellen ihr gern eine Zeile mit
@@ -3348,16 +3381,7 @@ def _umsatz_csv_parsen(text: str) -> dict:
     if not (text or "").strip():
         return {"ok": False, "error": "Kein Inhalt"}
     sep = _trennzeichen(text)
-    # Mit dem csv-Modul statt split(): der Smartbroker-Auszug trennt mit Komma
-    # und setzt die Felder in Anführungszeichen — ein naives Zerlegen zerreißt
-    # dort jeden Betrag mit Dezimalkomma.
-    import csv as _csv, io as _io
-    try:
-        tab = [[f.strip() for f in z] for z in _csv.reader(_io.StringIO(text), delimiter=sep)
-               if any((f or "").strip() for f in z)]
-    except Exception:
-        tab = [[f.strip().strip('"') for f in z.split(sep)]
-               for z in text.splitlines() if z.strip()]
+    tab = _tabelle_lesen(text, sep)
     if not tab:
         return {"ok": False, "error": "Kein Inhalt"}
     kopf_i, zuordnung = _umsatz_kopfzeile(tab)

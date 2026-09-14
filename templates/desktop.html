@@ -1182,12 +1182,18 @@
           <dd>Name, Institut, Saldo, Stand vom. Mehr braucht es nicht — oder du lässt die
               Bank die Arbeit machen, siehe <b>Umsätze einlesen</b> unten.</dd>
           <dt>Depot</dt>
-          <dd>Der Bestand kommt per <b>Depotauszug einlesen</b> hinein: Tabelle im Online-Banking
-              markieren, kopieren, ins Feld einfügen, prüfen, übernehmen. Erkannt werden ISIN,
-              Bezeichnung, Stück, Einstand, Kurs und Wert — auch als CSV mit Semikolon oder
-              Tabulator. Die Titel bekommen über ihre ISIN dieselben Yahoo-Kurse wie die
-              IBKR-Positionen und erscheinen anschließend überall mit, gekennzeichnet mit dem
-              Kontonamen. Das Feld <i>Verrechnungskonto</i> ist das Bargeld im Depot.</dd>
+          <dd>Der Bestand kommt per <b>Depotauszug einlesen</b> hinein: die Bestandsdatei aus
+              dem Online-Banking auswählen (Smartbroker/Baader liefert eine CSV mit Komma),
+              prüfen, übernehmen — wer lieber kopiert, klappt das Einfügefeld darunter auf.
+              Erkannt werden ISIN, Bezeichnung, Stück, Einstand, Kurs und Wert, bei Semikolon,
+              Komma und Tabulator gleichermaßen. Zur Sicherheit wird gegengerechnet: passt
+              <i>Stück × Kurs</i> reihenweise nicht zum Wert, sind die Spalten verrutscht und
+              es gibt eine Warnung. Die Titel bekommen über ihre ISIN dieselben Yahoo-Kurse wie
+              die IBKR-Positionen und erscheinen anschließend überall mit, gekennzeichnet mit
+              dem Kontonamen. Das Feld <i>Verrechnungskonto</i> ist das Bargeld im Depot.
+              <b>Nicht verwechseln:</b> die Bestandsdatei gehört hierher, der
+              Transaktionsexport (mit Spalte <i>Transaktionstyp</i>) unter <i>Umsätze
+              einlesen</i>.</dd>
           <dt>Darlehen</dt>
           <dd>Restschuld immer <b>positiv</b> eintragen, das Minus setzt Folio selbst. Aus
               Zinssatz und monatlicher Rate entsteht eine Tilgungsprognose: Laufzeit, Zinssumme
