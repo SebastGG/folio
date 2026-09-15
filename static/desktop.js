@@ -2348,6 +2348,14 @@ updateClock();
         doneStart();
         loadDrawings();
         loadNotes();
+        // Konten schon beim Start holen, nicht erst beim Öffnen der Seite: der
+        // Basket eines weiteren Depots braucht sein Konto, um Depotanteil und
+        // Positionsgröße zu zeigen, und der Portfolio-Report braucht die Summen.
+        kontenLaden().then(function(d) {
+            kontenState.accounts = d.accounts || [];
+            kontenState.summary  = d.summary || null;
+        }).catch(function() { /* Konten sind kein Startblocker */ });
+
         ibkrLoadIsinMap().then(function() {
             ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
                 ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
@@ -2432,9 +2440,12 @@ function ibkrExposure(p, ccyFx) {
  * Long + Cash + Short. Bezugsgröße für den Anteil einer Position am Depot.
  */
 function ibkrDepotTotal(ccyFx) {
+    // Nur das IBKR-Depot. Seit die weiteren Depots in ibkrPositions mitlaufen,
+    // zählte die Summe hier auch deren Positionen mit — die Depotanteile in der
+    // Watchlist waren dadurch zu klein.
     var cashBase = (ibkrCash || []).find(function(c) { return c.currency === 'BASE'; });
     var total    = cashBase ? (cashBase.ending_cash || 0) : 0;
-    (ibkrPositions || []).forEach(function(p) {
+    ibkrPositionsIbkr().forEach(function(p) {
         total += ibkrLiveValue(p, ccyFx);
     });
     return total;
@@ -2448,19 +2459,33 @@ function ibkrDepotTotal(ccyFx) {
  */
 function ibkrWatchlistValues() {
     var b = baskets[currentBasket];
-    if (!b || !b.ibkrManaged) return null;
-    if (!ibkrPositions || !ibkrPositions.length) return null;
+    if (!b || !ibkrPositions || !ibkrPositions.length) return null;
+    if (!b.ibkrManaged && !b.kontoBasket) return null;
 
     var ccyFx = ibkrCcyFx();
     var value = {};
-    ibkrPositions.forEach(function(p) {
+
+    // Basket eines weiteren Depots: nur dessen Positionen, und der Anteil
+    // bezieht sich auf dieses Depot — Wertpapiere plus Verrechnungskonto,
+    // dieselbe Rechnung wie beim IBKR-Depot mit seinem Cash.
+    if (b.kontoBasket) {
+        var a = (kontenState.accounts || []).find(function(x) { return x.id === b.kontoBasket; });
+        if (!a) return null;
+        ibkrPositions.forEach(function(p) {
+            if (p.account !== a.name) return;
+            var sym = ibkrPosYahoo(p);
+            if (!sym) return;
+            value[sym] = (value[sym] || 0) + ibkrLiveValue(p, ccyFx);
+        });
+        return { value: value, depot: kontoWert(a) };
+    }
+
+    ibkrPositionsIbkr().forEach(function(p) {
         var sym = ibkrPosYahoo(p);
         if (!sym) return;
         value[sym] = (value[sym] || 0) + ibkrLiveValue(p, ccyFx);
     });
-
-    var depot = ibkrDepotTotal(ccyFx);
-    return { value: value, depot: depot };
+    return { value: value, depot: ibkrDepotTotal(ccyFx) };
 }
 
 function renderPortfolioReport() {
