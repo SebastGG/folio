@@ -1474,6 +1474,66 @@ async def set_config(request: Request):
     save_config_data(files["config"], neu)
     return JSONResponse(content={"ok": True, "blacklisted": gesperrt})
 
+@app.get("/api/config/sicherungen")
+async def config_sicherungen(request: Request):
+    """Listet die Tagessicherungen der Config, neueste zuerst.
+
+    Ohne diese Liste nützen die Sicherungen nur jemandem mit Serverzugang — und
+    wer seine Portfolios verloren hat, braucht sie genau dann, wenn er keinen
+    hat (siehe die Notbremse in POST /api/config).
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    ordner = os.path.dirname(files["config"])
+    raus = []
+    for name in sorted(os.listdir(ordner), reverse=True):
+        if not re.fullmatch(r"config_\d{4}-\d{2}-\d{2}\.json", name):
+            continue
+        pfad = os.path.join(ordner, name)
+        try:
+            with open(pfad) as f:
+                cfg = json.load(f)
+            raus.append({
+                "datei": name, "datum": name[7:17],
+                "portfolios": len(cfg.get("baskets") or {}),
+                "namen": sorted((b.get("name") or "?")
+                                for b in (cfg.get("baskets") or {}).values())[:12],
+                "groesse": os.path.getsize(pfad),
+            })
+        except Exception as e:
+            raus.append({"datei": name, "datum": name[7:17], "fehler": str(e)})
+    jetzt = load_config(files["config"])
+    return JSONResponse({"sicherungen": raus,
+                         "aktuell": len(jetzt.get("baskets") or {})})
+
+@app.post("/api/config/wiederherstellen")
+async def config_wiederherstellen(request: Request):
+    """Spielt eine Tagessicherung zurück. Erwartet `{"datei": "config_JJJJ-MM-TT.json"}`.
+
+    Der aktuelle Stand wird dabei wie bei jedem Schreiben zur Tagessicherung —
+    ein Rückspielen lässt sich also selbst wieder rückgängig machen.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    body  = await request.json()
+    name  = (body.get("datei") or "").strip()
+    if not re.fullmatch(r"config_\d{4}-\d{2}-\d{2}\.json", name):
+        return JSONResponse({"ok": False, "error": "Unbekannte Sicherung"}, status_code=400)
+    pfad = os.path.join(os.path.dirname(files["config"]), name)
+    if not os.path.exists(pfad):
+        return JSONResponse({"ok": False, "error": "Sicherung nicht gefunden"}, status_code=404)
+    try:
+        with open(pfad) as f:
+            cfg = json.load(f)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Sicherung nicht lesbar: {e}"},
+                            status_code=400)
+    # Bewusst über save_config_data: das legt vorher die Tagessicherung an.
+    save_config_data(files["config"], cfg)
+    anzahl = len(cfg.get("baskets") or {})
+    print(f"[Config] {name} wiederhergestellt: {anzahl} Portfolios (Benutzer {user})")
+    return JSONResponse({"ok": True, "portfolios": anzahl, "datei": name})
+
 @app.post("/api/appearance")
 async def set_appearance(request: Request):
     """Nur den Abschnitt `appearance` der Config schreiben — Aussehen und die

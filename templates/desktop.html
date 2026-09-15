@@ -885,6 +885,21 @@
     </div>
 
     <div class="settings-card">
+      <h2 class="settings-h">Portfolios — Sicherungen</h2>
+      <p class="settings-hint">
+        Vor der ersten Änderung eines Tages legt folio eine Kopie deiner Portfolios an;
+        die letzten 14 bleiben liegen. Fehlt plötzlich etwas, holst du es hier zurück —
+        <b>ohne vorher irgendetwas zu speichern</b>, sonst überschreibt der leere Stand
+        die gute Fassung.
+      </p>
+      <div id="set-sicherungen"></div>
+      <div class="settings-actions">
+        <button class="refresh-btn" onclick="sicherungenLaden(this)">Sicherungen anzeigen</button>
+        <span id="set-sich-msg" class="settings-msg"></span>
+      </div>
+    </div>
+
+    <div class="settings-card">
       <h2 class="settings-h">IBKR Flex Query
         <span id="set-ibkr-status" class="settings-badge">—</span>
       </h2>
@@ -1348,6 +1363,15 @@
           Chart lassen sich Hintergrund, Volumenfarben und die Farben des Volumenprofils getrennt
           einstellen — <b>Zurücksetzen</b> stellt die Vorgaben wieder her. Darunter stehen die
           Fenster-Verwaltung, dein Konto und die IBKR-Zugangsdaten.
+        </p>
+        <p class="help-tip">
+          <b>Portfolios — Sicherungen.</b> Vor der ersten Änderung eines Tages legt folio eine
+          Kopie deiner Portfolios an; die letzten 14 bleiben liegen. Fehlt plötzlich etwas,
+          holst du hier den Stand eines früheren Tages zurück — die Liste zeigt zu jedem, wie
+          viele Portfolios darin stecken und wie sie heißen. <b>Vorher nichts speichern</b>:
+          im Browser steckt dann noch der leere Stand, und der würde die gute Fassung
+          überschreiben. Nach dem Zurückspielen lädt die Seite von selbst neu, und der vorige
+          Stand ist seinerseits gesichert — es lässt sich also umkehren.
         </p>
       </article>
 

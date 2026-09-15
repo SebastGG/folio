@@ -3667,6 +3667,74 @@ async function settingsLoad() {
     } catch (e) { /* ignore */ }
 }
 
+// ── Sicherungen der Portfolios ───────────────────────────────────────────────
+// Die Tagessicherungen nützen nur, wenn man ohne Serverzugang drankommt — und
+// wer seine Portfolios verloren hat, hat genau dann keinen.
+
+async function sicherungenLaden(btn) {
+    var el  = document.getElementById('set-sicherungen');
+    var msg = document.getElementById('set-sich-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    if (btn) btn.disabled = true;
+    setMsg('Lade…', 'run');
+    try {
+        var r = await fetch('/api/config/sicherungen');
+        var d = await r.json();
+        setMsg('', '');
+        var liste = d.sicherungen || [];
+        if (!liste.length) {
+            el.innerHTML = '<p class="settings-hint">Noch keine Sicherungen — die erste '
+                         + 'entsteht, sobald du das nächste Mal etwas an den Portfolios '
+                         + 'änderst.</p>';
+            return;
+        }
+        var h = '<p class="settings-hint">Aktuell im Betrieb: <b>' + d.aktuell
+              + ' Portfolios</b>.</p>'
+              + '<table class="konten-tab"><thead><tr><th>Stand vom</th>'
+              + '<th style="text-align:right">Portfolios</th><th>Namen</th>'
+              + '<th></th></tr></thead><tbody>';
+        liste.forEach(function(s) {
+            h += '<tr><td>' + escHtml(s.datum) + '</td>'
+               + '<td style="text-align:right">' + (s.fehler ? '—' : s.portfolios) + '</td>'
+               + '<td style="color:var(--muted)">'
+               + escHtml(s.fehler ? s.fehler : (s.namen || []).join(', ')) + '</td>'
+               + '<td style="text-align:right">'
+               + (s.fehler ? '' : '<button class="refresh-btn k-mini" onclick="sicherungZurueck(\''
+                   + s.datei + '\', ' + s.portfolios + ')">Zurückspielen</button>')
+               + '</td></tr>';
+        });
+        h += '</tbody></table>';
+        el.innerHTML = h;
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function sicherungZurueck(datei, anzahl) {
+    if (!confirm('Stand vom ' + datei.slice(7, 17) + ' mit ' + anzahl
+                 + ' Portfolios zurückspielen?\n\nDer jetzige Stand wird vorher gesichert, '
+                 + 'das lässt sich also wieder umkehren.\n\nDanach lädt die Seite neu.')) return;
+    try {
+        var r = await fetch('/api/config/wiederherstellen', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ datei: datei })
+        });
+        var d = await r.json();
+        if (!d.ok) {
+            logIt(1, 'Config', 'Wiederherstellen fehlgeschlagen: ' + (d.error || '?'));
+            return;
+        }
+        logIt(3, 'Config', d.portfolios + ' Portfolios aus ' + datei + ' wiederhergestellt');
+        // Neu laden statt weiterarbeiten: im Speicher steckt noch der alte Stand,
+        // und der würde beim nächsten Speichern die Wiederherstellung überschreiben.
+        location.reload();
+    } catch (e) {
+        logIt(1, 'Config', 'Wiederherstellen fehlgeschlagen: ' + e.message);
+    }
+}
+
 /** Speichert Flex Token + Query ID (verschlüsselt, pro User) und aktualisiert den Status. */
 async function settingsSaveIbkr(btn) {
     var token  = (document.getElementById('set-flex-token').value     || '').trim();
