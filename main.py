@@ -3327,6 +3327,36 @@ def _wertpapier_aus_text(u: dict):
         if m:
             u["quantity"] = _de_num(m.group(1))
 
+def _wertpapiere_nachtragen(conn, account_id: str) -> int:
+    """Trägt ISIN und Stückzahl bei BEREITS gespeicherten Buchungen nach.
+
+    Die Felder gibt es erst seit v1.11.0. Wer seine Auszüge vorher eingelesen
+    hat, hat Buchungen ohne sie — und ein erneutes Einlesen hilft nicht, weil
+    die Doppel-Erkennung sie überspringt. Die Angaben stehen aber im
+    gespeicherten Text, also lassen sie sich ohne die Dateien nachziehen.
+    """
+    rows = conn.execute(
+        "SELECT tx_id, purpose, name, kind, amount FROM account_transactions "
+        "WHERE account_id = ? AND (isin IS NULL OR quantity IS NULL)",
+        (account_id,)).fetchall()
+    n = 0
+    for r in rows:
+        u = {"purpose": r["purpose"], "name": r["name"], "kind": r["kind"],
+             "amount": r["amount"], "isin": None, "quantity": None}
+        _wertpapier_aus_text(u)
+        if u.get("quantity"):
+            vz = _stueck_richtung(u.get("kind"), u.get("amount"))
+            u["quantity"] = abs(float(u["quantity"])) * vz if vz else None
+        if u.get("isin") or u.get("quantity") is not None:
+            conn.execute(
+                "UPDATE account_transactions SET isin = COALESCE(isin, ?), "
+                "quantity = COALESCE(quantity, ?) WHERE account_id = ? AND tx_id = ?",
+                (u.get("isin"), u.get("quantity"), account_id, r["tx_id"]))
+            n += 1
+    if n:
+        conn.commit()
+    return n
+
 def _stueck_richtung(typ: str, betrag: float) -> int:
     """+1 = Stücke kommen ins Depot, -1 = gehen heraus, 0 = keine Bestandsänderung.
 
@@ -4112,11 +4142,16 @@ def _umsaetze_schreiben(db_file: str, account_id: str, umsaetze: list,
                           "WHERE account_id = ? AND tx_id = ?", (account_id, tx_id)).fetchone()
         if da is not None:
             bekannt += 1
-            # Beim zweiten Lauf kann ein Saldo bekannt sein, der vorher fehlte
-            if u.get("saldo") is not None and da["saldo"] is None:
-                conn.execute("UPDATE account_transactions SET saldo = ? "
-                             "WHERE account_id = ? AND tx_id = ?",
-                             (float(u["saldo"]), account_id, tx_id))
+            # Was beim ersten Lauf fehlte, kann jetzt bekannt sein — ein Saldo,
+            # und seit v1.11.0 auch ISIN und Stückzahl. COALESCE lässt
+            # Vorhandenes in Ruhe und füllt nur die Lücken.
+            conn.execute(
+                "UPDATE account_transactions SET saldo = COALESCE(saldo, ?), "
+                "isin = COALESCE(isin, ?), quantity = COALESCE(quantity, ?), "
+                "datei = COALESCE(datei, ?) WHERE account_id = ? AND tx_id = ?",
+                (None if u.get("saldo") is None else float(u["saldo"]),
+                 u.get("isin"), u.get("quantity"), u.get("datei"),
+                 account_id, tx_id))
             continue
         conn.execute(
             "INSERT INTO account_transactions (account_id, tx_id, date, valuta, amount, "
@@ -4407,6 +4442,11 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
         symbole[key] = p["yahoo_symbol"] or _depot_symbol(conn, p["isin"], p["symbol"])
         fx[key] = float(p["fx_rate_to_base"] or 1.0)
 
+    # Erst nachtragen, was aus der Zeit vor den Feldern stammt — sonst findet
+    # die Rechnung bei alten Buchungen keine Stückzahlen und behauptet, es seien
+    # keine vorhanden.
+    nachgetragen = _wertpapiere_nachtragen(conn, account_id)
+
     # Buchungen mit Stückzahl — daraus entstehen die Veränderungen
     trades = conn.execute(
         "SELECT date, isin, quantity, name FROM account_transactions "
@@ -4415,8 +4455,9 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
     if not trades:
         conn.close()
         return {"ok": False, "status": 400,
-                "error": "Keine Buchungen mit Stückzahl vorhanden — bitte zuerst die "
-                         "Kontoauszüge einlesen."}
+                "error": "Keine Buchungen mit Stückzahl vorhanden. Entweder sind noch "
+                         "keine Kontoauszüge eingelesen, oder in ihnen stehen keine "
+                         "Wertpapierbuchungen mit ISIN und Stück."}
 
     # Liegt kein Bestand vor, wird er aus den Buchungen selbst aufgebaut: das
     # Konto begann leer, jeder Kauf legt zu, jeder Verkauf nimmt weg. Dann
@@ -4428,6 +4469,17 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
             key = (t["isin"] or "").upper()
             heute_bestand[key] = heute_bestand.get(key, 0.0) + float(t["quantity"])
         heute_bestand = {k: v for k, v in heute_bestand.items() if abs(v) > 0.0001}
+
+    # Kommen die Titel nur aus den Buchungen, kennt die isin_map sie noch nicht —
+    # die wird sonst beim Depotauszug gefüllt. Ohne Kurssymbol gäbe es keine
+    # Kurse und der Titel stünde mit 0 in der Kurve.
+    offene_isins = [k for k in {(t["isin"] or "").upper() for t in trades}
+                    if k and not _depot_symbol(conn, k)]
+    if offene_isins:
+        try:
+            _isin_auto_resolve(conn, [("", k, acc["currency"] or "EUR") for k in offene_isins])
+        except Exception as e:
+            print(f"[Konten] ISIN-Aufloesung fehlgeschlagen: {e}")
 
     for t in trades:
         key = (t["isin"] or "").upper()
@@ -4539,7 +4591,7 @@ def _depot_rueckrechnung(db_file: str, account_id: str, schreiben: bool = True) 
                      key=lambda x: -x["wert"])
     conn.close()
     return {"ok": True, "von": von, "bis": bis, "tage": len(reihe_out),
-            "geschrieben": geschrieben,
+            "geschrieben": geschrieben, "nachgetragen": nachgetragen,
             "trades": len(trades), "titel": len([s for s in symbole.values() if s]),
             "warnungen": warnungen, "reihe": reihe_out[-90:], "bestand": bestand,
             "aus_buchungen": aus_buchungen,

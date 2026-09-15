@@ -6222,6 +6222,7 @@ function renderKontenFormular() {
     if (!neu) {
         if (a.kind === 'depot') h += '<div class="settings-card" id="k-import-karte"></div>';
         if (mitUmsatz)          h += '<div class="settings-card" id="k-umsatz-karte"></div>';
+        if (a.kind === 'depot') h += '<div class="settings-card" id="k-basket-karte"></div>';
         if (a.kind === 'depot') h += '<div class="settings-card" id="k-rueck-karte"></div>';
         h += '<div class="settings-card" id="k-verlauf-karte"></div>';
     }
@@ -6230,6 +6231,7 @@ function renderKontenFormular() {
     if (!neu) {
         if (a.kind === 'depot') renderKontenImportKarte(a);
         if (mitUmsatz)          renderKontenUmsatzKarte(a);
+        if (a.kind === 'depot') renderKontenBasketKarte(a);
         if (a.kind === 'depot') renderRueckrechnungKarte(a);
         renderKontenVerlaufKarte(a);
     }
@@ -6565,6 +6567,7 @@ async function kontenImportUebernehmen(id, btn) {
             _kontenVorschau = null;
             await ibkrLoadPositions();     // Positionen erscheinen sofort überall
             await kontenLoad();
+            await kontenBasketsNachziehen();   // Basket des Kontos mitziehen
             ibkrRenderTable();
         } else {
             logIt(1, 'Konten', 'Übernehmen fehlgeschlagen: ' + (res.error || '?'));
@@ -6857,6 +6860,124 @@ async function renderUmsatzListe(a) {
        + 'onclick="kontenUmsaetzeWeg(\'' + a.id + '\')">Buchungen verwerfen</button>'
        + '<span class="settings-hint" style="margin:0">der eingetragene Verlauf bleibt stehen</span></div>';
     el.innerHTML = h;
+}
+
+// ── Basket je Depotkonto ─────────────────────────────────────────────────────
+// Was in einem weiteren Depot liegt, soll sich wie das IBKR-Depot als Basket
+// betrachten lassen — mit Chart, Gewichten und Performance. Aufgebaut wie der
+// IBKR-Basket: Gewicht = Stückzahl, Symbol über das ISIN-Mapping. Die Marke
+// `kontoBasket` hält die Kontokennung fest, damit sich der Basket beim nächsten
+// Depotauszug von selbst nachzieht.
+
+/** Gewichte eines Depotkontos: Yahoo-Symbol → Stückzahl. */
+function kontoBasketWeights(a) {
+    var weights = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if (p.account !== a.name) return;
+        var qty = p.quantity || 0;
+        if (qty <= 0) return;                 // Leerverkäufe gehören nicht hinein
+        var sym = ibkrPosYahoo(p);            // ISIN-Mapping → richtige Notierung
+        if (sym) weights[sym] = (weights[sym] || 0) + Math.abs(qty);
+    });
+    return weights;
+}
+
+/** Der Basket, der zu diesem Konto gehört — oder null. */
+function kontoBasketId(a) {
+    return Object.keys(baskets).find(function(id) {
+        return baskets[id] && baskets[id].kontoBasket === a.id;
+    }) || null;
+}
+
+function renderKontenBasketKarte(a) {
+    var el = document.getElementById('k-basket-karte');
+    if (!el) return;
+    var weights = kontoBasketWeights(a);
+    var anzahl  = Object.keys(weights).length;
+    var vorhanden = kontoBasketId(a);
+
+    var h = '<h2 class="settings-h">Als Basket führen</h2>'
+          + '<p class="settings-hint">Die Titel dieses Depots als eigener Basket — mit Chart, '
+          + 'Gewichten und Performance, genau wie das IBKR-Depot. Gewicht ist die Stückzahl, '
+          + 'das Symbol kommt über die ISIN. Der Basket zieht sich beim nächsten Depotauszug '
+          + 'von selbst nach.</p>';
+    if (!anzahl) {
+        h += '<p class="settings-hint" style="color:var(--red)">⚠ Keine Titel mit Kurssymbol '
+           + 'in diesem Depot — zuerst den Depotauszug einlesen.</p>';
+        el.innerHTML = h;
+        return;
+    }
+    h += '<p class="settings-hint">' + anzahl + ' Titel: '
+       + Object.keys(weights).sort().map(function(s) {
+             return escHtml(s) + ' <b>' + zahlKurz(weights[s]) + '</b>';
+         }).join(' · ') + '</p>';
+    h += '<div class="settings-actions">'
+       + '<button class="refresh-btn" onclick="kontenBasketKlick(\'' + a.id + '\', this)">'
+       + (vorhanden ? 'Basket aktualisieren' : 'Basket anlegen') + '</button>'
+       + (vorhanden ? '<span class="settings-hint" style="margin:0">vorhanden als „'
+                      + escHtml(baskets[vorhanden].name) + '"</span>' : '')
+       + '<span id="k-basket-msg" class="settings-msg"></span></div>';
+    el.innerHTML = h;
+}
+
+async function kontenBasketKlick(id, btn) {
+    var a = (kontenState.accounts || []).find(function(x) { return x.id === id; });
+    if (!a) return;
+    var weights = kontoBasketWeights(a);
+    if (!Object.keys(weights).length) return;
+    var msg = document.getElementById('k-basket-msg');
+    var setMsg = function(t, c) { if (msg) { msg.textContent = t; msg.className = 'settings-msg ' + (c || ''); } };
+    btn.disabled = true;
+    try {
+        var bid = kontoBasketId(a);
+        if (bid) {
+            baskets[bid].weights = weights;
+            // WEIGHTS vor switchBasket nachziehen, sonst schreibt dessen
+            // saveCurrentBasketState() den alten Anzeigestand darüber.
+            ibkrSyncWeightsIfCurrent(bid);
+        } else {
+            bid = 'basket_' + Date.now();
+            baskets[bid] = {
+                name: a.name, weights: weights, period: 180, tf: '1D',
+                kontoBasket: a.id, perfSinceDate: '',
+                indicators: { ma50: false, ma200: false, reg: false }, logScale: false
+            };
+        }
+        var res = await saveBasketsToServer();
+        if (res && res.ok === false) { setMsg(res.error || 'Speichern abgelehnt', 'err'); return; }
+        logIt(3, 'Konten', 'Basket „' + baskets[bid].name + '" mit '
+              + Object.keys(weights).length + ' Titeln gespeichert');
+        setMsg('✓', 'ok');
+        await switchBasket(bid);
+        renderKontenBasketKarte(a);
+    } catch (e) {
+        setMsg('Fehler: ' + e.message, 'err');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+/**
+ * Zieht alle Konto-Baskets nach, nachdem sich Positionen geändert haben.
+ * Baskets ohne Konto bleiben unangetastet; ist ein Depot leer geworden, bleibt
+ * sein Basket stehen — Löschen ist eine Entscheidung des Benutzers.
+ */
+async function kontenBasketsNachziehen() {
+    var geaendert = 0;
+    (kontenState.accounts || []).forEach(function(a) {
+        if (a.kind !== 'depot') return;
+        var bid = kontoBasketId(a);
+        if (!bid) return;
+        var weights = kontoBasketWeights(a);
+        if (!Object.keys(weights).length) return;
+        baskets[bid].weights = weights;
+        ibkrSyncWeightsIfCurrent(bid);
+        geaendert++;
+    });
+    if (geaendert) {
+        await saveBasketsToServer();
+        logIt(4, 'Konten', geaendert + ' Konto-Basket(s) nachgezogen');
+    }
 }
 
 // ── Depotverlauf rückwärts rechnen ───────────────────────────────────────────
