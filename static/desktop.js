@@ -1279,6 +1279,19 @@ async function fetchTickerInfo(sym) {
     }
 }
 
+/* Website aus den Stammdaten als Link. Zeigt nur den Hostnamen (ohne Schema und
+   www.), damit die Tabellenzelle nicht ueberlaeuft — die ganze Adresse steht im
+   Tooltip. Nur http/https, damit aus Yahoo-Daten kein javascript:-Link wird. */
+function tiWebsiteLink(url) {
+    var raw = String(url || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return null;
+    var host;
+    try { host = new URL(raw).host.replace(/^www\./i, ''); } catch (e) { return null; }
+    if (!host) return null;
+    return '<a class="ti-link" href="' + escHtml(raw) + '" target="_blank" rel="noopener noreferrer"'
+         + ' title="' + escHtml(raw) + '">' + escHtml(host) + '</a>';
+}
+
 /** Rendert das Stammdaten-Fenster. null → Platzhalter (Index-Ansicht).
     Die eigenen Trades stehen in einem eigenen Fenster (renderTickerTradesPane),
     damit sie sichtbar bleiben, wenn die Stammdaten zugeklappt sind. */
@@ -1314,7 +1327,8 @@ function renderTickerInfo(d) {
         ['52W-Hoch',   num(d.week52_high) ? num(d.week52_high) + ccy : null],
         ['52W-Tief',   num(d.week52_low)  ? num(d.week52_low)  + ccy : null],
         ['Land',       d.country ? esc(d.country) : null],
-        ['Börse',      d.exchange ? esc(d.exchange) : null]
+        ['Börse',      d.exchange ? esc(d.exchange) : null],
+        ['Website',    tiWebsiteLink(d.website)]
     ].filter(function(r) { return r[1] != null && r[1] !== ''; });
 
     var html = '<div class="ti-name">' + esc(d.name || d.symbol) + '</div>';
