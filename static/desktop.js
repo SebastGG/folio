@@ -1991,6 +1991,10 @@ var LAYOUT_PANES_LEFT  = ['r-stammdaten', 'r-trades'];
 var LAYOUT_PANES_RIGHT = ['r-watch', 'r-perf', 'r-notes', 'r-import'];
 var LAYOUT_PANES       = LAYOUT_PANES_LEFT.concat(LAYOUT_PANES_RIGHT);
 
+/* Fenster mit eigenem Auf/Zu-Knopf in der Chart-Werkzeugleiste. Knopf-Id ist
+   'btn-pane-' + Fenster-Id. */
+var PANE_TOOLBAR_BTNS  = ['r-stammdaten', 'r-trades'];
+
 /* Übersetzung der alten, festen Layout-Schlüssel auf die Fenster-IDs. */
 var _LAYOUT_LEGACY_H = {
     'r-stammdaten': 'stammH', 'r-perf': 'rPerfH',
@@ -2093,6 +2097,7 @@ function applyPaneVisibility() {
     if (!rightEmpty) _syncResizers(rightCol);
 
     renderHiddenPaneInfo();
+    syncPaneButtons();
     if (typeof chart !== 'undefined' && chart) fitChart();
 }
 
@@ -2148,6 +2153,33 @@ function hidePane(id) {
     applyPaneVisibility();
     saveLayout();
     logIt(3, 'Layout', 'Fenster „' + _paneName(id) + '" geschlossen');
+}
+
+/* Gegenstück zu hidePane: öffnet das Fenster wieder und stellt die beim
+   Schließen gemerkte Höhe wieder her. */
+function showPane(id) {
+    if (!_layout.panes) _layout.panes = {};
+    var p  = _layout.panes[id] || (_layout.panes[id] = {});
+    var el = document.getElementById(id);
+    p.hidden = false;
+    if (el && p.h != null && !_paneFlex(el)) el.style.height = p.h + 'px';
+    applyPaneVisibility();
+    saveLayout();
+    logIt(3, 'Layout', 'Fenster „' + _paneName(id) + '" geöffnet');
+}
+
+/* Knopf in der Werkzeugleiste — Fenster auf/zu. */
+function togglePane(id) {
+    if (_paneHidden(id)) showPane(id); else hidePane(id);
+}
+
+/* Knopf-Zustände an die Sichtbarkeit angleichen — greift auch, wenn ein Fenster
+   über sein × oder „Layout zurücksetzen" wechselt. */
+function syncPaneButtons() {
+    PANE_TOOLBAR_BTNS.forEach(function (id) {
+        var b = document.getElementById('btn-pane-' + id);
+        if (b) b.classList.toggle('active', !_paneHidden(id));
+    });
 }
 
 /* Öffnet alle Fenster wieder und setzt sämtliche Größen auf die Vorgabe zurück.
