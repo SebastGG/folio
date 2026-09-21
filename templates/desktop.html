@@ -626,7 +626,7 @@
       <div class="settings-actions">
         <button id="scr-btn-run"     class="scr-btn scr-btn-run"     onclick="screenerStart()">▶ Screening starten</button>
         <button id="scr-btn-baskets" class="scr-btn scr-btn-baskets" onclick="screenerToBaskets()" disabled
-                title="Schreibt die Treffer je Sektor in einen festen Basket „Screener {Sektor}“. Jeder Lauf aktualisiert dieselben Baskets, es entstehen keine neuen mit Datum.">＋ Baskets anlegen</button>
+                title="Schreibt die Treffer je Sektor in einen festen Basket „Screener {Sektor}“. Jeder Lauf trägt in dieselben Baskets nach: was schon drin steht, bleibt stehen, neue Treffer kommen dazu. Es entstehen keine neuen Baskets mit Datum.">＋ Baskets anlegen</button>
         <button id="scr-btn-export"  class="scr-btn scr-btn-export"  onclick="screenerExport()"    disabled>⬇ TradingView-Export</button>
         <span id="scr-msg" class="settings-msg"></span>
         <button id="scr-btn-reset"   class="scr-btn"                 onclick="screenerResetSettings()"
@@ -1334,9 +1334,12 @@
           <li><b>▶ Screening starten</b>. Der Lauf läuft im Hintergrund weiter, auch wenn du die Seite
               neu lädst.</li>
           <li><b>＋ Baskets anlegen</b> schreibt die Treffer je Sektor in einen <b>festen</b> Basket
-              namens „Screener {Sektor}". Jeder weitere Lauf füllt dieselben Baskets neu — es
-              entstehen keine neuen mit Datum.</li>
+              namens „Screener {Sektor}". Es entstehen keine neuen Baskets mit Datum.</li>
           <li>Die Charts durchgehen und aus dem Basket werfen, was nicht überzeugt.</li>
+          <li>Beim nächsten Lauf <b>trägt der Screener nur nach</b>: was du behalten hast, bleibt
+              stehen, die neuen Treffer kommen dazu. Aussortiertes kommt nicht zurück, solange die
+              Sperrzeit läuft. Willst du wirklich bei null anfangen, nimm
+              <b>Screener-Baskets löschen</b>.</li>
         </ol>
         <p>
           Aussortierte Ticker landen auf der <b>Blacklist</b> und kommen beim nächsten Screening nicht

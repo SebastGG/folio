@@ -5575,10 +5575,21 @@ function screenerExport() {
 }
 
 /* Legt pro Sektor **einen festen** Basket an: "Screener {Sektor}".
-   Jeder weitere Lauf schreibt die Gewichte desselben Baskets neu, statt mit
-   jedem Datum einen weiteren anzulegen — die Chart-Einstellungen des Baskets
-   und die Blacklist-Historie bleiben so über die Läufe hinweg erhalten.
-   Baskets aus der alten, datierten Benennung werden einmalig übernommen. */
+   Jeder weitere Lauf schreibt in dieselben Baskets, statt mit jedem Datum einen
+   weiteren anzulegen — die Chart-Einstellungen des Baskets und die
+   Blacklist-Historie bleiben so über die Läufe hinweg erhalten.
+   Baskets aus der alten, datierten Benennung werden einmalig übernommen.
+
+   **Der Screener trägt nur nach, er räumt nicht auf.** Was schon im Basket steht,
+   bleibt stehen — auch wenn es diesmal kein Treffer mehr war. Früher wurden die
+   Gewichte ersetzt, damit fiel bei jedem Lauf still heraus, was die Filter gerade
+   nicht mehr hergaben. Rauswerfen ist Handarbeit im Chart-Durchgang und landet
+   bewusst auf der Blacklist (main.py: _screener_protokolliere_entfernte); einen
+   wirklich leeren Anfang gibt es über "Screener-Baskets löschen". Gesperrte
+   Ticker kommen durchs Zusammenführen nicht zurück — das Ergebnis ist
+   serverseitig schon blacklist-gefiltert (screener.py: apply_blacklist).
+   Anders als hier ersetzt ibkrCreateSectorBaskets() weiter komplett: die
+   Depot-Stückzahlen sollen genau den Depotstand zeigen. */
 async function screenerToBaskets() {
     var results = _SCR.results || {};
     var sectors = Object.keys(results).filter(function (s) {
@@ -5597,6 +5608,7 @@ async function screenerToBaskets() {
     var alteDatierte = _screenerDatierteBaskets();
 
     var created = 0, updated = 0, migriert = 0, firstId = null, aktivBetroffen = false;
+    var ergaenzt = 0, behalten = 0;   // nachgetragene / aus früheren Läufen gebliebene Ticker
     sectors.forEach(function (sector, i) {
         var tickers = results[sector];
         var weights = {};
@@ -5619,7 +5631,17 @@ async function screenerToBaskets() {
         }
 
         if (existingId) {
-            baskets[existingId].weights = weights;
+            // Zusammenführen statt ersetzen. Vorhandene Gewichte bleiben, wie sie
+            // sind (der Benutzer kann sie von Hand geändert haben), neue Treffer
+            // kommen mit 1 dazu. `== null` statt `!`, damit ein bewusst gesetztes
+            // Gewicht 0 nicht überschrieben wird.
+            var vorher   = baskets[existingId].weights || {};
+            var zusammen = Object.assign({}, vorher);
+            Object.keys(weights).forEach(function (t) {
+                if (zusammen[t] == null) { zusammen[t] = weights[t]; ergaenzt++; }
+            });
+            Object.keys(vorher).forEach(function (t) { if (weights[t] == null) behalten++; });
+            baskets[existingId].weights = zusammen;
             updated++;
             if (existingId === currentBasket) aktivBetroffen = true;
             if (!firstId) firstId = existingId;
@@ -5656,6 +5678,8 @@ async function screenerToBaskets() {
         var summary = [];
         if (created)   summary.push(created + ' neu');
         if (updated)   summary.push(updated + ' aktualisiert');
+        if (ergaenzt)  summary.push(ergaenzt + ' Ticker ergänzt');
+        if (behalten)  summary.push(behalten + ' behalten');
         if (migriert)  summary.push(migriert + ' übernommen');
         if (geloescht) summary.push(geloescht + ' alte gelöscht');
         _scrMsg('Baskets: ' + summary.join(', '), 'ok');
