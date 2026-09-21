@@ -462,6 +462,8 @@ header {
   width: 22%; font-weight: 500;
 }
 .ti-table tr:hover { background: var(--bg); }
+/* Farbe kommt von der globalen a-Regel (Akzentfarbe des Benutzers). */
+.ti-link:hover { text-decoration: underline; }
 .ticker-info .ti-loading { color: var(--muted); }
 
 /* Eigene Trades — eigenes Fenster unter den Stammdaten, daher ohne Trennlinie */
