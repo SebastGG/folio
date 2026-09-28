@@ -17,11 +17,17 @@ test_*.py
 seed_test.py
 mock_oidc.py
 
-# Persönliche IBKR-Exporte — NIEMALS committen (Kontonr., Adresse, Geburtsdatum)
+# Persönliche IBKR-Exporte — NIEMALS committen (Kontonr., Adresse, Geburtsdatum).
+# IBKR benennt Exporte nach der Kontonummer (U + 7–8 Ziffern) — allgemein
+# abgedeckt, damit keine echte Kontonummer in dieser Datei stehen muss.
 *Steuer_xml.xml
 U[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 Folio_Handel.*
 folio_Status.*
+*.ipynb
+
+# Lokale Einstellungen von Claude Code
+.claude/
 
 # Test-Screenshots + generierte Steuer-PDFs (echte Depot-/Steuerdaten) — NIEMALS committen
 *_screenshot.png
