@@ -1,0 +1,14 @@
+# Dieselbe Liste installiert das Dockerfile — bei Änderungen beide anpassen.
+fastapi
+uvicorn
+jinja2
+python-multipart
+cryptography
+python-dotenv
+itsdangerous
+httpx
+fpdf2
+yfinance
+beautifulsoup4
+lxml
+pypdf
