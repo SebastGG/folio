@@ -325,6 +325,8 @@
       <div class="sidebar-tabs">
         <button class="sidebar-tab active" id="tab-kurse" onclick="showTab('kurse')">Kurse</button>
         <button class="sidebar-tab" id="tab-verwaltung" onclick="showTab('verwaltung')">⚙ Verwaltung</button>
+        <button class="undo-btn" id="btn-undo" data-verlauf="zurueck" onclick="verlaufSchritt(true)"  disabled title="Nichts rückgängig zu machen">↶</button>
+        <button class="undo-btn" id="btn-redo" data-verlauf="vor"     onclick="verlaufSchritt(false)" disabled title="Nichts zu wiederholen">↷</button>
         <button class="pane-close" onclick="hidePane('r-watch')" title="Fenster schließen">×</button>
       </div>
       <div class="sidebar-content" id="content-kurse" style="padding:0;">
@@ -970,7 +972,22 @@
       <button class="export-btn log-btn" onclick="copyLog()">📋 Kopieren</button>
       <button class="export-btn log-btn" onclick="clearLog()">🗑 Leeren</button>
     </div>
-    <div class="log-body" id="logBody"></div>
+    <div class="log-split">
+      <div class="log-body" id="logBody"></div>
+      <!-- Zweite Spalte: Rückgängig-Verlauf der Ticker. Anders als das Protokoll
+           liegt er auf dem Server und überlebt ein Neuladen. -->
+      <aside class="log-verlauf">
+        <div class="lv-head">
+          <span class="panel-title">↶ Ticker-Verlauf</span>
+          <span id="verlaufAnzahl" class="log-hint"></span>
+          <span class="lv-btns">
+            <button class="export-btn log-btn" data-verlauf="zurueck" onclick="verlaufSchritt(true)"  disabled>↶ Rückgängig</button>
+            <button class="export-btn log-btn" data-verlauf="vor"     onclick="verlaufSchritt(false)" disabled>↷ Wiederholen</button>
+          </span>
+        </div>
+        <div class="lv-body" id="verlaufListe"></div>
+      </aside>
+    </div>
   </div>
 </section><!-- end #view-log -->
 
@@ -1133,6 +1150,15 @@
           <b>INDEX</b>-Zeile den ganzen Basket. Mit <kbd>↑</kbd> und <kbd>↓</kbd> gehst du die Liste
           durch. In einem IBKR-Basket steht unter dem Symbol zusätzlich der Anteil am Depot — und bei
           breitem Fenster der Betrag.
+        </p>
+        <p>
+          Das <b>×</b>, das beim Überfahren einer Zeile erscheint, nimmt den Wert aus dem Basket —
+          sofort gespeichert, wie das × in der Verwaltung und das Hinzufügen über die Suche. Ein
+          Fehlklick lässt sich mit <b>↶</b> oben in der Reiterleiste oder <kbd>Strg</kbd>+<kbd>Z</kbd>
+          zurücknehmen, auch nach dem Neuladen: der Verlauf liegt auf dem Server und hält die
+          letzten 200 Schritte. Stammte der Wert aus einem Screener-Basket, hebt das Zurücknehmen
+          auch seine Blacklist-Sperre wieder auf. In IBKR-Baskets gibt es kein ×, die baut der
+          Abgleich ohnehin neu.
         </p>
         <p>
           Die <b>Performance</b>-Tabelle zeigt Kurs, Stückzahl, Positionswert, IBKR-P&amp;L und die
@@ -1375,6 +1401,13 @@
           viel davon zu sehen ist: 1 sind nur Fehler, 10 ist jeder Schritt. Mit dem Filterfeld suchst
           du nach Text oder Bereich, <b>📋 Kopieren</b> legt alles in die Zwischenablage.
         </p>
+        <p>
+          Rechts daneben steht der <b>Ticker-Verlauf</b>: jeder Wert, der in einen Basket kam
+          (<b>+</b>) oder ihn verlassen hat (<b>−</b>), neuester oben, mit Basket und Uhrzeit.
+          Zurückgenommene Schritte stehen blass und durchgestrichen über der Linie
+          <i>aktueller Stand</i> — <b>↷ Wiederholen</b> holt sie zurück. Anders als das Protokoll
+          liegt der Verlauf auf dem Server und ist nach dem Neuladen noch da.
+        </p>
         <p class="help-tip">
           <b>Wenn etwas nicht so lädt, wie es soll, ist das hier die erste Anlaufstelle</b> — fehlende
           Kurse und abgelehnte Abrufe stehen dort im Klartext.
@@ -1407,6 +1440,9 @@
           <dd>Durch die Kursliste gehen und den Chart mitwechseln.</dd>
           <dt><kbd>Entf</kbd> / <kbd>⌫</kbd></dt>
           <dd>Ausgewählte Zeichnung(en) löschen.</dd>
+          <dt><kbd>Strg</kbd>+<kbd>Z</kbd> / <kbd>Strg</kbd>+<kbd>Y</kbd></dt>
+          <dd>Hinzugefügten oder entfernten Ticker zurücknehmen bzw. wiederholen — dasselbe wie
+              <b>↶</b> und <b>↷</b> über der Kursliste.</dd>
           <dt><kbd>Esc</kbd></dt>
           <dd>Zeichenwerkzeug beenden und offene Klappmenüs schließen.</dd>
           <dt>Maus</dt>
