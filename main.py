@@ -1573,6 +1573,42 @@ async def save_notes(request: Request):
     shutil.move(tmp, files["notes"])
     return JSONResponse(content={"ok": True})
 
+# ── Rückgängig/Wiederholen (pro Benutzer) ─────────────────────────────────────
+# Der Verlauf liegt als Datei neben der Config, damit ein Fehlklick auch nach
+# einem Neuladen noch zurückzunehmen ist. Die Oberfläche führt die Stapel und
+# schickt sie nach jedem Schritt als Ganzes. Beide Stapel sind gedeckelt — ein
+# Eintrag ist ein paar hundert Byte, die Datei bleibt also immer klein und
+# muss nie von Hand gelöscht werden.
+UNDO_MAX = 200
+
+def _undo_path(user: str) -> str:
+    return os.path.join(get_user_dir(user), "undo.json")
+
+@app.get("/api/undo")
+async def undo_get(request: Request):
+    pfad = _undo_path(get_user(request))
+    try:
+        with open(pfad) as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+    return {"undo": d.get("undo") or [], "redo": d.get("redo") or []}
+
+@app.post("/api/undo")
+async def undo_set(request: Request):
+    body = await request.json()
+    undo = body.get("undo") if isinstance(body.get("undo"), list) else []
+    redo = body.get("redo") if isinstance(body.get("redo"), list) else []
+    # Rückgängig verliert die ältesten Schritte, Wiederholen die hintersten —
+    # oben auf dem Wiederholen-Stapel liegt der zuletzt zurückgenommene.
+    d = {"undo": undo[-UNDO_MAX:], "redo": redo[-UNDO_MAX:]}
+    pfad = _undo_path(get_user(request))
+    tmp = pfad + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    shutil.move(tmp, pfad)
+    return {"ok": True, "undo": len(d["undo"]), "redo": len(d["redo"])}
+
 @app.get("/api/search/{query}")
 async def search_ticker(query: str, request: Request):
     """Yahoo Finance Ticker-Suche."""

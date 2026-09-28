@@ -1135,6 +1135,8 @@ function renderWatchlist() {
 
     // Im IBKR-Basket zusätzlich Depotanteil und Positionsgröße je Ticker
     var ibkrVals = ibkrWatchlistValues();
+    // × zum Entfernen — nicht in IBKR-Baskets, die baut der Sync ohnehin neu.
+    var entfernbar = !basketIstVerwaltet(baskets[currentBasket]);
 
     // Ticker (alphabetisch)
     Object.keys(WEIGHTS).sort().forEach(function(sym) {
@@ -1170,7 +1172,11 @@ function renderWatchlist() {
             + '<div class="wl-price">' + (p ? tickerCurSymbol(sym) + p.price.toFixed(2) : '-') + '</div>'
             + '<div class="wl-chg" style="color:' + (!active ? chgColor : 'rgba(255,255,255,0.85)') + '">'
             + (p ? (parseFloat(p.d1) >= 0 ? '+' : '') + p.d1 + '%' : '-') + '</div>'
-            + '</div>';
+            + '</div>'
+            + (entfernbar
+                ? '<button class="wl-del" onclick="removeTicker(\'' + sym + '\', event)"'
+                  + ' title="' + sym + ' aus dem Basket entfernen (Strg+Z nimmt es zurück)">×</button>'
+                : '');
         div.onclick = (function(s) { return function() { switchView(s); }; })(sym);
         if (active) div.scrollIntoView({ block: 'nearest' });
         el.appendChild(div);
@@ -1513,7 +1519,7 @@ function renderManageList() {
         row.className = 'manage-item';
         row.innerHTML = '<span class="sym-label">' + sym + '</span>'
             + '<input type="number" value="' + (WEIGHTS[sym] || 0) + '" data-sym="' + sym + '" title="negativ = Short">'
-            + '<button class="manage-del" onclick="removeTicker(\'' + sym + '\')" title="Entfernen">×</button>';
+            + '<button class="manage-del" onclick="removeTicker(\'' + sym + '\')" title="Entfernen (Strg+Z nimmt es zurück)">×</button>';
         var input = row.querySelector('input');
         input.oninput = function() {
             var v = parseInt(this.value, 10);
@@ -1524,30 +1530,231 @@ function renderManageList() {
     });
 }
 
-async function addTicker(sym) {
-    sym = sym.toUpperCase().trim();
-    if (!sym || WEIGHTS[sym] !== undefined) return;
-    WEIGHTS[sym] = 1;
-    markUnsaved();
-    renderManageList();
-    // Kursdaten sofort laden
-    showLoading('Lade ' + sym + '...');
-    var r = await fetch('/api/prices/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tickers: [sym] })
+// ── Ticker hinzufügen/entfernen, mit Rückgängig/Wiederholen ──────────────────
+// Hinzufügen und Entfernen (Kursliste wie Verwaltung) speichern sofort und
+// landen im Verlauf, der als undo.json auf dem Server liegt — ein Fehlklick
+// lässt sich so auch nach einem Neuladen noch zurücknehmen. Geänderte Gewichte
+// laufen weiter über „✓ Speichern": gespeichert wird nur der eine Ticker, der
+// hinzukommt oder wegfällt, nicht was sonst gerade ungespeichert ist.
+//
+// Ein Verlaufseintrag ist ein Zustandswechsel, keine Aktion:
+//   { basket, name, sym, vorher, nachher, gesperrt, zeit }
+// vorher/nachher = Gewicht, null = nicht im Basket. Rückgängig setzt `vorher`,
+// Wiederholen `nachher`. Doppelt angewendet schadet so nichts.
+
+var _undoStack = [], _redoStack = [];
+var _verlaufLaeuft = false;
+
+async function verlaufLaden() {
+    try {
+        var d = await fetch('/api/undo', { cache: 'no-store' }).then(function(r) { return r.json(); });
+        _undoStack = d.undo || [];
+        _redoStack = d.redo || [];
+    } catch (e) {
+        logIt(2, 'Verlauf', 'Rückgängig-Verlauf nicht ladbar: ' + e.message);
+    }
+    verlaufKnoepfe();
+}
+
+// Speichern nacheinander, nicht parallel: sonst könnte bei zwei schnellen
+// Klicks die ältere Anfrage zuletzt ankommen und einen veralteten Verlauf
+// festschreiben. Jede Anfrage nimmt den Stand, der gilt, wenn sie dran ist.
+var _verlaufKette = Promise.resolve();
+
+function verlaufSpeichern() {
+    _verlaufKette = _verlaufKette.then(function() {
+        return fetch('/api/undo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ undo: _undoStack, redo: _redoStack })
+        }).catch(function(e) { logIt(2, 'Verlauf', 'Verlauf nicht gespeichert: ' + e.message); });
     });
-    hideLoading();
-    await loadData();
+    return _verlaufKette;
+}
+
+function verlaufText(e) {
+    return e.nachher === null
+        ? e.sym + ' aus „' + e.name + '" entfernt'
+        : e.sym + ' zu „' + e.name + '" hinzugefügt';
+}
+
+/** Knöpfe ↶/↷ (über der Kursliste und auf der Protokoll-Seite) und die
+    Verlaufsspalte auf den aktuellen Stand bringen. */
+function verlaufKnoepfe() {
+    var eu = _undoStack[_undoStack.length - 1], er = _redoStack[_redoStack.length - 1];
+    document.querySelectorAll('[data-verlauf="zurueck"]').forEach(function(u) {
+        u.disabled = !eu || _verlaufLaeuft;
+        u.title = eu ? 'Rückgängig: ' + verlaufText(eu) + ' (Strg+Z)' : 'Nichts rückgängig zu machen';
+    });
+    document.querySelectorAll('[data-verlauf="vor"]').forEach(function(r) {
+        r.disabled = !er || _verlaufLaeuft;
+        r.title = er ? 'Wiederholen: ' + verlaufText(er) + ' (Strg+Y)' : 'Nichts zu wiederholen';
+    });
+    renderVerlaufListe();
+}
+
+/** Verlaufsspalte auf der Protokoll-Seite, neuester Schritt oben. Zurückgenommene
+    Schritte (Wiederholen-Stapel) stehen blass über der Linie „aktueller Stand" —
+    sie sind chronologisch die jüngsten, gelten aber gerade nicht. */
+function renderVerlaufListe() {
+    var el = document.getElementById('verlaufListe');
+    if (!el) return;
+    var cnt = document.getElementById('verlaufAnzahl');
+    if (cnt) cnt.textContent = _undoStack.length + (_undoStack.length === 1 ? ' Schritt' : ' Schritte')
+        + (_redoStack.length ? ' · ' + _redoStack.length + ' zurückgenommen' : '');
+    if (!_undoStack.length && !_redoStack.length) {
+        el.innerHTML = '<div class="log-empty">Noch nichts hinzugefügt oder entfernt. '
+            + 'Jeder Ticker, der über das × oder die Suche in einen Basket kommt oder ihn '
+            + 'verlässt, steht hier.</div>';
+        return;
+    }
+    var zeile = function(e, zurueckgenommen) {
+        var t = new Date(e.zeit || 0);
+        var heute = t.toDateString() === new Date().toDateString();
+        var wann = (heute ? '' : t.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ')
+                 + t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        var weg = e.nachher === null;
+        return '<div class="vl-row' + (zurueckgenommen ? ' vl-undone' : '') + '"'
+             + ' title="' + escHtml(verlaufText(e)) + (zurueckgenommen ? ' — zurückgenommen' : '') + '">'
+             + '<span class="log-time">' + wann + '</span>'
+             + '<span class="vl-art ' + (weg ? 'vl-weg' : 'vl-dazu') + '">' + (weg ? '−' : '+') + '</span>'
+             + '<span class="vl-sym">' + escHtml(e.sym) + '</span>'
+             + '<span class="vl-basket">' + escHtml(e.name || e.basket) + '</span>'
+             + (e.gesperrt ? '<span class="vl-badge" title="Beim Entfernen auf die Screener-Blacklist gesetzt">'
+                             + 'Blacklist</span>' : '')
+             + '</div>';
+    };
+    var html = _redoStack.map(function(e) { return zeile(e, true); }).join('');
+    if (_redoStack.length) html += '<div class="vl-jetzt">▲ zurückgenommen · aktueller Stand ▼</div>';
+    for (var i = _undoStack.length - 1; i >= 0; i--) html += zeile(_undoStack[i], false);
+    el.innerHTML = html;
+}
+
+/** IBKR-Baskets baut der Sync komplett neu — ein entfernter Wert käme wieder. */
+function basketIstVerwaltet(b) {
+    return !!(b && (b.ibkrManaged || b.ibkrFormer));
+}
+
+/** Setzt ein Gewicht (null = entfernen) und speichert sofort. Scheitert das
+    Speichern, bleibt alles, wie es war. Liefert die Server-Antwort oder null. */
+async function _tickerSetzen(bid, sym, w) {
+    var b = baskets[bid];
+    b.weights = b.weights || {};
+    var altB = b.weights[sym];
+    var altW = WEIGHTS[sym];
+    var aktuell = bid === currentBasket;
+    if (w === null) { delete b.weights[sym]; if (aktuell) delete WEIGHTS[sym]; }
+    else            { b.weights[sym] = w;    if (aktuell) WEIGHTS[sym] = w; }
+    var res = await saveBasketsToServer();
+    if (!res || res.ok === false) {
+        if (altB === undefined) delete b.weights[sym]; else b.weights[sym] = altB;
+        if (aktuell) { if (altW === undefined) delete WEIGHTS[sym]; else WEIGHTS[sym] = altW; }
+        logIt(1, 'Verlauf', sym + ': Speichern fehlgeschlagen — nichts geändert');
+        return null;
+    }
+    return res;
+}
+
+/** Chart, Kursliste und Verwaltung auf den neuen Stand bringen. */
+async function _nachTickerAenderung(bid, sym, w) {
+    if (bid !== currentBasket) {
+        await switchBasket(bid);   // zeigen, wo sich etwas geändert hat
+    } else if (w === null && currentView === sym) {
+        switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
+    } else {
+        if (w !== null && TICKERS.indexOf(sym) < 0) {
+            // Neuer Wert ohne Kurse in der Datenbank → gleich holen
+            showLoading('Lade ' + sym + '...');
+            try {
+                await fetch('/api/prices/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tickers: [sym] })
+                });
+                TICKERS.push(sym);
+            } catch (e) {
+                logIt(2, 'Kurse', sym + ': Kurse nicht geladen — ' + e.message);
+            }
+            hideLoading();
+        }
+        await loadData();
+    }
     renderManageList();
 }
 
-function removeTicker(sym) {
-    delete WEIGHTS[sym];
-    markUnsaved();
-    renderManageList();
-    if (currentView === sym) switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
-    else loadData();
+/** Neuer Schritt: ausführen, in den Verlauf, Wiederholen-Stapel verwerfen. */
+async function _tickerSchritt(sym, w) {
+    var bid = currentBasket, b = baskets[bid];
+    if (!b || _verlaufLaeuft) return;
+    var vorher = WEIGHTS[sym] === undefined ? null : WEIGHTS[sym];
+    _verlaufLaeuft = true; verlaufKnoepfe();
+    try {
+        var res = await _tickerSetzen(bid, sym, w);
+        if (!res) return;
+        var e = { basket: bid, name: b.name || bid, sym: sym, vorher: vorher, nachher: w,
+                  gesperrt: (res.blacklisted || []).indexOf(sym) >= 0, zeit: Date.now() };
+        _undoStack.push(e);
+        _redoStack = [];
+        verlaufSpeichern();
+        logIt(3, 'Verlauf', verlaufText(e) + (e.gesperrt ? ' (Screener-Blacklist)' : '')
+              + ' — Strg+Z nimmt es zurück');
+        await _nachTickerAenderung(bid, sym, w);
+    } finally {
+        _verlaufLaeuft = false; verlaufKnoepfe();
+    }
+}
+
+async function addTicker(sym) {
+    sym = sym.toUpperCase().trim();
+    if (!sym || WEIGHTS[sym] !== undefined) return;
+    await _tickerSchritt(sym, 1);
+}
+
+function removeTicker(sym, ev) {
+    if (ev) ev.stopPropagation();   // Klick auf × soll die Zeile nicht auswählen
+    if (WEIGHTS[sym] === undefined) return;
+    return _tickerSchritt(sym, null);
+}
+
+/** Rückgängig (zurueck=true) oder Wiederholen. */
+async function verlaufSchritt(zurueck) {
+    var von = zurueck ? _undoStack : _redoStack;
+    var nach = zurueck ? _redoStack : _undoStack;
+    if (_verlaufLaeuft || !von.length) return;
+    var e = von[von.length - 1];
+    if (!baskets[e.basket]) {
+        // Basket inzwischen gelöscht → Schritt ist nicht mehr anwendbar
+        von.pop();
+        verlaufSpeichern(); verlaufKnoepfe();
+        logIt(2, 'Verlauf', '„' + e.name + '" gibt es nicht mehr — ' + verlaufText(e)
+              + ' lässt sich nicht ' + (zurueck ? 'zurücknehmen' : 'wiederholen'));
+        return;
+    }
+    var w = zurueck ? e.vorher : e.nachher;
+    _verlaufLaeuft = true; verlaufKnoepfe();
+    try {
+        var res = await _tickerSetzen(e.basket, e.sym, w);
+        if (!res) return;
+        var neuGesperrt = (res.blacklisted || []).indexOf(e.sym) >= 0;
+        if (zurueck) {
+            // Rückgängig soll keine Sperre hinterlassen: weder die, die das
+            // Entfernen damals gesetzt hat, noch eine, die das Zurücknehmen
+            // eines Hinzufügens gerade im Screener-Basket ausgelöst hat.
+            if (e.gesperrt || neuGesperrt) {
+                await fetch('/api/screener/blacklist/' + encodeURIComponent(e.sym), { method: 'DELETE' })
+                    .catch(function() {});
+            }
+        } else {
+            e.gesperrt = neuGesperrt;
+        }
+        von.pop();
+        nach.push(e);
+        verlaufSpeichern();
+        logIt(3, 'Verlauf', (zurueck ? 'Rückgängig: ' : 'Wiederholt: ') + verlaufText(e));
+        await _nachTickerAenderung(e.basket, e.sym, w);
+    } finally {
+        _verlaufLaeuft = false; verlaufKnoepfe();
+    }
 }
 
 function onSearch(val) {
@@ -2333,6 +2540,13 @@ function renderHiddenPaneInfo() {
 
 document.addEventListener('keydown', function(e) {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement && document.activeElement.tagName)) return;
+    // Strg+Z / Strg+Y (bzw. Strg+Umschalt+Z): Ticker-Verlauf. In Eingabefeldern
+    // greift oben schon das Rückgängig des Browsers.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        var k = (e.key || '').toLowerCase();
+        if (k === 'z' && !e.shiftKey)              { e.preventDefault(); verlaufSchritt(true);  return; }
+        if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); verlaufSchritt(false); return; }
+    }
     if (e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
     // Delete/Backspace → ausgewählte Zeichnung(en) löschen
@@ -2394,6 +2608,7 @@ updateClock();
         doneStart();
         loadDrawings();
         loadNotes();
+        verlaufLaden();
         // Konten schon beim Start holen, nicht erst beim Öffnen der Seite: der
         // Basket eines weiteren Depots braucht sein Konto, um Depotanteil und
         // Positionsgröße zu zeigen, und der Portfolio-Report braucht die Summen.
