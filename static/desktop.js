@@ -1657,29 +1657,45 @@ async function _tickerSetzen(bid, sym, w) {
 
 /** Chart, Kursliste und Verwaltung auf den neuen Stand bringen. */
 async function _nachTickerAenderung(bid, sym, w) {
+    renderManageList();
     if (bid !== currentBasket) {
         await switchBasket(bid);   // zeigen, wo sich etwas geändert hat
-    } else if (w === null && currentView === sym) {
-        switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
-    } else {
-        if (w !== null && TICKERS.indexOf(sym) < 0) {
-            // Neuer Wert ohne Kurse in der Datenbank → gleich holen
-            showLoading('Lade ' + sym + '...');
-            try {
-                await fetch('/api/prices/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tickers: [sym] })
-                });
-                TICKERS.push(sym);
-            } catch (e) {
-                logIt(2, 'Kurse', sym + ': Kurse nicht geladen — ' + e.message);
-            }
-            hideLoading();
-        }
-        await loadData();
+        return;
     }
-    renderManageList();
+    if (w === null && currentView === sym) {
+        switchView(basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index'));
+        return;
+    }
+    // Kursliste sofort, nicht erst nach dem Nachladen. loadData() zeichnet sie
+    // nämlich nur in der Index-Ansicht neu — in der Einzelansicht blieb ein
+    // zurückgeholter Ticker unsichtbar, bis man eine andere Zeile anklickte.
+    renderWatchlist();
+    if (w !== null && TICKERS.indexOf(sym) < 0) {
+        // Neuer Wert ohne Kurse in der Datenbank → gleich holen
+        showLoading('Lade ' + sym + '...');
+        try {
+            await fetch('/api/prices/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: [sym] })
+            });
+            TICKERS.push(sym);
+        } catch (e) {
+            logIt(2, 'Kurse', sym + ': Kurse nicht geladen — ' + e.message);
+        }
+        hideLoading();
+    }
+    if (currentView === 'index') {
+        await loadData();   // Index neu zusammensetzen, zeichnet auch die Kursliste
+        return;
+    }
+    // Einzelansicht: der Chart bleibt, wie er ist. Neu sind nur Kursliste und
+    // Performance-Tabelle, und dafür braucht der zurückgeholte Ticker Kurse.
+    if (w !== null && !(_dataMap[sym] || []).length) {
+        _dataMap[sym] = await fetchTicker(sym);
+    }
+    renderPerfTable();   // baut auch perfData neu (Preis/Änderung der Kursliste)
+    renderWatchlist();
 }
 
 /** Neuer Schritt: ausführen, in den Verlauf, Wiederholen-Stapel verwerfen. */
