@@ -1072,17 +1072,26 @@ function fitView() {
     _fitPriceScaleOnce();
 }
 
+// ARR/R² stehen im festen Feld oben links (#reg-badge), nicht als Serientitel:
+// den zeichnet LightweightCharts auf Höhe des letzten Werts an den rechten Rand,
+// mitten über die letzten Kerzen.
 function applyLogReg(regResult, rS, rUS, rLS) {
     if (!rS) return;
+    var badge = document.getElementById('reg-badge');
     if (regResult) {
-        rS.applyOptions({ visible: true, title: 'ARR: ' + regResult.arr + '% R²: ' + regResult.r2 });
+        rS.applyOptions({ visible: true, title: '' });
         rS.setData(regResult.reg);
         if (rUS) { rUS.applyOptions({ visible: true }); rUS.setData(regResult.upper); }
         if (rLS) { rLS.applyOptions({ visible: true }); rLS.setData(regResult.lower); }
+        if (badge) {
+            badge.textContent = 'LogReg  ARR ' + regResult.arr + ' %  ·  R² ' + regResult.r2;
+            badge.style.display = 'block';
+        }
     } else {
         hideSeries(rS);
         hideSeries(rUS);
         hideSeries(rLS);
+        if (badge) badge.style.display = 'none';
     }
 }
 
