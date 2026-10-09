@@ -2237,7 +2237,60 @@ function onDrawingsCleared() {
 // Erkennung in autolines.js; hier nur zeichnen. Die Linien sind normale
 // Zeichnungen mit ID-Präfix "auto_" — auswählbar und per Strg+C/Strg+V als eigene
 // (gespeicherte) Zeichnung übernehmbar, selbst aber nie gespeichert.
-var _AUTO_LINE_COLORS = { support: '#26a69a', resistance: '#ef5350' };
+// Darstellung + Erkennung, einstellbar unter Einstellungen → Auto-Linien.
+// Gespeichert in appearance.autoLines (pro Benutzer, alle Geräte).
+var AUTO_LINE_DEFAULTS = {
+    supColor: '#26a69a', resColor: '#ef5350', width: 1, dash: 'dashed',
+    minTouches: 3, levels: 3, trendlines: 2, tolerance: 0.6,
+};
+var _AUTO_LINE_DASH = { solid: [], dashed: [6, 4], dotted: [2, 3] };
+
+function autoLineSetting(key) {
+    var s = (appearance && appearance.autoLines) || {};
+    var v = s[key], d = AUTO_LINE_DEFAULTS[key];
+    if (typeof d === 'number') return (v == null || v === '' || isNaN(v)) ? d : Number(v);
+    if (key.slice(-5) === 'Color') return /^#[0-9a-f]{6}$/i.test(String(v || '')) ? v : d;
+    return (v != null && v !== '') ? v : d;
+}
+
+/** commit=false beim Ziehen eines Reglers (nur anzeigen), true speichert. */
+async function setAutoLineSetting(key, value, commit) {
+    if (!appearance) appearance = {};
+    appearance.autoLines = Object.assign({}, appearance.autoLines);
+    appearance.autoLines[key] = typeof AUTO_LINE_DEFAULTS[key] === 'number' ? Number(value) : value;
+    renderAutoLineControls();
+    refreshAutoLines();
+    if (commit) await saveAppearanceToServer();
+}
+
+async function resetAutoLineSettings() {
+    if (!appearance) appearance = {};
+    delete appearance.autoLines;
+    renderAutoLineControls();
+    refreshAutoLines();
+    await saveAppearanceToServer();
+}
+
+function renderAutoLineControls() {
+    ['supColor', 'resColor', 'width', 'levels', 'trendlines'].forEach(function(key) {
+        var el = document.getElementById('al-' + key);
+        if (el) el.value = autoLineSetting(key);
+        var lab = document.getElementById('al-' + key + '-val');
+        if (lab) lab.textContent = autoLineSetting(key);
+    });
+    var tol = document.getElementById('al-tolerance');
+    if (tol) tol.value = Math.round(autoLineSetting('tolerance') * 10);
+    var tolLab = document.getElementById('al-tolerance-val');
+    if (tolLab) tolLab.textContent = autoLineSetting('tolerance').toLocaleString('de-DE', { minimumFractionDigits: 1 });
+    [['al-dash', 'dash'], ['al-minTouches', 'minTouches']].forEach(function(pair) {
+        var grp = document.getElementById(pair[0]);
+        if (!grp) return;
+        var cur = String(autoLineSetting(pair[1]));
+        grp.querySelectorAll('.seg-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-v') === cur);
+        });
+    });
+}
 
 function _isAutoLine(d) {
     var id = typeof d === 'string' ? d : (d && d.id);
@@ -2259,14 +2312,21 @@ function refreshAutoLines() {
     if (!_showAutoLines || !window.AutoLines || !_lastCandles || !_lastCandles.length) return;
     var res;
     // Ganze Historie im aktuellen Zeitrahmen; gezeichnet wird ab der ersten sichtbaren Kerze
-    try { res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time); }
+    try {
+        res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time, {
+            minTouches: autoLineSetting('minTouches'), levels: autoLineSetting('levels'),
+            trendlines: autoLineSetting('trendlines'), tolerance: autoLineSetting('tolerance'),
+        });
+    }
     catch (e) { console.warn('AutoLines:', e); return; }
     var n = 0;
+    var width = autoLineSetting('width');
+    var dash  = _AUTO_LINE_DASH[autoLineSetting('dash')] || _AUTO_LINE_DASH.dashed;
     var add = function(Cls, anchors, kind) {
-        var c = _AUTO_LINE_COLORS[kind];
+        var c = autoLineSetting(kind === 'support' ? 'supColor' : 'resColor');
         try {
             var d = new Cls('auto_' + (n++), anchors,
-                            { lineColor: c, labelColor: c, lineWidth: 1, lineDash: [6, 4] },
+                            { lineColor: c, labelColor: c, lineWidth: width, lineDash: dash.slice() },
                             { visible: _drawVisible });
             drawingManager.addDrawing(d);
             _autoLineIds.push(d.id);
@@ -4013,6 +4073,7 @@ function renderAppearanceControls() {
         var lab = document.getElementById('ap-' + key + '-val');
         if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
     });
+    renderAutoLineControls();
 }
 
 /**
