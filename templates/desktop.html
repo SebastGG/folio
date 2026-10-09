@@ -865,6 +865,84 @@
     </div>
 
     <div class="settings-card">
+      <h2 class="settings-h">Auto-Linien</h2>
+      <p class="settings-hint">
+        Unterstützungen, Widerstände und Trendlinien, die der Schalter <b>📐 Auto-Linien</b> über dem
+        Chart einzeichnet. Änderungen wirken sofort und gelten für alle Charts.
+      </p>
+      <div class="settings-row ap-row">
+        <span class="settings-label">Farben</span>
+        <label class="ap-color">
+          <input type="color" id="al-supColor" value="#26a69a"
+                 oninput="setAutoLineSetting('supColor', this.value, false)"
+                 onchange="setAutoLineSetting('supColor', this.value, true)">
+          <span>Unterstützung</span>
+        </label>
+        <label class="ap-color">
+          <input type="color" id="al-resColor" value="#ef5350"
+                 oninput="setAutoLineSetting('resColor', this.value, false)"
+                 onchange="setAutoLineSetting('resColor', this.value, true)">
+          <span>Widerstand</span>
+        </label>
+      </div>
+      <div class="settings-row ap-row">
+        <span class="settings-label">Linie</span>
+        <div class="seg-group" id="al-dash">
+          <button class="seg-btn" data-v="solid"  onclick="setAutoLineSetting('dash','solid',true)">Durchgezogen</button>
+          <button class="seg-btn" data-v="dashed" onclick="setAutoLineSetting('dash','dashed',true)">Gestrichelt</button>
+          <button class="seg-btn" data-v="dotted" onclick="setAutoLineSetting('dash','dotted',true)">Gepunktet</button>
+        </div>
+        <label class="ap-range">
+          <input type="range" id="al-width" min="1" max="4" step="1" value="1"
+                 oninput="setAutoLineSetting('width', this.value, false)"
+                 onchange="setAutoLineSetting('width', this.value, true)">
+          <span>Stärke <b id="al-width-val">1</b></span>
+        </label>
+      </div>
+      <div class="settings-row ap-row">
+        <span class="settings-label">Mindestens Berührungen</span>
+        <div class="seg-group" id="al-minTouches">
+          <button class="seg-btn" data-v="2" onclick="setAutoLineSetting('minTouches',2,true)">2</button>
+          <button class="seg-btn" data-v="3" onclick="setAutoLineSetting('minTouches',3,true)">3</button>
+          <button class="seg-btn" data-v="4" onclick="setAutoLineSetting('minTouches',4,true)">4</button>
+          <button class="seg-btn" data-v="5" onclick="setAutoLineSetting('minTouches',5,true)">5</button>
+        </div>
+      </div>
+      <div class="settings-row ap-row">
+        <span class="settings-label">Anzahl je Seite</span>
+        <label class="ap-range">
+          <input type="range" id="al-levels" min="0" max="6" step="1" value="3"
+                 oninput="setAutoLineSetting('levels', this.value, false)"
+                 onchange="setAutoLineSetting('levels', this.value, true)">
+          <span>Horizontale <b id="al-levels-val">3</b></span>
+        </label>
+        <label class="ap-range">
+          <input type="range" id="al-trendlines" min="0" max="4" step="1" value="2"
+                 oninput="setAutoLineSetting('trendlines', this.value, false)"
+                 onchange="setAutoLineSetting('trendlines', this.value, true)">
+          <span>Trendlinien <b id="al-trendlines-val">2</b></span>
+        </label>
+      </div>
+      <div class="settings-row ap-row">
+        <span class="settings-label">Toleranz</span>
+        <label class="ap-range">
+          <input type="range" id="al-tolerance" min="3" max="12" step="1" value="6"
+                 oninput="setAutoLineSetting('tolerance', this.value / 10, false)"
+                 onchange="setAutoLineSetting('tolerance', this.value / 10, true)">
+          <span>× Kerzenspanne <b id="al-tolerance-val">0,6</b></span>
+        </label>
+        <button class="btn" onclick="resetAutoLineSettings()" title="Alle Auto-Linien-Einstellungen auf die Vorgabe zurücksetzen">Zurücksetzen</button>
+      </div>
+      <p class="settings-hint">
+        <b>Berührungen:</b> wie oft der Kurs an einer Linie gedreht haben muss — mehr heißt weniger,
+        aber belastbarere Linien. <b>Anzahl je Seite:</b> höchstens so viele Linien unter (Unterstützung)
+        bzw. über dem Kurs (Widerstand); 0 schaltet die Art ab. <b>Toleranz:</b> wie nah ein Hoch oder Tief
+        an der Linie liegen muss, gemessen an der durchschnittlichen Kerzenspanne des Werts — größer heißt
+        großzügiger, mehr Treffer.
+      </p>
+    </div>
+
+    <div class="settings-card">
       <h2 class="settings-h">Fenster</h2>
       <p class="settings-hint">
         Jedes Fenster auf der Chart-Seite lässt sich über das <b>×</b> in seiner Kopfzeile schließen.

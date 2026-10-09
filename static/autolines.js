@@ -24,8 +24,8 @@
         '1W': { k: 3, lookback: 260 },
         '1M': { k: 2, lookback: 180 },
     };
-    var MAX_LEVELS_PER_SIDE = 3;
-    var MAX_TRENDLINES_PER_SIDE = 2;
+    // Vorgaben; in den Einstellungen änderbar (opts von detect)
+    var DEFAULTS = { minTouches: 3, levels: 3, trendlines: 2, tolerance: 0.6 };
 
     function findPivots(bars, k) {
         var highs = [], lows = [];
@@ -54,7 +54,7 @@
         return n ? sum / n : 0.02;
     }
 
-    function levels(bars, piv, tol, last) {
+    function levels(bars, piv, tol, last, o) {
         var pts = piv.highs.concat(piv.lows).sort(function(a, b) { return a.price - b.price; });
         var clusters = [], cur = null;
         pts.forEach(function(p) {
@@ -67,7 +67,7 @@
             }
         });
         var close = bars[last].close;
-        var out = clusters.filter(function(c) { return c.pts.length >= 3; }).map(function(c) {
+        var out = clusters.filter(function(c) { return c.pts.length >= o.minTouches; }).map(function(c) {
             var first = Math.min.apply(null, c.pts.map(function(p) { return p.i; }));
             var lastTouch = Math.max.apply(null, c.pts.map(function(p) { return p.i; }));
             // Jüngere Berührungen zählen mehr (0,5 … 1,0 je Berührung)
@@ -82,12 +82,12 @@
         var pick = function(kind) {
             return out.filter(function(l) { return l.kind === kind; })
                       .sort(function(a, b) { return b.score - a.score; })
-                      .slice(0, MAX_LEVELS_PER_SIDE);
+                      .slice(0, o.levels);
         };
         return pick('support').concat(pick('resistance'));
     }
 
-    function trendlines(bars, pivots, kind, tol, k, last, log) {
+    function trendlines(bars, pivots, kind, tol, k, last, log, o) {
         var isSup = kind === 'support';
         var lt = Math.log(1 + tol);
         var fwd = log ? Math.log : function(v) { return v; };
@@ -119,7 +119,7 @@
                         if (p.i > lastTouch) lastTouch = p.i;
                     }
                 });
-                if (touches < 3) continue;
+                if (touches < o.minTouches) continue;
                 // Aktuell zu weit weg → nicht mehr relevant
                 var yNow = inv(at(last));
                 if (!(yNow > 0) || Math.abs(Math.log(bars[last].close / yNow)) > 0.25) continue;
@@ -135,7 +135,7 @@
         // Fast gleiche Linien (gleiche Steigung, gleicher Wert heute) nur einmal
         var picked = [];
         cands.forEach(function(c) {
-            if (picked.length >= MAX_TRENDLINES_PER_SIDE) return;
+            if (picked.length >= o.trendlines) return;
             var dup = picked.some(function(p) { return Math.abs(Math.log(c.now / p.now)) < 2 * lt; });
             if (!dup) picked.push(c);
         });
@@ -149,29 +149,38 @@
      *   (sonst hätte z.B. ein 6-Monats-Wochenchart zu wenig Kerzen), die Linien
      *   beginnen aber frühestens hier — davor hat der Chart keine Kerzen, an denen
      *   eine Zeichnung verankert werden könnte.
+     * opts: { minTouches, levels, trendlines, tolerance } — fehlende Werte = Vorgabe.
+     *   levels/trendlines: höchstens so viele je Seite (0 = keine);
+     *   tolerance: Faktor auf die mittlere relative Kerzenspanne.
      * Liefert { levels: [...], trendlines: [...] } mit Zeitstempeln statt Indizes;
      * jede Linie endet an der letzten Kerze (time2/price2 bzw. timeEnd).
      */
-    function detect(bars, tf, log, from) {
+    function detect(bars, tf, log, from, opts) {
+        var o = {};
+        Object.keys(DEFAULTS).forEach(function(key) {
+            var v = opts ? Number(opts[key]) : NaN;
+            o[key] = isFinite(v) && opts[key] !== null && opts[key] !== '' ? v : DEFAULTS[key];
+        });
+        o.minTouches = Math.max(2, Math.round(o.minTouches));
         var prm = TF_PARAMS[tf] || TF_PARAMS['1D'];
         if (!bars || bars.length < 4 * prm.k + 10) return { levels: [], trendlines: [] };
         var b = bars.slice(-prm.lookback);
         var last = b.length - 1;
-        var tol = 0.6 * relativeRange(b);
+        var tol = o.tolerance * relativeRange(b);
         var piv = findPivots(b, prm.k);
         var t = function(i) { return b[i].time; };
         // Index der ersten sichtbaren Kerze
         var vis = 0;
         if (from) { while (vis < last && b[vis].time < from) vis++; }
         var out = { tol: tol, levels: [], trendlines: [] };
-        levels(b, piv, tol, last).forEach(function(l) {
+        levels(b, piv, tol, last, o).forEach(function(l) {
             var start = Math.max(l.from, vis);
             if (start >= last) return;
             out.levels.push({ kind: l.kind, price: l.price, touches: l.touches,
                               time: t(start), timeEnd: t(last) });
         });
-        trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log)
-            .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log))
+        trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log, o)
+            .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log, o))
             .forEach(function(l) {
                 var priceAt = function(i) {
                     var y = l.y1 + l.slope * (i - l.i1);
@@ -187,7 +196,7 @@
         return out;
     }
 
-    var api = { detect: detect, findPivots: findPivots };
+    var api = { detect: detect, findPivots: findPivots, DEFAULTS: DEFAULTS };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.AutoLines = api;
 })(this);
