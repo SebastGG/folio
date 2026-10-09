@@ -873,40 +873,6 @@ function chartTimeToStr(t) {
     return null;
 }
 
-function _dayDiff(a, b) {
-    return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
-}
-function _addDays(d, n) {
-    var t = new Date(d + 'T00:00:00Z');
-    t.setUTCDate(t.getUTCDate() + n);
-    return t.toISOString().slice(0, 10);
-}
-
-/**
- * Legt den beim Ticker-Wechsel gemerkten Ausschnitt auf die Daten des neuen
- * Tickers: gleiche Fensterbreite, am rechten Rand ausgerichtet, auf den
- * verfügbaren Bereich begrenzt.
- *
- * Warum nicht die logische Range (Balken-Indizes) übernehmen, wie es vorher lief:
- * die zählt Kerzen, nicht Zeit. Hat der neue Ticker eine kürzere Historie oder
- * einen anderen Börsenkalender, zeigt derselbe Index-Bereich einen völlig anderen
- * Zeitraum — bei einem jungen Papier landete man am Anfang der Reihe statt am
- * rechten Rand, und die eingestellten „1 Jahr" waren weg.
- *
- * Reicht die Historie des neuen Tickers nicht so weit zurück, beginnt das Fenster
- * am ersten verfügbaren Tag — das entspricht dann genau dem eingepassten Chart.
- */
-function clampVisibleRange(saved, first, last) {
-    if (!saved || !saved.from || !saved.to || !first || !last) return null;
-    var width = _dayDiff(saved.from, saved.to);
-    if (!(width > 0)) return null;
-    var to   = saved.to > last ? last : saved.to;
-    var from = _addDays(to, -width);
-    if (from < first) from = first;
-    if (from >= to) return null;
-    return { from: from, to: to };
-}
-
 function togInd(name) {
     indicators[name] = !indicators[name];
     applyPeriod();
@@ -1246,6 +1212,7 @@ async function fetchTicker(sym, ensure) {
  * Lädt Index-Daten: alle Ticker parallel, dann Index berechnen.
  */
 async function loadIndexData() {
+    var req = _loadSeq;
     if (typeof showLoading === 'function') showLoading('Lade Index...');
     var done = logTimer(4, 'Index', 'Indexdaten laden');
     try {
@@ -1317,6 +1284,8 @@ async function loadIndexData() {
             if (fxLeer.length) logIt(2, 'Index', 'Ohne Wechselkurs (Positionen bleiben in Fremdwährung): ' + fxLeer.join(', '));
         }
 
+        if (req !== _loadSeq) { done('verworfen, inzwischen gewechselt'); return; }
+
         // Index aufbauen (mit optionaler Währungskonvertierung)
         allCandles  = buildIndex(_dataMap, tickerCurrencies, baseCur, _fxDataMap);
         _volumeData = allCandles.map(function(c) { return { time: c.time, volume: c.volume }; });
@@ -1343,6 +1312,7 @@ async function loadIndexData() {
  * Lädt Daten für einen einzelnen Ticker.
  */
 async function loadTickerData(sym) {
+    var req = _loadSeq;
     if (typeof showLoading === 'function') showLoading('Lade ' + sym + '...');
     var done = logTimer(4, 'Chart', sym + ' laden');
     try {
@@ -1352,6 +1322,7 @@ async function loadTickerData(sym) {
         // alte Kurse und ein während des Handels eingefrorenes Teilvolumen.
         // Der Server drosselt selbst auf einen Yahoo-Abruf je Ticker und Minute.
         var data    = await fetchTicker(sym, true);
+        if (req !== _loadSeq) { done('verworfen, inzwischen gewechselt'); return; }
         _dataMap[sym] = data;   // auch in _dataMap speichern für buildPerfData()
         allCandles  = data;
         _volumeData = data.map(function(c) { return { time: c.time, volume: c.volume }; });
@@ -1368,7 +1339,22 @@ async function loadTickerData(sym) {
 /**
  * Lädt Daten je nach aktuellem View (Index oder Ticker).
  */
+/**
+ * _loadSeq: Zähler je Ladevorgang. Wer nach dem Laden nicht mehr der neueste ist,
+ * zeichnet nicht. Ohne das überholte beim schnellen Durchklicken eine langsame
+ * Antwort die schnellere: der Chart zeigte den vorher geklickten Ticker und
+ * verbrauchte dabei das Einpassen, das für den aktuellen gedacht war.
+ *
+ * _fitOnLoad: nach einem Wechsel von Ticker oder Basket den Chart wie mit „Fit"
+ * auf den gewählten Zeitraum einpassen. Timeframe und Zeitraum sind global und
+ * bleiben ohnehin stehen; ein vorher gezoomter oder verschobener Ausschnitt wird
+ * bewusst NICHT mitgenommen.
+ */
+var _loadSeq   = 0;
+var _fitOnLoad = false;
+
 async function loadData() {
+    _loadSeq++;
     if (currentView === 'index' && !basketShowIndex()) {
         currentView = Object.keys(WEIGHTS)[0] || 'index';
     }
@@ -1385,8 +1371,7 @@ async function loadData() {
  */
 function switchView(view) {
     logIt(4, 'Ansicht', 'Wechsel ' + currentView + ' → ' + view);
-    if (typeof saveChartRange === 'function') saveChartRange();
-    if (typeof saveMobileChartRange === 'function') saveMobileChartRange();
+    _fitOnLoad  = true;
     currentView = view;
     allCandles  = [];
     _lastCandles = [];
@@ -1560,6 +1545,7 @@ async function switchBasket(id) {
     allCandles  = [];
     currentView = basketShowIndex() ? 'index' : (Object.keys(WEIGHTS)[0] || 'index');
     drawings    = [];
+    _fitOnLoad  = true;
     await loadData();
     loadDrawings();
 }

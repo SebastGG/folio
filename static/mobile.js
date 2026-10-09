@@ -35,16 +35,6 @@ var _mIbkrCostLine  = null; // Einstandskurs-Preislinie
 var _mMarkersPlugin = null; // LWC v5 SeriesMarkers-Plugin
 
 var mCurrentScreen     = 'chart'; // Aktiver Screen
-var _mSavedTimeRange = null;  // Sichtbarer Zeitausschnitt beim Ticker-Wechsel
-
-// Datum statt Balken-Index — Begründung bei clampVisibleRange in shared.js.
-function saveMobileChartRange() {
-    if (!mChart) return;
-    var r = mChart.timeScale().getVisibleRange();
-    if (!r) return;
-    var from = chartTimeToStr(r.from), to = chartTimeToStr(r.to);
-    if (from && to) _mSavedTimeRange = { from: from, to: to };
-}
 
 // Positionen (berechnet nach Layout-Init)
 var _mHeaderH = 48;  // Header-Höhe
@@ -403,23 +393,14 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
         try { mVol.setData(mVolData); } catch(e) {}
     }
 
-    if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });   if (indicators.ma50)  mMa50.setData(calcMA(agg, 50)); }
-    if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 });  if (indicators.ma200) mMa200.setData(calcMA(agg, 200)); }
+    if (mMa50)  { if (indicators.ma50)  { mMa50.applyOptions({ visible: true });  mMa50.setData(calcMA(agg, 50)); }  else hideSeries(mMa50); }
+    if (mMa200) { if (indicators.ma200) { mMa200.applyOptions({ visible: true }); mMa200.setData(calcMA(agg, 200)); } else hideSeries(mMa200); }
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
-    if (_mSavedTimeRange !== null && agg && agg.length) {
-        var _mWant = _mSavedTimeRange;
-        _mSavedTimeRange = null;
-        var _mRange = clampVisibleRange(_mWant, agg[0].time, agg[agg.length - 1].time);
-        if (mChart) requestAnimationFrame(function() {
-            if (!mChart) return;
-            if (!_mRange) { mChart.timeScale().fitContent(); return; }
-            try { mChart.timeScale().setVisibleRange(_mRange); } catch(e) { mChart.timeScale().fitContent(); }
-        });
-    } else {
-        _mSavedTimeRange = null;
-        if (mChart) mChart.timeScale().fitContent();
-    }
+    // Immer einpassen — die Daten sind schon auf den gewählten Zeitraum gefiltert.
+    // Nach einem Ticker-Wechsel wird kein alter Ausschnitt mitgenommen.
+    _fitOnLoad = false;
+    if (mChart) mChart.timeScale().fitContent();
     fitMobileChart();
 
     // Aktiven Screen ggf. aktualisieren
