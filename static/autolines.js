@@ -172,7 +172,7 @@
                     if (isTop ? b[i].high > ext : b[i].low < ext) { ok = false; break; }
                     if (isTop ? b[i].low < neck : b[i].high > neck) { neck = isTop ? b[i].low : b[i].high; iv = i; }
                 }
-                if (!ok || Math.abs(Math.log(inner / neck)) < 4 * lt) continue;   // Tal zu flach
+                if (!ok || Math.abs(Math.log(inner / neck)) < 2.5 * lt) continue; // Tal zu flach
                 var came = false;
                 for (var j = Math.max(0, p1.i - sep); j < p1.i && !came; j++) {
                     if (isTop ? b[j].low <= neck : b[j].high >= neck) came = true;
