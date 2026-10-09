@@ -871,6 +871,14 @@
         Chart einzeichnet. Änderungen wirken sofort und gelten für alle Charts.
       </p>
       <div class="settings-row ap-row">
+        <span class="settings-label">Anzeigen</span>
+        <div class="seg-group" id="al-show">
+          <button class="seg-btn" data-v="both"     onclick="setAutoLineSetting('show','both',true)">Linien &amp; Formationen</button>
+          <button class="seg-btn" data-v="lines"    onclick="setAutoLineSetting('show','lines',true)">Nur Linien</button>
+          <button class="seg-btn" data-v="patterns" onclick="setAutoLineSetting('show','patterns',true)">Nur Formationen</button>
+        </div>
+      </div>
+      <div class="settings-row ap-row">
         <span class="settings-label">Farben</span>
         <label class="ap-color">
           <input type="color" id="al-supColor" value="#26a69a"
@@ -924,6 +932,20 @@
         </label>
       </div>
       <div class="settings-row ap-row">
+        <span class="settings-label">Formationen</span>
+        <div class="seg-group" id="al-patterns">
+          <button class="seg-btn" data-k="doubles"  onclick="setAutoLineSetting('doubles',  autoLineSetting('doubles')  ? 0 : 1, true)">Doppeltop/-boden</button>
+          <button class="seg-btn" data-k="channels" onclick="setAutoLineSetting('channels', autoLineSetting('channels') ? 0 : 1, true)">Kanäle</button>
+          <button class="seg-btn" data-k="wedges"   onclick="setAutoLineSetting('wedges',   autoLineSetting('wedges')   ? 0 : 1, true)">Keile &amp; Dreiecke</button>
+        </div>
+        <label class="ap-color">
+          <input type="color" id="al-patColor" value="#8b5cf6"
+                 oninput="setAutoLineSetting('patColor', this.value, false)"
+                 onchange="setAutoLineSetting('patColor', this.value, true)">
+          <span>Farbe</span>
+        </label>
+      </div>
+      <div class="settings-row ap-row">
         <span class="settings-label">Toleranz</span>
         <label class="ap-range">
           <input type="range" id="al-tolerance" min="3" max="12" step="1" value="6"
@@ -939,6 +961,14 @@
         bzw. über dem Kurs (Widerstand); 0 schaltet die Art ab. <b>Toleranz:</b> wie nah ein Hoch oder Tief
         an der Linie liegen muss, gemessen an der durchschnittlichen Kerzenspanne des Werts — größer heißt
         großzügiger, mehr Treffer.
+      </p>
+      <p class="settings-hint">
+        <b>Formationen</b> werden durchgezogen und beschriftet gezeichnet. <b>Doppeltop/-boden:</b> zwei etwa
+        gleich hohe Spitzen bzw. Tiefs mit deutlichem Tal dazwischen; „✓“ = Nackenlinie (gestrichelt)
+        durchbrochen, „(offen)“ = noch nicht. <b>Kanäle</b> haben parallele Begrenzungen, <b>Keile und
+        Dreiecke</b> zulaufende. Kanäle, Keile und Dreiecke werden in den jüngsten Kerzen gesucht (Tageschart etwa 150 Handelstage,
+        Wochenchart 2 Jahre, Monatschart 5 Jahre);
+        gezeigt wird je Art höchstens eine Formation.
       </p>
     </div>
 
