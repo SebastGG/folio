@@ -1152,7 +1152,28 @@ _TICKER_INFO_CACHE: dict[str, tuple] = {}   # sym -> (timestamp, dict)
 _TICKER_INFO_TTL = 12 * 3600
 _TICKER_INFO_INFLIGHT: set[str] = set()     # läuft gerade eine (Hintergrund-)Auffrischung?
 
+def _ticker_info_has_data(data) -> bool:
+    """Leere Antworten (z.B. bei Yahoo-Drosselung) haben nur den Namen → nicht speichern."""
+    return bool(data) and any(data.get(k) is not None for k in
+                              ("sector", "market_cap", "quote_type", "exchange", "week52_high"))
+
 def _ticker_info_fetch(sym: str) -> dict:
+    """yfinance zuerst; liefert das nichts, direkt bei Yahoo (quoteSummary) nachfragen."""
+    data, err = None, None
+    try:
+        data = _ticker_info_fetch_yf(sym)
+    except Exception as e:
+        err = e
+    if not _ticker_info_has_data(data):
+        try:
+            data = _ticker_info_fetch_direct(sym)
+        except Exception as e:
+            err = err or e
+    if not _ticker_info_has_data(data):
+        raise RuntimeError(f"Keine Stammdaten von Yahoo ({err or 'leere Antwort'})")
+    return data
+
+def _ticker_info_fetch_yf(sym: str) -> dict:
     import yfinance as yf
     info = yf.Ticker(sym).info or {}
     return {
@@ -1176,6 +1197,53 @@ def _ticker_info_fetch(sym: str) -> dict:
         "website":        info.get("website"),
     }
 
+def _ticker_info_fetch_direct(sym: str) -> dict:
+    """Stammdaten direkt über Yahoos quoteSummary — braucht Cookie + Crumb."""
+    import urllib.request as _ur, http.cookiejar
+    opener = _ur.build_opener(_ur.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")]
+    try:
+        opener.open("https://fc.yahoo.com", timeout=6).close()
+    except Exception:
+        pass   # antwortet mit 404, setzt das Cookie aber trotzdem
+    with opener.open("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=6) as resp:
+        crumb = resp.read().decode().strip()
+    url = (f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{urllib.parse.quote(sym)}"
+           f"?modules=assetProfile,price,summaryDetail,defaultKeyStatistics"
+           f"&crumb={urllib.parse.quote(crumb)}")
+    with opener.open(url, timeout=8) as resp:
+        res = (json.loads(resp.read()).get("quoteSummary") or {}).get("result") or [{}]
+    r = res[0] or {}
+    prof, price = r.get("assetProfile") or {}, r.get("price") or {}
+    summ, stats = r.get("summaryDetail") or {}, r.get("defaultKeyStatistics") or {}
+
+    def raw(d, k):
+        v = d.get(k)
+        return v.get("raw") if isinstance(v, dict) else v
+
+    dy = raw(summ, "dividendYield")
+    return {
+        "symbol":         sym,
+        "name":           price.get("longName") or price.get("shortName") or sym,
+        "sector":         prof.get("sector"),
+        "industry":       prof.get("industry"),
+        "market_cap":     raw(price, "marketCap") or raw(summ, "marketCap"),
+        "currency":       price.get("currency"),
+        "country":        prof.get("country"),
+        "exchange":       price.get("exchangeName") or price.get("exchange"),
+        "quote_type":     price.get("quoteType"),
+        "pe":             raw(summ, "trailingPE"),
+        "forward_pe":     raw(summ, "forwardPE"),
+        "eps":            raw(stats, "trailingEps"),
+        # quoteSummary liefert einen Anteil (0.0032), yfinance .info Prozent (0.32)
+        "dividend_yield": round(dy * 100, 4) if dy is not None else None,
+        "beta":           raw(summ, "beta"),
+        "week52_high":    raw(summ, "fiftyTwoWeekHigh"),
+        "week52_low":     raw(summ, "fiftyTwoWeekLow"),
+        "employees":      prof.get("fullTimeEmployees"),
+        "website":        prof.get("website"),
+    }
+
 def _ticker_info_db_get(db_file: str, sym: str):
     """Liefert (data, updated_ts) aus der DB oder (None, 0)."""
     try:
@@ -1183,7 +1251,10 @@ def _ticker_info_db_get(db_file: str, sym: str):
         row = conn.execute("SELECT data, updated FROM ticker_info WHERE symbol=?", (sym,)).fetchone()
         conn.close()
         if row and row["data"]:
-            return json.loads(row["data"]), (row["updated"] or 0)
+            data = json.loads(row["data"])
+            # Früher gespeicherte leere Antworten ignorieren → neu holen
+            if _ticker_info_has_data(data):
+                return data, (row["updated"] or 0)
     except Exception as e:
         print(f"ticker_info db_get {sym}: {e}")
     return None, 0
@@ -1231,7 +1302,7 @@ async def ticker_info(ticker: str, request: Request):
 
     # 1) In-Memory-Cache (prozessweit) — frisch → sofort
     cached = _TICKER_INFO_CACHE.get(sym)
-    if cached and now - cached[0] < _TICKER_INFO_TTL:
+    if cached and now - cached[0] < _TICKER_INFO_TTL and _ticker_info_has_data(cached[1]):
         return JSONResponse({"ok": True, "cached": "mem", **cached[1]})
 
     # 2) DB — vorhanden → SOFORT zurückgeben; bei Veraltung im Hintergrund auffrischen
@@ -1245,8 +1316,9 @@ async def ticker_info(ticker: str, request: Request):
     # 3) Nichts gespeichert → live holen (erster Abruf je Ticker)
     try:
         result = await loop.run_in_executor(None, _ticker_info_refresh, sym, files["db"])
-        if result is None:                       # parallele Auffrischung war schon unterwegs
-            result = _TICKER_INFO_CACHE.get(sym, (0, _ticker_info_fetch(sym)))[1]
+        if result is None:                       # parallele Auffrischung lief schon / schlug fehl
+            cached = _TICKER_INFO_CACHE.get(sym)
+            result = cached[1] if cached else await loop.run_in_executor(None, _ticker_info_fetch, sym)
         return JSONResponse({"ok": True, "cached": False, **result})
     except Exception as e:
         print(f"ticker_info error {sym}: {e}")
