@@ -2242,6 +2242,7 @@ function onDrawingsCleared() {
 var AUTO_LINE_DEFAULTS = {
     supColor: '#26a69a', resColor: '#ef5350', width: 1, dash: 'dashed',
     minTouches: 3, levels: 3, trendlines: 2, tolerance: 0.6,
+    patColor: '#8b5cf6', doubles: 1, channels: 1, wedges: 1,   // Formationen (1 = an)
 };
 var _AUTO_LINE_DASH = { solid: [], dashed: [6, 4], dotted: [2, 3] };
 
@@ -2272,7 +2273,7 @@ async function resetAutoLineSettings() {
 }
 
 function renderAutoLineControls() {
-    ['supColor', 'resColor', 'width', 'levels', 'trendlines'].forEach(function(key) {
+    ['supColor', 'resColor', 'patColor', 'width', 'levels', 'trendlines'].forEach(function(key) {
         var el = document.getElementById('al-' + key);
         if (el) el.value = autoLineSetting(key);
         var lab = document.getElementById('al-' + key + '-val');
@@ -2289,6 +2290,10 @@ function renderAutoLineControls() {
         grp.querySelectorAll('.seg-btn').forEach(function(btn) {
             btn.classList.toggle('active', btn.getAttribute('data-v') === cur);
         });
+    });
+    // Formationen: unabhängige An/Aus-Knöpfe
+    document.querySelectorAll('#al-patterns .seg-btn').forEach(function(btn) {
+        btn.classList.toggle('active', !!autoLineSetting(btn.getAttribute('data-k')));
     });
 }
 
@@ -2316,18 +2321,22 @@ function refreshAutoLines() {
         res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time, {
             minTouches: autoLineSetting('minTouches'), levels: autoLineSetting('levels'),
             trendlines: autoLineSetting('trendlines'), tolerance: autoLineSetting('tolerance'),
+            doubles: autoLineSetting('doubles'), channels: autoLineSetting('channels'),
+            wedges: autoLineSetting('wedges'),
         });
     }
     catch (e) { console.warn('AutoLines:', e); return; }
     var n = 0;
     var width = autoLineSetting('width');
     var dash  = _AUTO_LINE_DASH[autoLineSetting('dash')] || _AUTO_LINE_DASH.dashed;
-    var add = function(Cls, anchors, kind) {
-        var c = autoLineSetting(kind === 'support' ? 'supColor' : 'resColor');
+    var add = function(Cls, anchors, kind, lineDash, extra) {
+        var c = kind === 'pattern' ? autoLineSetting('patColor')
+              : autoLineSetting(kind === 'support' ? 'supColor' : 'resColor');
         try {
             var d = new Cls('auto_' + (n++), anchors,
-                            { lineColor: c, labelColor: c, lineWidth: width, lineDash: dash.slice() },
-                            { visible: _drawVisible });
+                            { lineColor: c, labelColor: c, lineWidth: kind === 'pattern' ? width + 1 : width,
+                              lineDash: (lineDash || dash).slice() },
+                            Object.assign({ visible: _drawVisible }, extra));
             drawingManager.addDrawing(d);
             _autoLineIds.push(d.id);
         } catch (e) { console.warn('AutoLines zeichnen:', e); }
@@ -2338,6 +2347,15 @@ function refreshAutoLines() {
     });
     res.trendlines.forEach(function(l) {
         add(lcd.TrendLine, [{ time: l.time1, price: l.price1 }, { time: l.time2, price: l.price2 }], l.kind);
+    });
+    // Formationen: durchgezogene Linien (Nackenlinie gestrichelt) + Beschriftung
+    (res.patterns || []).forEach(function(p) {
+        p.segs.forEach(function(sg) {
+            add(lcd.TrendLine, [{ time: sg.time1, price: sg.price1 }, { time: sg.time2, price: sg.price2 }],
+                'pattern', sg.neck ? _AUTO_LINE_DASH.dashed : _AUTO_LINE_DASH.solid);
+        });
+        add(lcd.TextAnnotation, [{ time: p.labelTime, price: p.labelPrice }], 'pattern', null,
+            { text: p.label, fontSize: 11, fontWeight: 'bold', backgroundColor: '', borderColor: '', padding: 2 });
     });
 }
 
