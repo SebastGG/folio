@@ -2243,6 +2243,7 @@ var AUTO_LINE_DEFAULTS = {
     supColor: '#26a69a', resColor: '#ef5350', width: 1, dash: 'dashed',
     minTouches: 3, levels: 3, trendlines: 2, tolerance: 0.6,
     patColor: '#8b5cf6', doubles: 1, channels: 1, wedges: 1,   // Formationen (1 = an)
+    show: 'both',                                              // 'both' | 'lines' | 'patterns'
 };
 var _AUTO_LINE_DASH = { solid: [], dashed: [6, 4], dotted: [2, 3] };
 
@@ -2283,7 +2284,7 @@ function renderAutoLineControls() {
     if (tol) tol.value = Math.round(autoLineSetting('tolerance') * 10);
     var tolLab = document.getElementById('al-tolerance-val');
     if (tolLab) tolLab.textContent = autoLineSetting('tolerance').toLocaleString('de-DE', { minimumFractionDigits: 1 });
-    [['al-dash', 'dash'], ['al-minTouches', 'minTouches']].forEach(function(pair) {
+    [['al-show', 'show'], ['al-dash', 'dash'], ['al-minTouches', 'minTouches']].forEach(function(pair) {
         var grp = document.getElementById(pair[0]);
         if (!grp) return;
         var cur = String(autoLineSetting(pair[1]));
@@ -2317,12 +2318,17 @@ function refreshAutoLines() {
     if (!_showAutoLines || !window.AutoLines || !_lastCandles || !_lastCandles.length) return;
     var res;
     // Ganze Historie im aktuellen Zeitrahmen; gezeichnet wird ab der ersten sichtbaren Kerze
+    // Anzeige: nur Linien → Formationen aus, nur Formationen → Linien aus
+    var show = autoLineSetting('show');
+    var lines = show !== 'patterns', pats = show !== 'lines';
     try {
         res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time, {
-            minTouches: autoLineSetting('minTouches'), levels: autoLineSetting('levels'),
-            trendlines: autoLineSetting('trendlines'), tolerance: autoLineSetting('tolerance'),
-            doubles: autoLineSetting('doubles'), channels: autoLineSetting('channels'),
-            wedges: autoLineSetting('wedges'),
+            minTouches: autoLineSetting('minTouches'), tolerance: autoLineSetting('tolerance'),
+            levels:     lines ? autoLineSetting('levels') : 0,
+            trendlines: lines ? autoLineSetting('trendlines') : 0,
+            doubles:    pats ? autoLineSetting('doubles')  : 0,
+            channels:   pats ? autoLineSetting('channels') : 0,
+            wedges:     pats ? autoLineSetting('wedges')   : 0,
         });
     }
     catch (e) { console.warn('AutoLines:', e); return; }

@@ -871,6 +871,14 @@
         Chart einzeichnet. Änderungen wirken sofort und gelten für alle Charts.
       </p>
       <div class="settings-row ap-row">
+        <span class="settings-label">Anzeigen</span>
+        <div class="seg-group" id="al-show">
+          <button class="seg-btn" data-v="both"     onclick="setAutoLineSetting('show','both',true)">Linien &amp; Formationen</button>
+          <button class="seg-btn" data-v="lines"    onclick="setAutoLineSetting('show','lines',true)">Nur Linien</button>
+          <button class="seg-btn" data-v="patterns" onclick="setAutoLineSetting('show','patterns',true)">Nur Formationen</button>
+        </div>
+      </div>
+      <div class="settings-row ap-row">
         <span class="settings-label">Farben</span>
         <label class="ap-color">
           <input type="color" id="al-supColor" value="#26a69a"
