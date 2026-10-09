@@ -1956,6 +1956,61 @@ function saveDrawingWithText(drawing) {
     } catch(e) { console.warn('saveDrawingWithText:', e); }
 }
 
+// ── Kopieren / Einfügen (Strg+C / Strg+V) ──────────────────────────────────
+// Zwischenablage nur im Speicher (JSON wie beim Speichern). Nach jedem Einfügen
+// wird sie durch die eingefügten Kopien ersetzt, damit mehrfaches Einfügen
+// jeweils weiter versetzt landet.
+var _drawClipboard = [];
+var _PASTE_OFFSET_PX = 20;
+
+function _drawingJSON(drawing) {
+    var json = drawing.toJSON();
+    if (typeof drawing.getText === 'function') {
+        json.options = json.options || {};
+        json.options.text = drawing.getText();
+    }
+    return JSON.parse(JSON.stringify(json));
+}
+
+function copySelectedDrawings() {
+    var targets = _getTargets().filter(function(d) { return d && d.id !== '__preview__'; });
+    if (!targets.length) return false;
+    _drawClipboard = targets.map(_drawingJSON);
+    return true;
+}
+
+function pasteDrawings() {
+    var lcd = window.LightweightChartsDrawing;
+    if (!lcd || !drawingManager || !_drawClipboard.length) return false;
+    var ts = chart.timeScale();
+    var pasted = [];
+    _drawClipboard.forEach(function(d) {
+        var Cls = lcd[_TOOL_CLASS[d.type]];
+        if (typeof Cls !== 'function') return;
+        var anchors = (d.anchors || []).map(function(a) {
+            var x = ts.timeToCoordinate(a.time), y = csSeries.priceToCoordinate(a.price);
+            if (x === null || y === null) return { time: a.time, price: a.price };
+            var nt = ts.coordinateToTime(x + _PASTE_OFFSET_PX);
+            var np = csSeries.coordinateToPrice(y + _PASTE_OFFSET_PX);
+            return { time: nt !== null ? nt : a.time, price: np !== null ? np : a.price };
+        });
+        var id = 'draw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        var options = Object.assign({}, d.options || {}, { visible: _drawVisible });
+        try {
+            var copy = new Cls(id, anchors, Object.assign({}, d.style || {}), options);
+            drawingManager.addDrawing(copy); // 'drawing:added' speichert
+            pasted.push(copy);
+        } catch(e) { console.warn('pasteDrawings:', d.type, e); }
+    });
+    if (!pasted.length) return false;
+    _drawClipboard = pasted.map(_drawingJSON);
+    // Eingefügte Kopien auswählen, damit sie direkt verschoben werden können
+    _lastClickCtrl = false;
+    drawingManager.selectDrawing(pasted[pasted.length - 1].id);
+    pasted.forEach(function(d) { _multiSelected.add(d); });
+    return true;
+}
+
 function initDrawingManager() {
     var lcd = window.LightweightChartsDrawing;
     if (!lcd || !chart || !csSeries) return;
@@ -2562,6 +2617,10 @@ document.addEventListener('keydown', function(e) {
         var k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey)              { e.preventDefault(); verlaufSchritt(true);  return; }
         if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); verlaufSchritt(false); return; }
+        // Strg+C / Strg+V: Zeichnungen duplizieren. Ohne Auswahl bzw. leere
+        // Zwischenablage bleibt das normale Browser-Verhalten.
+        if (k === 'c' && !e.shiftKey && copySelectedDrawings()) { e.preventDefault(); return; }
+        if (k === 'v' && !e.shiftKey && pasteDrawings())        { e.preventDefault(); return; }
     }
     if (e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
