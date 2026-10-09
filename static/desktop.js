@@ -2216,11 +2216,20 @@ function _snapAnchorTime(time) {
     return best;
 }
 
-// Wird von shared.js loadDrawings() aufgerufen
+// Wird von shared.js loadDrawings() aufgerufen — beim Start und nach jedem
+// Wechsel von Ticker, Basket oder Timeframe.
 function onDrawingsLoaded(data) {
     if (!drawingManager) return;
     drawingManager.clearAll();
     refreshAutoLines();   // clearAll hat auch die Auto-Linien entfernt
+    _importDrawings(data);
+    // Zum Schluss wie der Fit-Knopf einpassen. Zeichnungen und Auto-Linien gehen
+    // in die Preisachse ein (autoscaleInfo), kommen aber erst NACH dem Einpassen
+    // beim Rendern an — ohne das stimmte die Höhe erst nach einem Klick auf „Fit".
+    fitView();
+}
+
+function _importDrawings(data) {
     if (!data || !data.length) return;
     try {
         drawingManager.importDrawings(data, function(type, d) {
