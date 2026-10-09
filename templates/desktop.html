@@ -84,6 +84,7 @@
       <button class="btn" id="btn-trades-toggle" onclick="toggleTradeMarkers(this)" title="Trade-Marker ein/ausblenden">📍 Trades</button>
       <button class="btn active" id="btn-earnings" onclick="toggleEarnings(this)" title="Earnings-Termine als vertikale Linien ein/ausblenden (nur bei Einzelaktie)">📅 Earnings</button>
       <button class="btn" id="btn-sector-etf" onclick="toggleSectorEtf(this)" title="Sektor-ETF als relative-Stärke-Overlay ein/ausblenden (nur bei Einzelaktie)">📊 Sektor-ETF</button>
+      <button class="btn" id="btn-autolines" onclick="toggleAutoLines(this)" title="Unterstützungen/Widerstände und Trendlinien automatisch einzeichnen (grün = Unterstützung, rot = Widerstand). Per Strg+C/Strg+V als eigene Zeichnung übernehmen.">📐 Auto-Linien</button>
       <div class="sep"></div>
       <div class="btn-group">
         <button class="btn" id="btn-pane-r-stammdaten" onclick="togglePane('r-stammdaten')" title="Fenster „Stammdaten“ ein/ausblenden">📇 Stammdaten</button>
@@ -1506,6 +1507,7 @@
 </footer>
 
 <script src="/static/shared.js?v={{APP_VERSION}}"></script>
+<script src="/static/autolines.js?v={{APP_VERSION}}"></script>
 <script src="/static/desktop.js?v={{APP_VERSION}}"></script>
 <script src="/static/router.js?v={{APP_VERSION}}"></script>
 <script>
