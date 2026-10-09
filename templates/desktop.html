@@ -278,7 +278,10 @@
           <div class="spinner"></div>
           <div class="status-text">Lade Kursdaten...</div>
         </div>
-        <div id="ohlcv-overlay" style="display:none;position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;font-size:10px;line-height:1.7;background:var(--surface);padding:4px 8px;border:1px solid var(--border);">
+        <!-- Legende oben links: LogReg-Kennzahlen fest, darunter OHLCV beim Überfahren -->
+        <div id="chart-legend" style="position:absolute;top:8px;left:8px;pointer-events:none;z-index:5;display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
+        <div id="reg-badge" style="display:none;font-size:10px;line-height:1.7;color:#9b59b6;background:var(--surface);padding:0 8px;border:1px solid var(--border);white-space:pre;"></div>
+        <div id="ohlcv-overlay" style="display:none;font-size:10px;line-height:1.7;background:var(--surface);padding:4px 8px;border:1px solid var(--border);">
           <span id="ov-date" style="color:var(--muted);"></span><br>
           O <span id="ov" class="stat-val">-</span>
           H <span id="oh" class="stat-val">-</span>
@@ -286,6 +289,7 @@
           C <span id="oc" class="stat-val">-</span><br>
           Vol <span id="ovol" class="stat-val">-</span>
           Vol∅ <span id="ovola" class="stat-val">-</span>
+        </div>
         </div>
         <div class="cursor-hint" id="cursorHint"></div>
       </div>
