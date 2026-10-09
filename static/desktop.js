@@ -2258,7 +2258,8 @@ function refreshAutoLines() {
     _autoLineIds = [];
     if (!_showAutoLines || !window.AutoLines || !_lastCandles || !_lastCandles.length) return;
     var res;
-    try { res = AutoLines.detect(_lastCandles, currentTF, logScale); }
+    // Ganze Historie im aktuellen Zeitrahmen; gezeichnet wird ab der ersten sichtbaren Kerze
+    try { res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time); }
     catch (e) { console.warn('AutoLines:', e); return; }
     var n = 0;
     var add = function(Cls, anchors, kind) {
