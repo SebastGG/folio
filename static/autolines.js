@@ -149,7 +149,8 @@
      *   (sonst hätte z.B. ein 6-Monats-Wochenchart zu wenig Kerzen), die Linien
      *   beginnen aber frühestens hier — davor hat der Chart keine Kerzen, an denen
      *   eine Zeichnung verankert werden könnte.
-     * Liefert { levels: [...], trendlines: [...] } mit Zeitstempeln statt Indizes.
+     * Liefert { levels: [...], trendlines: [...] } mit Zeitstempeln statt Indizes;
+     * jede Linie endet an der letzten Kerze (time2/price2 bzw. timeEnd).
      */
     function detect(bars, tf, log, from) {
         var prm = TF_PARAMS[tf] || TF_PARAMS['1D'];
@@ -164,7 +165,10 @@
         if (from) { while (vis < last && b[vis].time < from) vis++; }
         var out = { tol: tol, levels: [], trendlines: [] };
         levels(b, piv, tol, last).forEach(function(l) {
-            out.levels.push({ kind: l.kind, price: l.price, touches: l.touches, time: t(Math.max(l.from, vis)) });
+            var start = Math.max(l.from, vis);
+            if (start >= last) return;
+            out.levels.push({ kind: l.kind, price: l.price, touches: l.touches,
+                              time: t(start), timeEnd: t(last) });
         });
         trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log)
             .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log))
@@ -173,9 +177,9 @@
                     var y = l.y1 + l.slope * (i - l.i1);
                     return log ? Math.exp(y) : y;
                 };
-                // Anker vor dem sichtbaren Bereich entlang der Linie nach rechts schieben
-                var i1 = Math.max(l.i1, vis), i2 = l.i2;
-                if (i2 <= i1) i2 = last;
+                // Anker vor dem sichtbaren Bereich entlang der Linie nach rechts schieben;
+                // Ende immer an der letzten Kerze
+                var i1 = Math.max(l.i1, vis), i2 = last;
                 if (i2 <= i1) return;   // nur eine Kerze sichtbar
                 out.trendlines.push({ kind: l.kind, touches: l.touches,
                                       time1: t(i1), price1: priceAt(i1), time2: t(i2), price2: priceAt(i2) });

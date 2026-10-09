@@ -2272,11 +2272,12 @@ function refreshAutoLines() {
             _autoLineIds.push(d.id);
         } catch (e) { console.warn('AutoLines zeichnen:', e); }
     };
+    // Als Strecke (TrendLine ohne Beschriftung), die an der letzten Kerze endet
     res.levels.forEach(function(l) {
-        add(lcd.HorizontalRay, [{ time: l.time, price: l.price }], l.kind);
+        add(lcd.TrendLine, [{ time: l.time, price: l.price }, { time: l.timeEnd, price: l.price }], l.kind);
     });
     res.trendlines.forEach(function(l) {
-        add(lcd.Ray, [{ time: l.time1, price: l.price1 }, { time: l.time2, price: l.price2 }], l.kind);
+        add(lcd.TrendLine, [{ time: l.time1, price: l.price1 }, { time: l.time2, price: l.price2 }], l.kind);
     });
 }
 
