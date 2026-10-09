@@ -1427,6 +1427,7 @@ function chartPrefsCollect() {
     if (typeof _showEarnings     !== 'undefined') c.earnings     = !!_showEarnings;
     if (typeof _showSectorEtf    !== 'undefined') c.sectorEtf    = !!_showSectorEtf;
     if (typeof _vrvpEnabled      !== 'undefined') c.vrvp         = !!_vrvpEnabled;
+    if (typeof _showAutoLines    !== 'undefined') c.autoLines    = !!_showAutoLines;
     return c;
 }
 
@@ -1495,6 +1496,7 @@ function chartPrefsLoad() {
     if (typeof _showTradeMarkers !== 'undefined' && c.tradeMarkers !== undefined) _showTradeMarkers = !!c.tradeMarkers;
     if (typeof _showEarnings     !== 'undefined' && c.earnings     !== undefined) _showEarnings     = !!c.earnings;
     if (typeof _showSectorEtf    !== 'undefined' && c.sectorEtf    !== undefined) _showSectorEtf    = !!c.sectorEtf;
+    if (typeof _showAutoLines    !== 'undefined' && c.autoLines    !== undefined) _showAutoLines    = !!c.autoLines;
 }
 
 /**

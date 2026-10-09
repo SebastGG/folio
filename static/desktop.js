@@ -37,6 +37,8 @@ var _earningsReq       = 0;      // Race-Schutz (nur letzte Anfrage zählt)
 var _showEarnings      = true;   // Toggle-Zustand Earnings-Linien
 var _ghostDates        = [];     // zuletzt erzeugte Zukunfts-Datumswerte (Snapping künftiger Termine)
 var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
+var _showAutoLines     = false;  // automatische Unterstützungen/Widerstände + Trendlinien
+var _autoLineIds       = [];     // IDs der gerade gezeichneten Auto-Linien (werden nie gespeichert)
 var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
 var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
 var _etfCandles        = [];     // Tagesdaten des aktuellen ETFs (für Rebasing bei Zoom/Pan)
@@ -981,6 +983,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
 
     // VRVP neu zeichnen nach Datenwechsel
     if (_vrvpEnabled) _scheduleVRVP();
+    refreshAutoLines();
 
 }
 
@@ -1099,6 +1102,8 @@ function syncUIState() {
     if (btrd) btrd.classList.toggle('active', !!_showTradeMarkers);
     var bearn = document.getElementById('btn-earnings');
     if (bearn) bearn.classList.toggle('active', !!_showEarnings);
+    var bauto = document.getElementById('btn-autolines');
+    if (bauto) bauto.classList.toggle('active', !!_showAutoLines);
 
     // Sektor-ETF-Button an den (in loadBasketState geladenen) Zustand angleichen.
     updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
@@ -1946,6 +1951,7 @@ var _TEXT_TOOLS = new Set([
  * wird getText() manuell in options.text gepatcht.
  */
 function saveDrawingWithText(drawing) {
+    if (_isAutoLine(drawing)) return;   // Auto-Linien werden bei jedem Laden neu berechnet
     try {
         var json = drawing.toJSON ? drawing.toJSON() : drawing;
         if (typeof drawing.getText === 'function') {
@@ -2143,7 +2149,7 @@ function initDrawingManager() {
     });
     drawingManager.on('drawing:removed', function(evt) {
         var id = evt.drawingId || ((evt.drawing || {}).id);
-        if (!id || id === '__preview__') return; // Preview nicht löschen
+        if (!id || id === '__preview__' || _isAutoLine(id)) return; // Preview/Auto-Linien nicht löschen
         deleteDrawing(id);
     });
     drawingManager.on('drawing:selected', function(evt) {
@@ -2204,6 +2210,7 @@ function _snapAnchorTime(time) {
 function onDrawingsLoaded(data) {
     if (!drawingManager) return;
     drawingManager.clearAll();
+    refreshAutoLines();   // clearAll hat auch die Auto-Linien entfernt
     if (!data || !data.length) return;
     try {
         drawingManager.importDrawings(data, function(type, d) {
@@ -2223,6 +2230,53 @@ function onDrawingsLoaded(data) {
 // Wird von shared.js clearAllDrawings() aufgerufen
 function onDrawingsCleared() {
     if (drawingManager) drawingManager.clearAll();
+    refreshAutoLines();
+}
+
+// ── Auto-Linien ─────────────────────────────────────────────────────────────
+// Erkennung in autolines.js; hier nur zeichnen. Die Linien sind normale
+// Zeichnungen mit ID-Präfix "auto_" — auswählbar und per Strg+C/Strg+V als eigene
+// (gespeicherte) Zeichnung übernehmbar, selbst aber nie gespeichert.
+var _AUTO_LINE_COLORS = { support: '#26a69a', resistance: '#ef5350' };
+
+function _isAutoLine(d) {
+    var id = typeof d === 'string' ? d : (d && d.id);
+    return typeof id === 'string' && id.indexOf('auto_') === 0;
+}
+
+function toggleAutoLines(btn) {
+    _showAutoLines = !_showAutoLines;
+    if (btn) btn.classList.toggle('active', _showAutoLines);
+    chartPrefsChanged();
+    refreshAutoLines();
+}
+
+function refreshAutoLines() {
+    var lcd = window.LightweightChartsDrawing;
+    if (!drawingManager || !lcd) return;
+    _autoLineIds.forEach(function(id) { drawingManager.removeDrawing(id); });
+    _autoLineIds = [];
+    if (!_showAutoLines || !window.AutoLines || !_lastCandles || !_lastCandles.length) return;
+    var res;
+    try { res = AutoLines.detect(_lastCandles, currentTF, logScale); }
+    catch (e) { console.warn('AutoLines:', e); return; }
+    var n = 0;
+    var add = function(Cls, anchors, kind) {
+        var c = _AUTO_LINE_COLORS[kind];
+        try {
+            var d = new Cls('auto_' + (n++), anchors,
+                            { lineColor: c, labelColor: c, lineWidth: 1, lineDash: [6, 4] },
+                            { visible: _drawVisible });
+            drawingManager.addDrawing(d);
+            _autoLineIds.push(d.id);
+        } catch (e) { console.warn('AutoLines zeichnen:', e); }
+    };
+    res.levels.forEach(function(l) {
+        add(lcd.HorizontalRay, [{ time: l.time, price: l.price }], l.kind);
+    });
+    res.trendlines.forEach(function(l) {
+        add(lcd.Ray, [{ time: l.time1, price: l.price1 }, { time: l.time2, price: l.price2 }], l.kind);
+    });
 }
 
 function setDrawTool(type) {
@@ -2718,6 +2772,8 @@ updateClock();
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
         var ebtn = document.getElementById('btn-earnings');
         if (ebtn) ebtn.classList.toggle('active', _showEarnings);
+        var abtn = document.getElementById('btn-autolines');
+        if (abtn) abtn.classList.toggle('active', _showAutoLines);
         updateSectorEtfBadge(_showSectorEtf ? 'pending' : null);
     });
 })();

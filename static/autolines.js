@@ -1,0 +1,175 @@
+/**
+ * Auto-Linien: erkennt Unterstützungen/Widerstände und Trendlinien aus Kerzen.
+ *
+ * Reine Berechnung ohne DOM/Chart — desktop.js zeichnet das Ergebnis. Läuft auch
+ * unter Node (module.exports), damit man es an echten Kursdaten prüfen kann.
+ *
+ * Vorgehen:
+ *   1. Pivots: Hoch/Tief, das innerhalb von k Kerzen links und rechts extrem ist.
+ *   2. Toleranz: 0,6 × mittlere relative Tagesspanne (ATR/Close) — passt sich der
+ *      Schwankungsbreite des Werts an.
+ *   3. Horizontale Zonen: Pivots (Hochs UND Tiefs, Rollen tauschen) mit ähnlichem
+ *      Preis bündeln; ab 3 Berührungen eine Linie. Unter Kurs = Unterstützung.
+ *   4. Trendlinien: Paare von Tief- (bzw. Hoch-)Pivots verbinden — im Log-Preis bei
+ *      Log-Skala, sonst linear, damit die gezeichnete Gerade durch die Punkte läuft; gilt,
+ *      wenn seitdem kein Schlusskurs deutlich durchgebrochen ist und mind. 3 Pivots
+ *      die Linie berühren.
+ */
+(function(root) {
+    'use strict';
+
+    // Je Zeitrahmen: Pivot-Fenster k und betrachtete Kerzen
+    var TF_PARAMS = {
+        '1D': { k: 5, lookback: 500 },
+        '1W': { k: 3, lookback: 260 },
+        '1M': { k: 2, lookback: 180 },
+    };
+    var MAX_LEVELS_PER_SIDE = 3;
+    var MAX_TRENDLINES_PER_SIDE = 2;
+
+    function findPivots(bars, k) {
+        var highs = [], lows = [];
+        for (var i = k; i < bars.length - k; i++) {
+            var isHigh = true, isLow = true;
+            for (var j = i - k; j <= i + k && (isHigh || isLow); j++) {
+                if (j === i) continue;
+                if (bars[j].high > bars[i].high) isHigh = false;
+                if (bars[j].low  < bars[i].low)  isLow  = false;
+            }
+            if (isHigh) highs.push({ i: i, price: bars[i].high });
+            if (isLow)  lows.push({ i: i, price: bars[i].low });
+        }
+        return { highs: highs, lows: lows };
+    }
+
+    // Mittlere relative Spanne (True Range / Close) als Maß für „nah beieinander"
+    function relativeRange(bars) {
+        var sum = 0, n = 0;
+        for (var i = 1; i < bars.length; i++) {
+            var pc = bars[i - 1].close;
+            var tr = Math.max(bars[i].high - bars[i].low,
+                              Math.abs(bars[i].high - pc), Math.abs(bars[i].low - pc));
+            if (bars[i].close > 0) { sum += tr / bars[i].close; n++; }
+        }
+        return n ? sum / n : 0.02;
+    }
+
+    function levels(bars, piv, tol, last) {
+        var pts = piv.highs.concat(piv.lows).sort(function(a, b) { return a.price - b.price; });
+        var clusters = [], cur = null;
+        pts.forEach(function(p) {
+            if (cur && p.price <= cur.mean * (1 + tol)) {
+                cur.pts.push(p);
+                cur.mean = cur.pts.reduce(function(s, q) { return s + q.price; }, 0) / cur.pts.length;
+            } else {
+                cur = { pts: [p], mean: p.price };
+                clusters.push(cur);
+            }
+        });
+        var close = bars[last].close;
+        var out = clusters.filter(function(c) { return c.pts.length >= 3; }).map(function(c) {
+            var first = Math.min.apply(null, c.pts.map(function(p) { return p.i; }));
+            var lastTouch = Math.max.apply(null, c.pts.map(function(p) { return p.i; }));
+            // Jüngere Berührungen zählen mehr (0,5 … 1,0 je Berührung)
+            var score = c.pts.reduce(function(s, p) { return s + 0.5 + 0.5 * p.i / last; }, 0);
+            return {
+                kind: c.mean < close ? 'support' : 'resistance',
+                price: c.mean, touches: c.pts.length, from: first, lastTouch: lastTouch, score: score,
+            };
+        });
+        // Zu weit vom Kurs entfernte Zonen spielen keine Rolle
+        out = out.filter(function(l) { return Math.abs(Math.log(l.price / close)) < 0.35; });
+        var pick = function(kind) {
+            return out.filter(function(l) { return l.kind === kind; })
+                      .sort(function(a, b) { return b.score - a.score; })
+                      .slice(0, MAX_LEVELS_PER_SIDE);
+        };
+        return pick('support').concat(pick('resistance'));
+    }
+
+    function trendlines(bars, pivots, kind, tol, k, last, log) {
+        var isSup = kind === 'support';
+        var lt = Math.log(1 + tol);
+        var fwd = log ? Math.log : function(v) { return v; };
+        var inv = log ? Math.exp : function(v) { return v; };
+        // Erlaubter Abstand zur Linie: im Log-Raum konstant, linear relativ zum Linienwert
+        var margin = function(y) { return log ? lt : tol * Math.abs(y); };
+        var minSpan = Math.max(2 * k, Math.round(bars.length / 20));
+        var cands = [];
+        for (var a = 0; a < pivots.length; a++) {
+            for (var b = a + 1; b < pivots.length; b++) {
+                var p1 = pivots[a], p2 = pivots[b];
+                if (p2.i - p1.i < minSpan) continue;   // kurze Basis → wackelige Verlängerung
+                var y1 = fwd(p1.price), y2 = fwd(p2.price);
+                var slope = (y2 - y1) / (p2.i - p1.i);
+                var at = function(i) { return y1 + slope * (i - p1.i); };
+                // Seit dem ersten Punkt kein deutlicher Schluss jenseits der Linie
+                var broken = false;
+                for (var i = p1.i; i <= last && !broken; i++) {
+                    var c = fwd(bars[i].close), y = at(i);
+                    if (isSup ? c < y - margin(y) : c > y + margin(y)) broken = true;
+                }
+                if (broken) continue;
+                var touches = 0, lastTouch = p2.i;
+                pivots.forEach(function(p) {
+                    if (p.i < p1.i) return;
+                    var y = at(p.i);
+                    if (Math.abs(fwd(p.price) - y) <= margin(y)) {
+                        touches++;
+                        if (p.i > lastTouch) lastTouch = p.i;
+                    }
+                });
+                if (touches < 3) continue;
+                // Aktuell zu weit weg → nicht mehr relevant
+                var yNow = inv(at(last));
+                if (!(yNow > 0) || Math.abs(Math.log(bars[last].close / yNow)) > 0.25) continue;
+                cands.push({
+                    kind: kind, i1: p1.i, i2: p2.i,
+                    price1: p1.price, price2: p2.price, now: yNow,
+                    touches: touches, lastTouch: lastTouch,
+                    score: touches + 2 * lastTouch / last + (p2.i - p1.i) / last,
+                });
+            }
+        }
+        cands.sort(function(a, b) { return b.score - a.score; });
+        // Fast gleiche Linien (gleiche Steigung, gleicher Wert heute) nur einmal
+        var picked = [];
+        cands.forEach(function(c) {
+            if (picked.length >= MAX_TRENDLINES_PER_SIDE) return;
+            var dup = picked.some(function(p) { return Math.abs(Math.log(c.now / p.now)) < 2 * lt; });
+            if (!dup) picked.push(c);
+        });
+        return picked;
+    }
+
+    /**
+     * bars: [{time, open, high, low, close}] aufsteigend. tf: '1D' | '1W' | '1M'.
+     * log: true bei logarithmischer Preisachse (Trendlinien dann im Log-Raum).
+     * Liefert { levels: [...], trendlines: [...] } mit Zeitstempeln statt Indizes.
+     */
+    function detect(bars, tf, log) {
+        var prm = TF_PARAMS[tf] || TF_PARAMS['1D'];
+        if (!bars || bars.length < 4 * prm.k + 10) return { levels: [], trendlines: [] };
+        var b = bars.slice(-prm.lookback);
+        var last = b.length - 1;
+        var tol = 0.6 * relativeRange(b);
+        var piv = findPivots(b, prm.k);
+        var t = function(i) { return b[i].time; };
+        return {
+            tol: tol,
+            levels: levels(b, piv, tol, last).map(function(l) {
+                return { kind: l.kind, price: l.price, touches: l.touches, time: t(l.from) };
+            }),
+            trendlines: trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log)
+                .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log))
+                .map(function(l) {
+                    return { kind: l.kind, touches: l.touches,
+                             time1: t(l.i1), price1: l.price1, time2: t(l.i2), price2: l.price2 };
+                }),
+        };
+    }
+
+    var api = { detect: detect, findPivots: findPivots };
+    if (typeof module !== 'undefined' && module.exports) module.exports = api;
+    else root.AutoLines = api;
+})(this);
