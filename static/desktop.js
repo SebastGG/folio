@@ -988,27 +988,67 @@ function generateFutureDates(lastDate, tf, count) {
     return dates;
 }
 
+/**
+ * Preisachse einmal auf den sichtbaren Ausschnitt einpassen, danach wieder fest
+ * (autoScale aus), damit von Hand gezogene Achsen halten.
+ *
+ * ERST aufrufen, NACHDEM der Zeitausschnitt gesetzt ist, und erst zwei Frames
+ * später abschalten: LightweightCharts rechnet die Achse beim Zeichnen neu, und
+ * das plant es selbst per requestAnimationFrame. Ein einzelner rAF, der vor
+ * setVisibleRange angemeldet wurde, lief im selben Frame VOR dem Zeichnen — die
+ * Achse blieb auf dem alten Ausschnitt stehen und passte erst beim zweiten Klick
+ * auf „Fit".
+ */
+function _fitPriceScaleOnce() {
+    if (!csSeries) return;
+    csSeries.priceScale().applyOptions({ autoScale: true });
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            if (csSeries) try { csSeries.priceScale().applyOptions({ autoScale: false }); } catch(e) {}
+        });
+    });
+}
+
+/**
+ * Zeigt fromTime…toTime mit etwas Luft links und rechts: ~3 % der Breite,
+ * mindestens eine Kerze je Seite, damit erste und letzte Kerze nicht an der
+ * Begrenzung kleben. extraRight: weitere Balken rechts (Zukunftsachse).
+ *
+ * Gerechnet wird in Balken-Indizes über timeToIndex, das sofort mit den gesetzten
+ * Daten arbeitet. Den Ausschnitt nach setVisibleRange/fitContent abzulesen und zu
+ * erweitern geht nicht: LightweightCharts übernimmt ihn erst beim nächsten
+ * Zeichnen, getVisibleLogicalRange() lieferte noch den alten.
+ */
+function _showRangePadded(fromTime, toTime, extraRight) {
+    var ts = chart.timeScale();
+    var i0 = ts.timeToIndex(fromTime, true), i1 = ts.timeToIndex(toTime, true);
+    if (i0 == null || i1 == null || i1 < i0) { ts.fitContent(); return; }
+    var pad = Math.max(1, (i1 - i0) * 0.03);
+    ts.setVisibleLogicalRange({ from: i0 - pad, to: i1 + (extraRight || 0) + pad });
+}
+
 function fitWithFuture() {
     if (!chart || !csSeries) return;
-    csSeries.priceScale().applyOptions({ autoScale: true });
-    chart.timeScale().fitContent();
-    requestAnimationFrame(function() {
-        if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
-    });
+    if (_lastCandles && _lastCandles.length) {
+        // wie fitContent(): erste Kerze bis Ende der Zukunftsachse + rightOffset
+        var last = (_ghostDates && _ghostDates.length)
+            ? _ghostDates[_ghostDates.length - 1]
+            : _lastCandles[_lastCandles.length - 1].time;
+        _showRangePadded(_lastCandles[0].time, last, chart.timeScale().options().rightOffset || 0);
+    } else {
+        chart.timeScale().fitContent();
+    }
+    _fitPriceScaleOnce();
 }
 
 function fitView() {
     fitChart();
     if (!chart || !csSeries) return;
-    csSeries.priceScale().applyOptions({ autoScale: true });
-    requestAnimationFrame(function() {
-        if (csSeries) csSeries.priceScale().applyOptions({ autoScale: false });
-    });
     // Sektor-ETF (eigene linke Achse) ebenfalls neu einpassen — autoScale wieder an,
     // falls der Nutzer die Achse zuvor manuell gezogen hatte.
     if (etfSeries) { try { etfSeries.priceScale().applyOptions({ autoScale: true }); } catch(e) {} }
     var candles = allCandles;
-    if (!candles || !candles.length) { chart.timeScale().fitContent(); return; }
+    if (!candles || !candles.length) { chart.timeScale().fitContent(); _fitPriceScaleOnce(); return; }
     var toDate   = candles[candles.length - 1].time;
     var fromDate;
     if (currentPeriod > 0) {
@@ -1025,10 +1065,11 @@ function fitView() {
         fromDate = candles[0].time;
     }
     try {
-        chart.timeScale().setVisibleRange({ from: fromDate, to: toDate });
+        _showRangePadded(fromDate, toDate, 0);
     } catch(e) {
         chart.timeScale().fitContent();
     }
+    _fitPriceScaleOnce();
 }
 
 function applyLogReg(regResult, rS, rUS, rLS) {
