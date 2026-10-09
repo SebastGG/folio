@@ -125,7 +125,7 @@
                 if (!(yNow > 0) || Math.abs(Math.log(bars[last].close / yNow)) > 0.25) continue;
                 cands.push({
                     kind: kind, i1: p1.i, i2: p2.i,
-                    price1: p1.price, price2: p2.price, now: yNow,
+                    price1: p1.price, price2: p2.price, now: yNow, y1: y1, slope: slope,
                     touches: touches, lastTouch: lastTouch,
                     score: touches + 2 * lastTouch / last + (p2.i - p1.i) / last,
                 });
@@ -145,9 +145,13 @@
     /**
      * bars: [{time, open, high, low, close}] aufsteigend. tf: '1D' | '1W' | '1M'.
      * log: true bei logarithmischer Preisachse (Trendlinien dann im Log-Raum).
+     * from: erste sichtbare Kerze (Zeit). Erkannt wird auf der ganzen Historie
+     *   (sonst hätte z.B. ein 6-Monats-Wochenchart zu wenig Kerzen), die Linien
+     *   beginnen aber frühestens hier — davor hat der Chart keine Kerzen, an denen
+     *   eine Zeichnung verankert werden könnte.
      * Liefert { levels: [...], trendlines: [...] } mit Zeitstempeln statt Indizes.
      */
-    function detect(bars, tf, log) {
+    function detect(bars, tf, log, from) {
         var prm = TF_PARAMS[tf] || TF_PARAMS['1D'];
         if (!bars || bars.length < 4 * prm.k + 10) return { levels: [], trendlines: [] };
         var b = bars.slice(-prm.lookback);
@@ -155,18 +159,28 @@
         var tol = 0.6 * relativeRange(b);
         var piv = findPivots(b, prm.k);
         var t = function(i) { return b[i].time; };
-        return {
-            tol: tol,
-            levels: levels(b, piv, tol, last).map(function(l) {
-                return { kind: l.kind, price: l.price, touches: l.touches, time: t(l.from) };
-            }),
-            trendlines: trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log)
-                .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log))
-                .map(function(l) {
-                    return { kind: l.kind, touches: l.touches,
-                             time1: t(l.i1), price1: l.price1, time2: t(l.i2), price2: l.price2 };
-                }),
-        };
+        // Index der ersten sichtbaren Kerze
+        var vis = 0;
+        if (from) { while (vis < last && b[vis].time < from) vis++; }
+        var out = { tol: tol, levels: [], trendlines: [] };
+        levels(b, piv, tol, last).forEach(function(l) {
+            out.levels.push({ kind: l.kind, price: l.price, touches: l.touches, time: t(Math.max(l.from, vis)) });
+        });
+        trendlines(b, piv.lows, 'support', tol, prm.k, last, !!log)
+            .concat(trendlines(b, piv.highs, 'resistance', tol, prm.k, last, !!log))
+            .forEach(function(l) {
+                var priceAt = function(i) {
+                    var y = l.y1 + l.slope * (i - l.i1);
+                    return log ? Math.exp(y) : y;
+                };
+                // Anker vor dem sichtbaren Bereich entlang der Linie nach rechts schieben
+                var i1 = Math.max(l.i1, vis), i2 = l.i2;
+                if (i2 <= i1) i2 = last;
+                if (i2 <= i1) return;   // nur eine Kerze sichtbar
+                out.trendlines.push({ kind: l.kind, touches: l.touches,
+                                      time1: t(i1), price1: priceAt(i1), time2: t(i2), price2: priceAt(i2) });
+            });
+        return out;
     }
 
     var api = { detect: detect, findPivots: findPivots };
