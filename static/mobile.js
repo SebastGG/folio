@@ -250,8 +250,8 @@ function syncMobileChart() {
         } catch(e) {}
     }
 
-    if (mMa50)  { mMa50.applyOptions({ visible: indicators.ma50 });  if (indicators.ma50)  mMa50.setData(calcMA(_lastCandles, 50)); }
-    if (mMa200) { mMa200.applyOptions({ visible: indicators.ma200 }); if (indicators.ma200) mMa200.setData(calcMA(_lastCandles, 200)); }
+    if (mMa50)  { if (indicators.ma50)  { mMa50.applyOptions({ visible: true });  mMa50.setData(calcMA(_lastCandles, 50)); }  else hideSeries(mMa50); }
+    if (mMa200) { if (indicators.ma200) { mMa200.applyOptions({ visible: true }); mMa200.setData(calcMA(_lastCandles, 200)); } else hideSeries(mMa200); }
 
     if (mChart) mChart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
     if (mChart) {
@@ -369,7 +369,7 @@ function renderMobileChart(colored, volAgg, agg, regResult) {
             if (mRegU) { mRegU.applyOptions({ visible: true }); mRegU.setData(regResult.upper); }
             if (mRegL) { mRegL.applyOptions({ visible: true }); mRegL.setData(regResult.lower); }
         } else {
-            [mReg, mRegU, mRegL].forEach(function(s) { if (s) s.applyOptions({ visible: false }); });
+            [mReg, mRegU, mRegL].forEach(hideSeries);
         }
     }
 

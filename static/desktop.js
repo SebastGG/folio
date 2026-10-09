@@ -866,11 +866,11 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Leerer Basket — alle Serien leeren und sofort zurück
     if (!colored || !colored.length) {
         if (volSeries) try { volSeries.setData([]); } catch(e) {}
-        if (ma50S)  ma50S.applyOptions({ visible: false });
-        if (ma200S) ma200S.applyOptions({ visible: false });
-        if (regS)   regS.applyOptions({ visible: false });
-        if (regUS)  regUS.applyOptions({ visible: false });
-        if (regLS)  regLS.applyOptions({ visible: false });
+        hideSeries(ma50S);
+        hideSeries(ma200S);
+        hideSeries(regS);
+        hideSeries(regUS);
+        hideSeries(regLS);
         if (ghostSeries) try { ghostSeries.setData([]); } catch(e) {}
         if (etfSeries) { try { etfSeries.setData([]); } catch(e) {} _setEtfAxisVisible(false); }
         return;
@@ -933,7 +933,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
             ma50S.applyOptions({ visible: true });
             ma50S.setData(calcMA(agg, 50));
         } else {
-            ma50S.applyOptions({ visible: false });
+            hideSeries(ma50S);
         }
     }
 
@@ -943,7 +943,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
             ma200S.applyOptions({ visible: true });
             ma200S.setData(calcMA(agg, 200));
         } else {
-            ma200S.applyOptions({ visible: false });
+            hideSeries(ma200S);
         }
     }
 
@@ -1070,9 +1070,9 @@ function applyLogReg(regResult, rS, rUS, rLS) {
         if (rUS) { rUS.applyOptions({ visible: true }); rUS.setData(regResult.upper); }
         if (rLS) { rLS.applyOptions({ visible: true }); rLS.setData(regResult.lower); }
     } else {
-        rS.applyOptions({ visible: false });
-        if (rUS) rUS.applyOptions({ visible: false });
-        if (rLS) rLS.applyOptions({ visible: false });
+        hideSeries(rS);
+        hideSeries(rUS);
+        hideSeries(rLS);
     }
 }
 

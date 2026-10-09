@@ -810,6 +810,21 @@ function setTF(tf) {
 }
 
 /**
+ * Blendet eine Chart-Serie aus UND leert sie.
+ *
+ * Nur `visible: false` reicht nicht: LightweightCharts baut die Zeitachse aus den
+ * Zeitpunkten ALLER Serien, auch der versteckten. War z. B. MA200 im Tageschart
+ * an und wurde dann abgeschaltet, behielt die Serie ihre Tageswerte — nach dem
+ * Wechsel auf Wochenkerzen lagen zwischen zwei Wochenkerzen fünf leere Tagesplätze,
+ * die Kerzen standen im hinteren Teil weit auseinander und Linien knickten ab.
+ */
+function hideSeries(s) {
+    if (!s) return;
+    s.applyOptions({ visible: false });
+    try { s.setData([]); } catch(e) {}
+}
+
+/**
  * Zeitwert einer Chart-Achse als 'YYYY-MM-DD'. LightweightCharts gibt je nach
  * Datenformat einen String, einen Unix-Zeitstempel oder ein BusinessDay-Objekt
  * zurück — wir füttern Strings, nehmen aber alle drei entgegen.
