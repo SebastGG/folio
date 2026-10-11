@@ -211,8 +211,10 @@ function _hmSichtbar() {
 function _hmPrefsLaden() {
     var gespeichert = (typeof appearance !== 'undefined' && appearance && appearance.heatmap) || {};
     var p = Object.assign({}, HM_VORGABE, gespeichert);
-    // Ein gelöschter Basket als Quelle → zurück auf alle
+    // Ein gelöschter Basket als Quelle → zurück auf alle (nur angezeigt, nicht gespeichert:
+    // laufen die Screener-Baskets nach dem Aufräumen neu an, gilt die Wahl wieder)
     if (p.quelle.indexOf('b:') === 0 && !baskets[p.quelle.slice(2)]) p.quelle = 'alle';
+    if (p.quelle === 'screener' && !_screenerBasketIds().length) p.quelle = 'alle';
     return p;
 }
 
@@ -251,6 +253,7 @@ function _hmGewichte(id) {
 function _hmBasketIds() {
     var q = _HM.prefs.quelle;
     if (q.indexOf('b:') === 0) return baskets[q.slice(2)] ? [q.slice(2)] : [];
+    if (q === 'screener') return _screenerBasketIds();   // Name beginnt mit „Screener " (desktop.js)
     return Object.keys(baskets);
 }
 
@@ -364,7 +367,9 @@ function _hmToolbar() {
         var ids = Object.keys(baskets).sort(function(a, b) {
             return (baskets[a].name || a).localeCompare(baskets[b].name || b, undefined, { sensitivity: 'base', numeric: true });
         });
+        var nScr = _screenerBasketIds().length;
         var html = '<option value="alle">Alle Baskets</option>'
+                 + (nScr ? '<option value="screener">Alle Screener-Baskets (' + nScr + ')</option>' : '')
                  + '<option value="db">Ganze Kursdatenbank</option>'
                  + '<optgroup label="Ein Basket">'
                  + ids.map(function(id) {
@@ -743,15 +748,17 @@ function _hmTooltip(e, veraltet, ev) {
 }
 
 /**
- * Chart des Tickers öffnen. Steht er nicht im aktiven Basket, wird erst auf den
- * gewählten (Quelle „Ein Basket") bzw. den ersten Basket gewechselt, der ihn
- * enthält — so steht er dort auch markiert in der Kursliste. Ticker, die nur in
- * der Datenbank liegen, öffnen im aktiven Basket.
+ * Chart des Tickers öffnen — in einem Basket der gewählten Quelle, der ihn enthält,
+ * damit er dort markiert in der Kursliste steht: im aktiven, wenn der dazugehört,
+ * sonst im ersten nach Namen. Bei „Alle Screener-Baskets" also in seinem
+ * Screener-Basket, auch wenn er zusätzlich im aktiven Depot-Basket steht.
+ * Ticker, die nur in der Datenbank liegen, öffnen im aktiven Basket.
  */
 async function heatmapOeffnen(sym) {
-    var ziel = null, q = _HM.prefs.quelle;
-    if (q.indexOf('b:') === 0 && baskets[q.slice(2)]) ziel = q.slice(2);
-    else if (!Object.prototype.hasOwnProperty.call(WEIGHTS, sym)) ziel = _hmBasketsMit(sym)[0] || null;
+    var q = _HM.prefs.quelle;
+    var erlaubt = (q === 'alle' || q === 'db') ? Object.keys(baskets) : _hmBasketIds();
+    var mit = _hmBasketsMit(sym).filter(function(id) { return erlaubt.indexOf(id) >= 0; });
+    var ziel = mit.indexOf(currentBasket) >= 0 ? null : (mit[0] || null);
     logIt(4, 'Heatmap', sym + ' im Chart öffnen' + (ziel && ziel !== currentBasket ? ' (Basket ' + (baskets[ziel].name || ziel) + ')' : ''));
     location.hash = '#/charts';
     if (ziel && ziel !== currentBasket) await switchBasket(ziel);
