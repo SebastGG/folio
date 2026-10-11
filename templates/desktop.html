@@ -421,7 +421,7 @@
   <div class="chart-toolbar">
     <span class="chart-title">Heatmap</span>
     <select id="hm-quelle" class="hm-select" onchange="heatmapSetze('quelle', this.value)"
-      title="Welche Ticker: alle aus den Baskets, alles mit Kursen in der Datenbank oder ein einzelner Basket"></select>
+      title="Welche Ticker: alle aus den Baskets, alle Screener-Baskets zusammen, alles mit Kursen in der Datenbank oder ein einzelner Basket"></select>
     <div class="sep"></div>
     <div class="btn-group" id="hm-zeitraum" title="Zeitraum der Veränderung (in Handelstagen wie in der Performance-Tabelle)">
       <button class="btn" data-v="d1"   onclick="heatmapSetze('zeitraum','d1')">1T</button>
@@ -1346,7 +1346,8 @@
         </p>
         <p>
           Oben links wählst du, welche Ticker: <b>Alle Baskets</b> (jeder Wert, der in irgendeinem
-          Basket steht, auch mit Gewicht 0), die <b>ganze Kursdatenbank</b> (auch Werte, die du
+          Basket steht, auch mit Gewicht 0), <b>alle Screener-Baskets</b> zusammen (jeder Basket,
+          dessen Name mit „Screener" beginnt), die <b>ganze Kursdatenbank</b> (auch Werte, die du
           längst aus allen Baskets genommen hast) oder <b>einen Basket</b>. Gruppiert wird nach
           Sektor oder Basket, die Kachelgröße folgt der Marktkapitalisierung — wahlweise gedämpft
           (<b>√</b>), damit kleine Werte neben Apple nicht verschwinden, oder für alle gleich.
