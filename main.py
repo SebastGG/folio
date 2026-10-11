@@ -1325,6 +1325,103 @@ async def ticker_info(ticker: str, request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
 
+# ── Heatmap ──────────────────────────────────────────────────────────────────────
+# Kennzahlen aller Ticker der Kursdatenbank in EINEM Abruf: Veränderung über die
+# üblichen Zeiträume, Sektor und Marktkapitalisierung. Die Oberfläche müsste sonst
+# für jeden Ticker die ganze Kurshistorie laden, nur um ein paar Prozentwerte zu
+# rechnen. Gezählt wird in Handelstagen rückwärts wie in calcPerf() (shared.js) —
+# die Heatmap zeigt also dieselben Zahlen wie die Performance-Tabelle.
+# Stammdaten werden hier nur gelesen, nie bei Yahoo geholt: Fehlende zieht die
+# Oberfläche einzeln über /api/ticker/info nach.
+
+_HEATMAP_SPANNEN = {"d1": 1, "d5": 5, "d22": 22, "d66": 66, "d126": 126, "d252": 252}
+
+def _heatmap_pct(alt, neu):
+    if alt is None or neu is None or alt <= 0:
+        return None
+    return round((neu / alt - 1) * 100, 2)
+
+def _heatmap_daten(db_file: str) -> dict:
+    jahr = time.strftime("%Y")
+    conn = get_db(db_file)
+    reihen: dict[str, list] = {}
+    try:
+        # 300 Kerzen reichen für 1 Jahr (252) und den ersten Handelstag des Jahres.
+        # Je Ticker über den Index statt einer Fensterfunktion über die ganze
+        # Tabelle: bei 600 Tickern × 10 Jahren 0,2 statt 1,7 Sekunden.
+        for (sym,) in conn.execute("SELECT DISTINCT ticker FROM prices").fetchall():
+            r = conn.execute("SELECT date, close FROM prices WHERE ticker=? "
+                             "ORDER BY date DESC LIMIT 300", (sym,)).fetchall()
+            reihen[sym] = [(x["date"], x["close"]) for x in reversed(r)]
+        infos    = {r["symbol"]: r["data"] for r in
+                    conn.execute("SELECT symbol, data FROM ticker_info")}
+        waehrung = {r["ticker"]: r["currency"] for r in
+                    conn.execute("SELECT ticker, currency FROM ticker_currency")}
+    finally:
+        conn.close()
+
+    # Marktkapitalisierungen auf USD bringen, damit Kachelgrößen über Börsen hinweg
+    # vergleichbar sind. Kurse dafür liefern die Wechselkurs-Paare, die das
+    # Kurs-Update für Fremdwährungs-Baskets ohnehin in der Datenbank hält.
+    def fx_usd(ccy):
+        if ccy == "USD":
+            return 1.0
+        hin, rueck = reihen.get(f"{ccy}USD=X"), reihen.get(f"USD{ccy}=X")
+        if hin and hin[-1][1]:
+            return hin[-1][1]
+        if rueck and rueck[-1][1]:
+            return 1 / rueck[-1][1]
+        return None
+
+    out = []
+    for sym, r in reihen.items():
+        if sym.endswith("=X"):        # Wechselkurse fürs Umrechnen, keine Anlage
+            continue
+        datum, kurs = r[-1]
+        if kurs is None:
+            continue
+        e = {"t": sym, "last": datum, "price": kurs}
+        for k, n in _HEATMAP_SPANNEN.items():
+            e[k] = _heatmap_pct(r[-1 - n][1], kurs) if len(r) > n else None
+        start = next((c for d, c in r if d.startswith(jahr)), None)
+        e["ytd"] = _heatmap_pct(start, kurs)
+
+        info = {}
+        if infos.get(sym):
+            try:
+                info = json.loads(infos[sym]) or {}
+            except Exception:
+                info = {}
+            if not _ticker_info_has_data(info):
+                info = {}
+        ccy = waehrung.get(sym) or info.get("currency")
+        cap = info.get("market_cap")
+        cap_usd = None
+        if cap and ccy:
+            # Yahoo notiert Londoner Werte in Pence, die Marktkapitalisierung aber in Pfund
+            fx = fx_usd("GBP" if ccy in ("GBp", "GBX") else ccy)
+            cap_usd = cap * fx if fx else None
+        e.update({
+            "name":     info.get("name"),
+            "sector":   info.get("sector"),
+            "industry": info.get("industry"),
+            "qt":       info.get("quote_type"),
+            "ccy":      ccy,
+            "cap":      cap,
+            "cap_usd":  cap_usd,
+            "info":     bool(info),
+        })
+        out.append(e)
+    return {"tickers": out}
+
+@app.get("/api/heatmap")
+async def heatmap(request: Request):
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    return JSONResponse(content=await run_in_threadpool(_heatmap_daten, files["db"]))
+
+
 # ── Earnings-Termine ─────────────────────────────────────────────────────────────
 # Vergangene + kommende Earnings-Daten via yfinance (get_earnings_dates), gecacht in
 # der User-DB (Tabellen earnings/earnings_meta). Gleiche „stale-while-revalidate"-

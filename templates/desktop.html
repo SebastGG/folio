@@ -416,6 +416,61 @@
 
 </section><!-- end #view-charts -->
 
+<!-- ══ SEITE: HEATMAP ═════════════════════════════════════════════════════════ -->
+<section id="view-heatmap" class="page">
+  <div class="chart-toolbar">
+    <span class="chart-title">Heatmap</span>
+    <select id="hm-quelle" class="hm-select" onchange="heatmapSetze('quelle', this.value)"
+      title="Welche Ticker: alle aus den Baskets, alles mit Kursen in der Datenbank oder ein einzelner Basket"></select>
+    <div class="sep"></div>
+    <div class="btn-group" id="hm-zeitraum" title="Zeitraum der Veränderung (in Handelstagen wie in der Performance-Tabelle)">
+      <button class="btn" data-v="d1"   onclick="heatmapSetze('zeitraum','d1')">1T</button>
+      <button class="btn" data-v="d5"   onclick="heatmapSetze('zeitraum','d5')">1W</button>
+      <button class="btn" data-v="d22"  onclick="heatmapSetze('zeitraum','d22')">1M</button>
+      <button class="btn" data-v="d66"  onclick="heatmapSetze('zeitraum','d66')">3M</button>
+      <button class="btn" data-v="d126" onclick="heatmapSetze('zeitraum','d126')">6M</button>
+      <button class="btn" data-v="ytd"  onclick="heatmapSetze('zeitraum','ytd')">YTD</button>
+      <button class="btn" data-v="d252" onclick="heatmapSetze('zeitraum','d252')">1J</button>
+    </div>
+    <div class="sep"></div>
+    <span class="hm-lbl">Gruppen</span>
+    <div class="btn-group" id="hm-gruppe">
+      <button class="btn" data-v="sektor" onclick="heatmapSetze('gruppe','sektor')">Sektor</button>
+      <button class="btn" data-v="basket" onclick="heatmapSetze('gruppe','basket')"
+        title="Je Basket eine Gruppe — ein Ticker in mehreren Baskets steht in jeder davon">Basket</button>
+      <button class="btn" data-v="keine"  onclick="heatmapSetze('gruppe','keine')">keine</button>
+    </div>
+    <div id="hm-groesse-wrap" style="display:contents;">
+      <div class="sep"></div>
+      <span class="hm-lbl">Größe</span>
+      <div class="btn-group" id="hm-groesse">
+        <button class="btn" data-v="cap"    onclick="heatmapSetze('groesse','cap')"
+          title="Fläche proportional zur Marktkapitalisierung (in USD umgerechnet)">Marktkap.</button>
+        <button class="btn" data-v="wurzel" onclick="heatmapSetze('groesse','wurzel')"
+          title="Fläche proportional zur Wurzel der Marktkapitalisierung: Große bleiben groß, kleine Werte verschwinden nicht">√ Marktkap.</button>
+        <button class="btn" data-v="gleich" onclick="heatmapSetze('groesse','gleich')">gleich</button>
+      </div>
+    </div>
+    <div class="sep"></div>
+    <div class="btn-group" id="hm-ansicht">
+      <button class="btn" data-v="kacheln" onclick="heatmapSetze('ansicht','kacheln')">▦ Kacheln</button>
+      <button class="btn" data-v="liste"   onclick="heatmapSetze('ansicht','liste')">☰ Liste</button>
+    </div>
+    <div class="sep"></div>
+    <button class="btn" id="hm-refresh" onclick="heatmapKurseAktualisieren()"
+      title="Kurse aller angezeigten Ticker bei Yahoo nachziehen — auch die, die ↻ Refresh nicht anfasst (Gewicht 0, nur in der Datenbank)">↻ Kurse aktualisieren</button>
+  </div>
+  <div class="hm-status">
+    <span id="hm-info"></span>
+    <span id="hm-legende" class="hm-legende"></span>
+  </div>
+  <div class="hm-body">
+    <div id="hm-map" class="hm-map"></div>
+    <div id="hm-liste" class="hm-liste" style="display:none;"></div>
+    <div id="hm-tip" class="hm-tip" style="display:none;"></div>
+  </div>
+</section>
+
 <!-- ══ SEITE: IBKR ════════════════════════════════════════════════════════════ -->
 <section id="view-ibkr" class="page">
   <div class="r-pane" id="ibkr-col-pane">
@@ -1279,6 +1334,39 @@
         </p>
       </article>
 
+      <article class="help-card" id="help-heatmap" data-t="Heatmap">
+        <h2 class="help-h">🗺 Heatmap</h2>
+        <p>
+          Die Seite <b>Heatmap</b> zeigt alle Ticker auf einen Blick: jede Kachel ein Wert, die Farbe
+          ist seine Veränderung im gewählten Zeitraum (1T bis 1J, gezählt in Handelstagen wie in der
+          Performance-Tabelle), grün nach oben, rot nach unten, grau um null. Die Farbskala oben rechts
+          sagt, ab welchem Ausschlag die Farbe voll ist — sie hängt am Zeitraum und nicht am
+          größten Wert, damit gleiche Farbe an jedem Tag dasselbe heißt. Die Veränderung steht
+          zusätzlich als Zahl in jeder Kachel, die groß genug ist.
+        </p>
+        <p>
+          Oben links wählst du, welche Ticker: <b>Alle Baskets</b> (jeder Wert, der in irgendeinem
+          Basket steht, auch mit Gewicht 0), die <b>ganze Kursdatenbank</b> (auch Werte, die du
+          längst aus allen Baskets genommen hast) oder <b>einen Basket</b>. Gruppiert wird nach
+          Sektor oder Basket, die Kachelgröße folgt der Marktkapitalisierung — wahlweise gedämpft
+          (<b>√</b>), damit kleine Werte neben Apple nicht verschwinden, oder für alle gleich.
+          <b>☰ Liste</b> zeigt dieselben Werte als sortierbare Tabelle.
+        </p>
+        <p>
+          Überfahren zeigt alle Zeiträume, Marktkapitalisierung und die Baskets des Werts; ein
+          <b>Klick öffnet den Chart</b> — im passenden Basket, damit der Wert in der Kursliste
+          markiert ist.
+        </p>
+        <p class="help-tip">
+          <b>Schraffierte</b> Kacheln haben Kurse, die mehr als vier Tage hinter dem jüngsten Stand
+          liegen — meist Werte mit Gewicht 0 oder solche, die nur noch in der Datenbank stehen, denn
+          die fasst <b>↻ Refresh</b> nicht an. <b>↻ Kurse aktualisieren</b> auf der Heatmap holt
+          genau die angezeigten Ticker. Sektor und Marktkapitalisierung, die noch fehlen, lädt die
+          Seite beim ersten Öffnen selbst nach (Fortschritt in der Statuszeile); bis dahin stehen
+          diese Werte unter „Ohne Stammdaten" und mittelgroß.
+        </p>
+      </article>
+
       <article class="help-card" id="help-kurse" data-t="Kurse & Aktualisierung">
         <h2 class="help-h">↻ Kurse &amp; Aktualisierung</h2>
         <p>
@@ -1620,6 +1708,7 @@
 
 <script src="/static/shared.js?v={{APP_VERSION}}"></script>
 <script src="/static/autolines.js?v={{APP_VERSION}}"></script>
+<script src="/static/heatmap.js?v={{APP_VERSION}}"></script>
 <script src="/static/desktop.js?v={{APP_VERSION}}"></script>
 <script src="/static/router.js?v={{APP_VERSION}}"></script>
 <script>

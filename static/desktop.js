@@ -2844,6 +2844,7 @@ updateClock();
 
     var doneStart = logTimer(4, 'Start', 'Startsequenz');
     loadConfig().then(function() {
+        heatmapStartBereit();   // Heatmap braucht die Baskets; war die Seite schon offen, jetzt zeichnen
         return loadDbTickers();
     }).then(function() {
         return loadData();

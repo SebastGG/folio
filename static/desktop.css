@@ -1177,3 +1177,92 @@ footer {
   color: var(--muted); max-width: 260px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ── Heatmap-Seite (#view-heatmap) ─────────────────────────────────────────── */
+/* Kachelfarben setzt heatmap.js (HeatmapCalc.PALETTE, je Theme), hier nur Gerüst */
+#view-heatmap { background: var(--bg); }
+.hm-select {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  padding: 3px 6px; max-width: 220px; cursor: pointer;
+}
+.hm-lbl {
+  font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .04em; margin-right: 2px;
+}
+.hm-status {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0;
+  padding: 5px 12px; min-height: 28px; font-size: 11px; color: var(--muted);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.hm-status b { color: var(--text); font-weight: 600; }
+.hm-trenn { margin: 0 7px; opacity: .6; }
+.hm-auf  { color: var(--green); }
+.hm-ab   { color: var(--red); }
+.hm-warn { color: #d08a1e; }
+.hm-legende { margin-left: auto; display: flex; align-items: center; }
+.hm-leg-l { margin-right: 6px; }
+.hm-leg-sw {
+  width: 30px; height: 16px; font-size: 9px; font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; justify-content: center;
+}
+.hm-body { flex: 1; min-height: 0; position: relative; }
+.hm-map  { position: absolute; inset: 6px; overflow: hidden; }
+.hm-meldung {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; text-align: center; padding: 20px;
+}
+.hm-meldung.hm-fehler { color: var(--red); }
+.hm-grp-h {
+  position: absolute; height: 18px; line-height: 18px; padding: 0 4px;
+  font-size: 10px; font-weight: 700; color: var(--text); text-transform: uppercase;
+  letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hm-grp-n { font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; margin-left: 4px; }
+.hm-tile {
+  position: absolute; box-sizing: border-box; overflow: hidden; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  line-height: 1.15; text-align: center; border-radius: 2px;
+}
+.hm-tile:hover { box-shadow: inset 0 0 0 2px var(--text); z-index: 2; }
+.hm-sym { font-weight: 700; white-space: nowrap; }
+.hm-chg { white-space: nowrap; font-variant-numeric: tabular-nums; opacity: .92; }
+.hm-tile.hm-leer { background: var(--surface); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+/* Veraltete Kurse: schraffiert, damit ein alter Wert nicht als heutiger durchgeht */
+.hm-tile.hm-alt::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.5) 4px 6px);
+}
+.hm-tile .hm-sym, .hm-tile .hm-chg { position: relative; z-index: 1; }   /* Schrift über der Schraffur */
+.hm-tip {
+  position: absolute; z-index: 20; pointer-events: none; min-width: 230px; max-width: 340px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgba(0,0,0,.18); border-radius: 4px;
+  padding: 8px 10px; font-size: 11px; line-height: 1.55;
+}
+.hm-tip-h { font-size: 12px; }
+.hm-tip-m { color: var(--muted); }
+.hm-tip-perf {
+  display: grid; grid-template-columns: repeat(7, auto); gap: 0 8px; margin: 4px 0;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.hm-tip-perf span:nth-child(-n+7) { color: var(--muted); font-size: 9px; }
+.hm-tip-perf .hm-akt { font-weight: 700; }
+.hm-liste {
+  position: absolute; inset: 6px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.hm-tab { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.hm-tab th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface); cursor: pointer; user-select: none;
+  text-align: right; font-size: 10px; font-weight: 500; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.hm-tab th:hover { color: var(--text); }
+.hm-tab td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.hm-tab .hm-l { text-align: left; }
+.hm-tab .hm-akt { font-weight: 700; }
+.hm-tab th.hm-akt { color: var(--text); }
+.hm-tab .hm-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.hm-tab tbody tr { cursor: pointer; }
+.hm-tab tbody tr:hover td { background: var(--bg); }
