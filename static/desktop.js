@@ -1162,8 +1162,8 @@ function renderWatchlist() {
     // × zum Entfernen — nicht in IBKR-Baskets, die baut der Sync ohnehin neu.
     var entfernbar = !basketIstVerwaltet(baskets[currentBasket]);
 
-    // Ticker (alphabetisch)
-    Object.keys(WEIGHTS).sort().forEach(function(sym) {
+    // Ticker (alphabetisch) — dieselbe Reihenfolge nehmen die Pfeiltasten
+    watchlistTicker().forEach(function(sym) {
         var p      = perfData[sym];
         var active = currentView === sym;
         var div    = document.createElement('div');
@@ -2790,8 +2790,13 @@ document.addEventListener('keydown', function(e) {
         if (k === 'c' && !e.shiftKey && copySelectedDrawings()) { e.preventDefault(); return; }
         if (k === 'v' && !e.shiftKey && pasteDrawings())        { e.preventDefault(); return; }
     }
-    if (e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
+    // ↑/↓ blättern die Kursliste nur auf der Charts-Seite. Sonst blockierten sie das
+    // Scrollen der anderen Seiten (Heatmap-Liste, Hilfe, Protokoll) und wechselten
+    // im Hintergrund den Chart.
+    var vc = document.getElementById('view-charts');
+    var chartsAktiv = !vc || vc.classList.contains('active');
+    if (chartsAktiv && e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
+    if (chartsAktiv && e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
     // Delete/Backspace → ausgewählte Zeichnung(en) löschen
     if ((e.key === 'Delete' || e.key === 'Backspace') && (_multiSelected.size > 0 || _drawSelected)) {
         var toDelete = _multiSelected.size > 0 ? Array.from(_multiSelected) : (_drawSelected ? [_drawSelected] : []);
