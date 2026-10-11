@@ -23,6 +23,11 @@ var PAGES = [
         onShow: function () { if (typeof fitChart === 'function') fitChart(); }
     },
     {
+        id: 'heatmap', label: 'Heatmap', icon: '🗺',
+        // Kennzahlen bei jedem Öffnen frisch holen; Kacheln brauchen die sichtbare Fläche
+        onShow: function () { if (typeof heatmapInit === 'function') heatmapInit(); }
+    },
+    {
         id: 'ibkr', label: 'IBKR', icon: '📋',
         // Neu rendern, damit der Depotwert die aktuellsten Live-Kurse nutzt
         onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
