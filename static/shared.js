@@ -1734,18 +1734,27 @@ function markUnsaved() {
  * Navigiert zur nächsten/vorherigen Watchlist-Position.
  * Wird von Keyboard-Navigation (Desktop) aufgerufen.
  */
+/**
+ * Reihenfolge der Ticker in der Kursliste. Die Pfeiltasten müssen genau dieser
+ * Reihenfolge folgen — sie liefen früher in Einfügereihenfolge, ohne Gewicht-0-
+ * Ticker und immer mit Index-Zeile, und sprangen deshalb scheinbar willkürlich.
+ */
+function watchlistTicker() {
+    return Object.keys(WEIGHTS).sort();
+}
+
 function navigateWatchlist(dir) {
-    var syms = ['index'].concat(Object.keys(WEIGHTS).filter(function(s) { return (WEIGHTS[s]||0) !== 0; }));
-    var cur  = currentView === 'index' ? 'index' : currentView;
-    var idx  = syms.indexOf(cur);
-    if (idx < 0) idx = 0;
-    var next = syms[(idx + dir + syms.length) % syms.length];
-    if (next === 'index') {
-        switchView('index');
-    } else {
-        switchView(next);
-    }
-    // renderWatchlist wird von switchView → loadData → renderWatchlist aufgerufen
+    var syms = (basketShowIndex() ? ['index'] : []).concat(watchlistTicker());
+    if (!syms.length) return;
+    var idx  = syms.indexOf(currentView);
+    // Angezeigter Wert steht nicht in der Liste (z.B. aus der Heatmap geöffnet):
+    // ↓ beginnt oben, ↑ unten
+    var next = idx < 0 ? syms[dir > 0 ? 0 : syms.length - 1]
+                       : syms[(idx + dir + syms.length) % syms.length];
+    switchView(next);
+    // Markierung sofort umsetzen; nach dem Laden zeichnet switchView die Liste ohnehin
+    // neu. Sonst hinkt sie bei schnellem Tippen den Kursabrufen hinterher.
+    if (typeof renderWatchlist === 'function') renderWatchlist();
 }
 
 // ╔══════════════════════════════════════════════════════════╗
