@@ -351,7 +351,9 @@ function initChart() {
             horzLines: { color: 'rgba(0,0,0,0.05)' },
         },
         timeScale: { borderVisible: false, timeVisible: false, rightOffset: 12, fixLeftEdge: false, fixRightEdge: false },
-        rightPriceScale: { borderVisible: false, autoScale: false },
+        // Rand oben knapp; unten so viel, dass die Kerzen über den Volumenbalken
+        // (unterste 15 %, Skala 'vol') bleiben.
+        rightPriceScale: { borderVisible: false, autoScale: false, scaleMargins: { top: 0.08, bottom: 0.16 } },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
 
@@ -373,6 +375,7 @@ function initChart() {
         upColor:        '#2d8a4e', downColor:       '#c0392b',
         borderUpColor:  '#2d8a4e', borderDownColor: '#c0392b',
         wickUpColor:    '#2d8a4e', wickDownColor:   '#c0392b',
+        autoscaleInfoProvider: _kerzenAutoskala,
     });
 
     // Ghost-Serie: unsichtbar, nur für Zeitachsenbeschriftung in der Zukunft
@@ -395,11 +398,11 @@ function initChart() {
     chart.priceScale('left').applyOptions({ visible: false, autoScale: true, borderVisible: false });
 
     // Indikatoren
-    ma50S  = chart.addSeries(LightweightCharts.LineSeries, { color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
-    ma200S = chart.addSeries(LightweightCharts.LineSeries, { color: '#f5a623',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
-    regS   = chart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6',  lineWidth: 2,   visible: false, priceLineVisible: false, lastValueVisible: false });
-    regUS  = chart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
-    regLS  = chart.addSeries(LightweightCharts.LineSeries, { color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
+    ma50S  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
+    ma200S = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#f5a623',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
+    regS   = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 2,   visible: false, priceLineVisible: false, lastValueVisible: false });
+    regUS  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
+    regLS  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
 
     // ResizeObserver — Chart passt sich Container an
     new ResizeObserver(fitChart).observe(container);
@@ -1011,7 +1014,42 @@ function generateFutureDates(lastDate, tf, count) {
 }
 
 /**
- * Preisachse einmal auf den sichtbaren Ausschnitt einpassen, danach wieder fest
+ * Was beim Einpassen der Kursachse zählt: nur Hoch und Tief der Kerzen im Ausschnitt.
+ *
+ * LightweightCharts nimmt sonst jede Serie und jede Zeichnung auf dieser Achse mit —
+ * LogReg-Bänder, MA200, Auto-Linien und eigene Linien zogen die Achse auf, über den
+ * Kerzen blieb die Hälfte leer. Was davon außerhalb liegt, ragt jetzt aus dem Bild;
+ * die Achse lässt sich ziehen. Den Bereich rechnen wir nicht selbst in Pixel um,
+ * sondern melden ihn als Autoskalierung: so stimmt es auch bei der Log-Achse.
+ *
+ * _fitAusschnitt: Kerzen-Indizes, die fitView gerade in den Ausschnitt legt. Während
+ * des Einpassens gilt er statt des sichtbaren Bereichs, den LightweightCharts erst
+ * beim nächsten Zeichnen übernimmt.
+ */
+var _fitAusschnitt = null;
+
+function _kerzenAutoskala(basis) {
+    var k = _lastCandles || [];
+    var a = _fitAusschnitt;
+    if (!a && chart) {
+        var lr = chart.timeScale().getVisibleLogicalRange();
+        if (lr) a = { i0: Math.ceil(lr.from), i1: Math.floor(lr.to) };
+    }
+    if (a) k = k.slice(Math.max(0, a.i0), Math.max(0, a.i1 + 1));
+    var lo = Infinity, hi = -Infinity;
+    k.forEach(function(c) {
+        if (c.low  < lo) lo = c.low;
+        if (c.high > hi) hi = c.high;
+    });
+    var b = basis();
+    if (!(lo <= hi)) return b;
+    return { priceRange: { minValue: lo, maxValue: hi }, margins: b ? b.margins : undefined };
+}
+
+function _keineAutoskala() { return null; }
+
+/**
+ * Kursachse einmal einpassen (über _kerzenAutoskala) und danach fest stehen lassen
  * (autoScale aus), damit von Hand gezogene Achsen halten.
  *
  * ERST aufrufen, NACHDEM der Zeitausschnitt gesetzt ist, und erst zwei Frames
@@ -1021,11 +1059,14 @@ function generateFutureDates(lastDate, tf, count) {
  * Achse blieb auf dem alten Ausschnitt stehen und passte erst beim zweiten Klick
  * auf „Fit".
  */
-function _fitPriceScaleOnce() {
+function _fitPriceScaleOnce(ausschnitt) {
     if (!csSeries) return;
+    _fitAusschnitt = ausschnitt || (_lastCandles && _lastCandles.length
+        ? { i0: 0, i1: _lastCandles.length - 1 } : null);
     csSeries.priceScale().applyOptions({ autoScale: true });
     requestAnimationFrame(function() {
         requestAnimationFrame(function() {
+            _fitAusschnitt = null;
             if (csSeries) try { csSeries.priceScale().applyOptions({ autoScale: false }); } catch(e) {}
         });
     });
@@ -1044,9 +1085,12 @@ function _fitPriceScaleOnce() {
 function _showRangePadded(fromTime, toTime, extraRight) {
     var ts = chart.timeScale();
     var i0 = ts.timeToIndex(fromTime, true), i1 = ts.timeToIndex(toTime, true);
-    if (i0 == null || i1 == null || i1 < i0) { ts.fitContent(); return; }
+    if (i0 == null || i1 == null || i1 < i0) { ts.fitContent(); return null; }
     var pad = Math.max(1, (i1 - i0) * 0.03);
     ts.setVisibleLogicalRange({ from: i0 - pad, to: i1 + (extraRight || 0) + pad });
+    // Indizes der Zeitachse = Indizes in _lastCandles: andere Serien haben dieselben
+    // Zeitpunkte, nur die Zukunftsachse (Ghost) hängt hinten weitere an.
+    return { i0: i0, i1: i1 };
 }
 
 function fitWithFuture() {
@@ -1060,7 +1104,7 @@ function fitWithFuture() {
     } else {
         chart.timeScale().fitContent();
     }
-    _fitPriceScaleOnce();
+    _fitPriceScaleOnce();   // alle gezeichneten Kerzen sind im Bild
 }
 
 function fitView() {
@@ -1088,12 +1132,13 @@ function fitView() {
     } else {
         fromDate = candles[0].time;
     }
+    var ausschnitt = null;
     try {
-        _showRangePadded(fromDate, toDate, 0);
+        ausschnitt = _showRangePadded(fromDate, toDate, 0);
     } catch(e) {
         chart.timeScale().fitContent();
     }
-    _fitPriceScaleOnce();
+    _fitPriceScaleOnce(ausschnitt);
 }
 
 // ARR/R² stehen im festen Feld oben links (#reg-badge), nicht als Serientitel:
