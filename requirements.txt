@@ -12,3 +12,4 @@ yfinance
 beautifulsoup4
 lxml
 pypdf
+tzdata

@@ -9,10 +9,15 @@ Index und zeigt ihn als Chart — daneben jeden Einzelwert, dein Depot und dein
 
 - **Baskets & Index** — beliebig viele Körbe, Stückzahlen (negativ = Short),
   Umrechnung fremder Währungen, Aktiensplits werden erkannt und zurückgerechnet.
-- **Charts** — Kerzen mit Wochen-/Monatsverdichtung, gleitende Durchschnitte,
+- **Charts** — Stunden- (mit Vor- und Nachbörse), Tages-, Wochen- und
+  Monatskerzen, gleitende Durchschnitte,
   log. Regression, Volumenprofil, Zeichenwerkzeuge (Linien, Fibonacci, Gann,
   Pitchforks, …), Earnings-Termine und für Einzelaktien der Vergleich mit dem
   Sektor-ETF.
+- **Heatmap & Marktdaten** — Kacheln über die eigenen Baskets oder einen ganzen
+  Index (S&P 500, Nasdaq-100, Russell 2000). Dafür sammelt der Server je
+  Handelstag Stunden- und Tageskurse aller Indexwerte, beim ersten Mal zwei
+  Jahre zurück (Stand und Steuerung auf der Protokoll-Seite).
 - **Interactive Brokers** — Positionen, Trades und Barbestand über die eigene
   Flex Query; Kauf und Verkauf erscheinen als Marker im Chart.
 - **Konten & Vermögen** — Girokonten, weitere Depots (Bestand als CSV,
@@ -43,6 +48,11 @@ einzigen Benutzer; alle Daten liegen unter `./data` (anderer Ort über die
 Umgebungsvariable `DATA_DIR`). Kurse holt folio beim **↻ Refresh** für alle
 Ticker und beim Öffnen eines Einzelwerts für diesen einen.
 
+Der Marktdaten-Sammler startet mit der App und holt beim ersten Mal für rund
+2.500 Werte zwei Jahre Stundenkerzen (gut eine Stunde, etwa 1 GB). Wer das
+lokal nicht will: `FOLIO_MARKT=0` setzen — Index-Heatmap und 1h-Chart bleiben
+dann leer bzw. holen nur einzeln angesehene Werte.
+
 ## Auf Cloudron betreiben
 
 `Dockerfile` und `CloudronManifest.json` liegen bei. Das Manifest nutzt das
@@ -63,13 +73,15 @@ cloudron install --image <registry>/folio:latest
 | Was | Quelle |
 |---|---|
 | Kurse, Stammdaten, Earnings, Tickersuche | Yahoo Finance (inoffizielle Schnittstelle, zeitverzögert) |
-| Screener | Finviz |
+| Screener, Indexlisten mit Sektor und Marktkapitalisierung | Finviz |
 | Depot, Trades | Interactive Brokers, Flex Query mit eigenem Token |
 | Wechselkurse für die Steuer | Europäische Zentralbank |
 
 Yahoo und Finviz sind keine offiziellen Datendienste; ihre Nutzungsbedingungen
 gelten. folio fragt sparsam an: nur fehlende Tage, höchstens ein Abruf je
-Ticker und Minute.
+Ticker und Minute. Der Marktdaten-Sammler braucht je Handelstag rund zwei Abrufe
+je Indexwert, mit Pausen dazwischen; drosselt Yahoo, bricht er ab und versucht
+es eine Stunde später.
 
 ## Hinweis
 

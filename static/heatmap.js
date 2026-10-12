@@ -186,6 +186,12 @@ var HM_ZEITRAEUME = [
     { k: 'd252', l: '1J' },
 ];
 var HM_VORGABE = { quelle: 'alle', zeitraum: 'd1', gruppe: 'sektor', groesse: 'wurzel', ansicht: 'kacheln' };
+// Ganze Indizes aus der gemeinsamen Marktdatenbank (markt.py) — Auswahlwert 'idx:<id>'
+var HM_INDIZES = [
+    { id: 'sp500', name: 'S&P 500' },
+    { id: 'ndx',   name: 'Nasdaq-100' },
+    { id: 'rut',   name: 'Russell 2000' },
+];
 // Ab so vielen Kalendertagen Rückstand zum jüngsten Kurs gilt ein Ticker als
 // veraltet. 4 lässt Wochenende plus Feiertag an nur einer Börse durchgehen.
 var HM_VERALTET_TAGE = 4;
@@ -193,6 +199,9 @@ var HM_VERALTET_TAGE = 4;
 var _HM = {
     bereit:     false,   // Config (Baskets, appearance) geladen — vorher weder zeichnen noch speichern
     daten:      [],      // Antwort von /api/heatmap
+    datenFuer:  null,    // zu welcher Quelle daten gehören: '' (Kursdatenbank des Benutzers) oder Index-ID
+    markt:      null,    // bei Indexquellen: { stand, live, liste } vom Server
+    nachfrage:  null,    // Timer: neu laden, während der Server die Kurse auffrischt
     geladen:    false,
     laedt:      null,    // laufender Abruf (Promise), damit sich Abrufe nicht überholen
     prefs:      null,
@@ -202,6 +211,17 @@ var _HM = {
     info:       { lauf: false, fertig: 0, gesamt: 0, fehler: 0, versucht: {} },
     beobachter: null,
 };
+
+/** Index-ID der gewählten Quelle ('sp500' …) oder '' für die eigenen Baskets/Kursdatenbank. */
+function _hmIndex() {
+    var q = _HM.prefs && _HM.prefs.quelle;
+    return q && q.indexOf('idx:') === 0 ? q.slice(4) : '';
+}
+
+function _hmIndexName(id) {
+    var i = HM_INDIZES.filter(function(x) { return x.id === id; })[0];
+    return i ? i.name : id;
+}
 
 function _hmSichtbar() {
     var s = document.getElementById('view-heatmap');
@@ -275,7 +295,8 @@ function _hmBasketsMit(sym) {
 function _hmAuswahl() {
     var nachT = {};
     _HM.daten.forEach(function(e) { nachT[e.t] = e; });
-    if (_HM.prefs.quelle === 'db') return { eintraege: _HM.daten.slice(), ohneKurse: [] };
+    // Ganze Kursdatenbank und Indizes: alles, was der Server liefert (er filtert die Indizes)
+    if (_HM.prefs.quelle === 'db' || _hmIndex()) return { eintraege: _HM.daten.slice(), ohneKurse: [] };
     var syms = {};
     _hmBasketIds().forEach(function(id) {
         Object.keys(_hmGewichte(id)).forEach(function(s) { syms[s] = true; });
@@ -371,6 +392,9 @@ function _hmToolbar() {
         var html = '<option value="alle">Alle Baskets</option>'
                  + (nScr ? '<option value="screener">Alle Screener-Baskets (' + nScr + ')</option>' : '')
                  + '<option value="db">Ganze Kursdatenbank</option>'
+                 + '<optgroup label="Index (ganzer Markt)">'
+                 + HM_INDIZES.map(function(i) { return '<option value="idx:' + i.id + '">' + i.name + '</option>'; }).join('')
+                 + '</optgroup>'
                  + '<optgroup label="Ein Basket">'
                  + ids.map(function(id) {
                        return '<option value="b:' + escHtml(id) + '">' + escHtml(baskets[id].name || id) + '</option>';
@@ -386,6 +410,13 @@ function _hmToolbar() {
             b.classList.toggle('active', b.getAttribute('data-v') === _HM.prefs[k]);
         });
     });
+    var rb = document.getElementById('hm-refresh');
+    if (rb && !rb.disabled) {
+        rb.textContent = _hmIndex() ? '↻ Kurse auffrischen' : '↻ Kurse aktualisieren';
+        rb.title = _hmIndex()
+            ? 'Heutige Kurse aller Indexwerte bei Yahoo nachziehen (Sammelabruf, dauert rund eine Minute)'
+            : 'Kurse aller angezeigten Ticker bei Yahoo nachziehen — auch die, die ↻ Refresh nicht anfasst (Gewicht 0, nur in der Datenbank)';
+    }
     var g = document.getElementById('hm-groesse-wrap');
     // Größe spielt nur bei den Kacheln eine Rolle
     if (g) g.style.display = _HM.prefs.ansicht === 'liste' ? 'none' : 'contents';
@@ -397,15 +428,29 @@ async function _hmLaden() {
     if (_HM.laedt) return _HM.laedt;
     _HM.laedt = (async function() {
         try {
-            var r = await fetch('/api/heatmap', { cache: 'no-store' });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            var d = await r.json();
-            _HM.daten   = Array.isArray(d.tickers) ? d.tickers : [];
-            _HM.geladen = true;
-            logIt(7, 'Heatmap', _HM.daten.length + ' Ticker mit Kennzahlen geladen');
-        } catch (e) {
-            logIt(1, 'Heatmap', 'Kennzahlen nicht abrufbar: ' + e.message);
-            _hmMeldung('Kennzahlen nicht abrufbar: ' + e.message, true);
+            var idx = _hmIndex();
+            _HM.datenFuer = idx;
+            try {
+                var r = await fetch('/api/heatmap' + (idx ? '?quelle=' + encodeURIComponent(idx) : ''), { cache: 'no-store' });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                var d = await r.json();
+                _HM.daten   = Array.isArray(d.tickers) ? d.tickers : [];
+                _HM.markt   = d.markt || null;
+                _HM.geladen = true;
+                logIt(7, 'Heatmap', _HM.daten.length + ' Ticker mit Kennzahlen geladen' + (idx ? ' (' + _hmIndexName(idx) + ')' : ''));
+            } catch (e) {
+                _HM.daten = []; _HM.markt = null;   // nicht die Daten der vorigen Quelle stehen lassen
+                logIt(1, 'Heatmap', 'Kennzahlen nicht abrufbar: ' + e.message);
+                _hmMeldung('Kennzahlen nicht abrufbar: ' + e.message, true);
+            }
+            // Der Server frischt die Indexkurse gerade auf → gleich noch einmal nachsehen
+            clearTimeout(_HM.nachfrage);
+            if (_HM.markt && _HM.markt.live) {
+                _HM.nachfrage = setTimeout(function() {
+                    if (!_hmSichtbar() || !_hmIndex()) return;
+                    _hmLaden().then(function() { if (_hmSichtbar()) heatmapRender(); });
+                }, 8000);
+            }
         } finally {
             _HM.laedt = null;
         }
@@ -443,7 +488,8 @@ async function heatmapInit() {
  */
 async function _hmInfosNachladen() {
     var I = _HM.info;
-    if (I.lauf || !_HM.geladen) return;
+    // Indexwerte haben ihre Stammdaten von Finviz — für 2000 Werte einzeln Yahoo zu fragen, verbietet sich
+    if (I.lauf || !_HM.geladen || _hmIndex()) return;
     var offen = _hmAuswahl().eintraege.filter(function(e) { return !e.info && !I.versucht[e.t]; });
     if (!offen.length) return;
     I.lauf = true; I.fertig = 0; I.fehler = 0; I.gesamt = offen.length;
@@ -486,6 +532,27 @@ async function _hmInfosNachladen() {
 /** Kurse der angezeigten Ticker bei Yahoo nachziehen (gleiches Limit wie ↻ Refresh). */
 async function heatmapKurseAktualisieren() {
     var btn = document.getElementById('hm-refresh');
+    if (_hmIndex()) {
+        // Indexkurse frischt der Server per Sammelabruf auf; die Seite fragt nach, bis er fertig ist
+        var hinweis;
+        try {
+            var rr = await fetch('/api/markt/steuerung', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ aktion: 'live' })
+            });
+            var dd = await rr.json();
+            if (!rr.ok || !dd.ok) throw new Error(dd.error || ('HTTP ' + rr.status));
+            hinweis = dd.gestartet ? '⟳ Kurse werden aufgefrischt …' : '✓ Kurse sind gerade erst aufgefrischt worden';
+            logIt(4, 'Heatmap', _hmIndexName(_hmIndex()) + ': ' + hinweis);
+        } catch (e) {
+            hinweis = '✕ Auffrischen fehlgeschlagen: ' + e.message;
+            logIt(1, 'Heatmap', hinweis);
+        }
+        _HM.hinweis = hinweis;
+        await _hmLaden();
+        heatmapRender();
+        return;
+    }
     var aus = _hmAuswahl();
     var syms = aus.eintraege.map(function(e) { return e.t; }).concat(aus.ohneKurse);
     if (!syms.length) return;
@@ -530,6 +597,13 @@ function _hmMeldung(text, fehler) {
 function heatmapRender() {
     if (!_HM.bereit) return;
     if (!_HM.prefs) _HM.prefs = _hmPrefsLaden();
+    // Quelle gewechselt (eigene Daten ↔ Index, Index ↔ Index): erst die passenden Daten holen
+    if (_HM.geladen && _HM.datenFuer !== _hmIndex()) {
+        _hmToolbar();
+        _hmMeldung('Lade Kennzahlen…');
+        _hmLaden().then(function() { if (_hmSichtbar()) heatmapRender(); });
+        return;
+    }
     _hmToolbar();
     _hmStatus();
     _hmLegende();
@@ -558,11 +632,21 @@ function _hmStatus() {
     var alt = E.filter(function(e) { return _hmTage(e.last, juengst) > HM_VERALTET_TAGE; });
 
     var teile = ['<b>' + E.length + '</b> Ticker'];
+    var M = _hmIndex() ? _HM.markt : null;
+    if (M && M.liste && E.length < M.liste) {
+        teile[0] = '<b>' + E.length + '</b> von ' + M.liste + ' Werten mit Kursen'
+                 + ' <span class="hm-warn" title="Der Marktdaten-Sammler holt die übrigen — Fortschritt auf der Protokoll-Seite">(Sammler läuft)</span>';
+    }
     if (werte.length) {
         teile.push('<span class="hm-auf">▲</span> ' + hoch + ' · <span class="hm-ab">▼</span> ' + runter);
         teile.push('Ø <b>' + _hmPct(mittel) + '</b>');
     }
-    if (juengst) teile.push('Stand ' + _hmDatum(juengst));
+    if (M && M.stand) {
+        var t = new Date(M.stand * 1000);
+        teile.push('Kurse von ' + t.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' '
+                   + t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+                   + (M.live ? ' · <span class="hm-warn">werden aufgefrischt …</span>' : ''));
+    } else if (juengst) teile.push('Stand ' + _hmDatum(juengst));
     if (alt.length) {
         teile.push('<span class="hm-warn" title="Kurse älter als der jüngste Stand: '
             + escHtml(alt.slice(0, 40).map(function(e) { return e.t + ' (' + _hmDatum(e.last) + ')'; }).join(', '))
@@ -601,7 +685,10 @@ function _hmKachelnZeichnen() {
 
     var aus = _hmAuswahl();
     if (!aus.eintraege.length) {
-        _hmMeldung(aus.ohneKurse.length
+        _hmMeldung(_hmIndex()
+            ? 'Für den ' + _hmIndexName(_hmIndex()) + ' liegen noch keine Kurse vor. Der Marktdaten-Sammler holt sie '
+              + 'nach dem Start der App nach und nach — den Fortschritt zeigt die Protokoll-Seite.'
+            : aus.ohneKurse.length
             ? 'Für diese Ticker liegen noch keine Kurse vor — „↻ Kurse aktualisieren" holt sie.'
             : 'Keine Ticker. Lege Werte in einem Basket an, dann erscheinen sie hier.');
         _HM.kacheln = [];
@@ -756,7 +843,7 @@ function _hmTooltip(e, veraltet, ev) {
  */
 async function heatmapOeffnen(sym) {
     var q = _HM.prefs.quelle;
-    var erlaubt = (q === 'alle' || q === 'db') ? Object.keys(baskets) : _hmBasketIds();
+    var erlaubt = (q === 'alle' || q === 'db' || _hmIndex()) ? Object.keys(baskets) : _hmBasketIds();
     var mit = _hmBasketsMit(sym).filter(function(id) { return erlaubt.indexOf(id) >= 0; });
     var ziel = mit.indexOf(currentBasket) >= 0 ? null : (mit[0] || null);
     logIt(4, 'Heatmap', sym + ' im Chart öffnen' + (ziel && ziel !== currentBasket ? ' (Basket ' + (baskets[ziel].name || ziel) + ')' : ''));

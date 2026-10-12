@@ -39,7 +39,8 @@ var _ghostDates        = [];     // zuletzt erzeugte Zukunfts-Datumswerte (Snapp
 var _showSectorEtf     = false;  // Sektor-ETF-Overlay (relative Stärke), pro Basket gespeichert
 var _showAutoLines     = false;  // automatische Unterstützungen/Widerstände + Trendlinien
 var _autoLineIds       = [];     // IDs der gerade gezeichneten Auto-Linien (werden nie gespeichert)
-var _etfDataCache      = {};     // ETF-Symbol → [{time, close}] (on-demand geladen)
+var _etfDataCache      = {};     // ETF-Symbol (+ '|1H') → [{time, close}] (on-demand geladen)
+var CHART_STUNDEN      = true;   // Desktop kann Stundenkerzen (shared.js: stundenMoeglich)
 var _etfSymbol         = null;   // aktuell overlaytes ETF-Symbol
 var _etfCandles        = [];     // Tagesdaten des aktuellen ETFs (für Rebasing bei Zoom/Pan)
 var _sectorEtfReq      = 0;      // Race-Schutz für async ETF-Laden
@@ -157,7 +158,9 @@ function _drawVRVP() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     var visRange = chart.timeScale().getVisibleRange();
     if (!visRange) return;
-    var fromStr = _timeToStr(visRange.from), toStr = _timeToStr(visRange.to);
+    var stunden = chartTF() === '1H';
+    var fromStr = stunden ? visRange.from : _timeToStr(visRange.from);
+    var toStr   = stunden ? visRange.to   : _timeToStr(visRange.to);
     if (!fromStr || !toStr) return;
 
     // Datenbasis sind die TAGESKERZEN, nicht die aggregierten des Timeframes.
@@ -165,8 +168,9 @@ function _drawVRVP() {
     // aus einer Wochenkerze wüsste man nur „irgendwo zwischen Wochenhoch und
     // -tief", das Volumen würde über die ganze Spanne verschmiert und die POC
     // sprang beim Umschalten des Timeframes. allCandles liegt ohnehin geladen vor.
-    var base = (typeof allCandles !== 'undefined' && allCandles && allCandles.length)
-        ? allCandles : _lastCandles;
+    // Bei Stundenkerzen sind die Stunden selbst die feinste Basis.
+    var base = chartBasis();
+    if (!base || !base.length) base = _lastCandles;
     var visCan = base.filter(function(c) { return c.time >= fromStr && c.time <= toStr; });
     if (!visCan.length) return;
 
@@ -423,7 +427,9 @@ function initChart() {
         };
 
         var setEl = function(id, val) { var e = document.getElementById(id); if(e) e.textContent = val; };
-        setEl('ov-date', param.time);
+        var kz   = _lastCandles.find(function(c) { return c.time === param.time; });
+        var sitz = kz && kz.s ? SITZUNG_NAME[kz.s] : '';
+        setEl('ov-date', chartZeitText(param.time) + (sitz ? ' · ' + sitz : ''));
         setEl('ov',  fmt(bar.open));
         setEl('oh',  fmt(bar.high));
         setEl('ol',  fmt(bar.low));
@@ -594,6 +600,11 @@ function refreshTradeMarkers() {
 function _snapTradeTime(date) {
     var bars = _lastCandles;
     if (!bars || !bars.length) return null;
+    if (chartTF() === '1H') {
+        // Trades haben nur ein Datum: Pfeil an die erste Kerze der regulären Sitzung
+        var st = stundeFuerDatum(date);
+        return st !== null && st >= bars[0].time ? st : null;
+    }
     if (date < bars[0].time) return null;                       // vor dem Chartbeginn
     var lo = 0, hi = bars.length - 1, best = 0;
     while (lo <= hi) {                                          // letzter Balken mit time <= date
@@ -712,6 +723,7 @@ function _drawTradeMarkers(target) {
 function _snapEarningsTime(date) {
     var bars = _lastCandles;
     if (!bars || !bars.length) return null;
+    if (chartTF() === '1H') return _snapTradeTime(date);   // künftige Termine: keine Zukunftsachse
     // Vergangenheit / innerhalb der Kerzen: Balken, in den der Termin fällt (wie Trades)
     if (date <= bars[bars.length - 1].time) {
         if (date < bars[0].time) return null;   // vor dem Chartbeginn
@@ -844,6 +856,12 @@ function toggleEarnings(btn) {
  */
 function renderDesktopChart(colored, volAgg, agg, regResult) {
     if (!chart || !csSeries) return;
+    var tf = chartTF();
+    // Uhrzeiten auf der Achse nur bei Stundenkerzen
+    if (chart.options().timeScale.timeVisible !== (tf === '1H')) {
+        chart.applyOptions({ timeScale: { timeVisible: tf === '1H', secondsVisible: false } });
+    }
+    _tfKnopfZustand();
 
     // Reg-Serien zuerst updaten — verhindert dass LWC den Zeitstrich auf tägliche
     // Granularität setzt bevor die Kerzen auf Wochen/Monats-TF umgeschaltet werden.
@@ -870,11 +888,15 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     refreshTradeMarkers();
     refreshSectorEtf();   // Sektor-ETF-Overlay (falls aktiv)
 
-    // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung
-    if (ghostSeries && colored.length) {
+    // Ghost-Serie: Zukunftsdaten für Zeitachsenbeschriftung. Bei Stundenkerzen keine —
+    // die Zukunft hat dort keine Handelszeiten, die man sinnvoll vorausschreiben könnte.
+    if (ghostSeries && tf === '1H') {
+        _ghostDates = [];
+        try { ghostSeries.setData([]); } catch(e) {}
+    } else if (ghostSeries && colored.length) {
         var lastC    = colored[colored.length - 1];
-        var count    = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
-        var fDates   = generateFutureDates(lastC.time, currentTF, count);
+        var count    = tf === '1W' ? 52 : tf === '1M' ? 12 : 252;
+        var fDates   = generateFutureDates(lastC.time, tf, count);
         _ghostDates  = fDates;   // für das Snapping künftiger Earnings-Termine
         try {
             ghostSeries.setData(fDates.map(function(d) { return { time: d, value: lastC.close }; }));
@@ -887,12 +909,12 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Volumen
     if (volSeries && volAgg.length) {
         var cmap = {};
-        colored.forEach(function(c) { cmap[c.time] = c.color; });
+        colored.forEach(function(c) { cmap[c.time] = c.up; });
         // Index-View: normiert (Durchschnitt=100), da Volumen dort eine gewichtete Hilfsgröße ist.
         // Ticker-View: echtes Volumen in Stückzahl (wie TradingView).
         var volUp   = chartColor('volUp',   'volAlpha');
         var volDown = chartColor('volDown', 'volAlpha');
-        var volColor = function(t) { return cmap[t] === '#2d8a4e' ? volUp : volDown; };
+        var volColor = function(t) { return cmap[t] ? volUp : volDown; };
         var volData;
         if (currentView === 'index') {
             var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
@@ -1047,17 +1069,19 @@ function fitView() {
     // Sektor-ETF (eigene linke Achse) ebenfalls neu einpassen — autoScale wieder an,
     // falls der Nutzer die Achse zuvor manuell gezogen hatte.
     if (etfSeries) { try { etfSeries.priceScale().applyOptions({ autoScale: true }); } catch(e) {} }
-    var candles = allCandles;
+    var candles = chartBasis();
     if (!candles || !candles.length) { chart.timeScale().fitContent(); _fitPriceScaleOnce(); return; }
     var toDate   = candles[candles.length - 1].time;
     var fromDate;
-    if (currentPeriod > 0) {
+    if (currentPeriod > 0 && chartTF() === '1H') {
+        fromDate = Math.max(candles[0].time, Math.floor(Date.now() / 1000) - currentPeriod * 86400);
+    } else if (currentPeriod > 0) {
         var cut = new Date();
         cut.setDate(cut.getDate() - currentPeriod);
         // gleiche Kante wie applyPeriod(): bei Wochen-/Monatskerzen der Anfang der
         // angeschnittenen Periode, sonst stünde die erste Kerze halb im Bild
         fromDate = (typeof periodStartFor === 'function')
-            ? periodStartFor(cut.toISOString().slice(0, 10), currentTF)
+            ? periodStartFor(cut.toISOString().slice(0, 10), chartTF())
             : cut.toISOString().slice(0, 10);
         // nicht vor dem ersten verfügbaren Kerze
         if (fromDate < candles[0].time) fromDate = candles[0].time;
@@ -1096,16 +1120,31 @@ function applyLogReg(regResult, rS, rUS, rLS) {
 }
 
 
+/**
+ * 1h gewählt, aber Tageskerzen zu sehen (Index-Ansicht, keine Stundendaten)? Dann bleibt
+ * der Knopf aktiv, wird aber blass und sagt im Tooltip, warum.
+ */
+function _tfKnopfZustand() {
+    var b = document.getElementById('tf1H');
+    if (!b) return;
+    var na = currentTF === '1H' && chartTF() !== '1H';
+    b.classList.toggle('btn-na', na);
+    b.title = !na ? 'Stundenkerzen mit Vor- und Nachbörse (blass), bis zu 2 Jahre zurück — nur für Einzelwerte'
+            : currentView === 'index' ? 'Stundenkerzen gibt es nur für Einzelwerte — hier werden Tageskerzen gezeigt'
+            : 'Für diesen Wert gibt es keine Stundenkerzen — es werden Tageskerzen gezeigt';
+}
+
 function syncUIState() {
     var periodLabels = { 30: '1M', 90: '3M', 180: '6M', 365: '1J', 0: 'All' };
     var grp = document.getElementById('period-btns');
     if (grp) grp.querySelectorAll('.btn').forEach(function(b) {
         b.classList.toggle('active', b.textContent === (periodLabels[currentPeriod] || ''));
     });
-    ['1D', '1W', '1M'].forEach(function(t) {
+    ['1H', '1D', '1W', '1M'].forEach(function(t) {
         var b = document.getElementById('tf' + t);
         if (b) b.classList.toggle('active', t === currentTF);
     });
+    _tfKnopfZustand();
     ['ma50', 'ma200', 'reg'].forEach(function(n) {
         var b = document.getElementById('b' + n);
         if (b) b.classList.toggle('ind-active', !!indicators[n]);
@@ -1568,6 +1607,126 @@ function renderManageList() {
 
 var _undoStack = [], _redoStack = [];
 var _verlaufLaeuft = false;
+
+// ── Marktdaten-Sammler (Protokoll-Seite) ─────────────────────────────────────
+// Der Sammler läuft auf dem Server (markt.py). Hier nur sein Stand: solange die
+// Protokoll-Seite offen ist, alle 30 s — während einer Runde alle 4 s.
+var _marktTimer = null;
+
+function _mkZeit(ts, mitDatum) {
+    if (!ts) return '–';
+    var d = new Date(ts * 1000);
+    var uhr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    return mitDatum ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' + uhr : uhr;
+}
+
+function _mkZahl(n) { return (n || 0).toLocaleString('de-DE'); }
+
+function _mkGroesse(b) {
+    if (!b) return '0 MB';
+    return b >= 1024 * 1024 * 1024
+        ? (b / 1024 / 1024 / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' GB'
+        : Math.round(b / 1024 / 1024).toLocaleString('de-DE') + ' MB';
+}
+
+async function marktStatusLaden() {
+    clearTimeout(_marktTimer);
+    var el = document.getElementById('marktStatus'), seite = document.getElementById('view-log');
+    if (!el || !seite || !seite.classList.contains('active')) return;   // nur solange die Seite offen ist
+    var st;
+    try {
+        var r = await fetch('/api/markt/status', { cache: 'no-store' });
+        st = await r.json();
+        if (!r.ok || !st.ok) throw new Error(st.error || ('HTTP ' + r.status));
+    } catch (e) {
+        el.innerHTML = '<div class="log-empty">Stand nicht abrufbar: ' + escHtml(e.message) + '</div>';
+        _marktTimer = setTimeout(marktStatusLaden, 30000);
+        return;
+    }
+    _marktZeichnen(st);
+    _marktTimer = setTimeout(marktStatusLaden, st.runde && st.runde.laeuft ? 4000 : 30000);
+}
+
+function _marktZeichnen(st) {
+    var el = document.getElementById('marktStatus');
+    if (!el) return;
+    var R = st.runde || {};
+    var z = function(a, b) { return '<div class="mk-zeile"><span>' + a + '</span><b>' + b + '</b></div>'; };
+    var html = '';
+    var zustand = !st.aktiv   ? 'Sammler läuft nicht'
+                : st.pausiert ? '⏸ pausiert'
+                : R.laeuft    ? 'sammelt: ' + _mkZahl(R.fertig) + ' von ' + _mkZahl(R.gesamt)
+                                + (R.aktuell ? ' · ' + escHtml(R.aktuell) : '')
+                :               'bereit · nächste Runde ' + _mkZeit(st.naechste, true);
+    html += z('Zustand', zustand);
+    if (R.laeuft && R.gesamt) {
+        html += '<div class="mk-balken"><div style="width:' + Math.round(R.fertig / R.gesamt * 100) + '%"></div></div>';
+        if (R.neu) html += '<div class="mk-hinweis">' + _mkZahl(R.neu) + ' Werte bekommen den Rückblick über 2 Jahre.</div>';
+    }
+    if (st.abbruch && !R.laeuft && !st.pausiert && Date.now() / 1000 - st.abbruch < 3600) {
+        html += '<div class="mk-hinweis">Letzte Runde abgebrochen — neuer Versuch ab ' + _mkZeit(st.abbruch + 3600) + '.</div>';
+    }
+
+    html += '<div class="mk-titel">Bestand</div>';
+    (st.listen || []).forEach(function(l) { html += z(escHtml(l.name), _mkZahl(l.anzahl) + ' Werte'); });
+    html += z('ETFs zum Vergleich', _mkZahl(st.referenz));
+    if (st.abruf && st.abruf.length) {
+        html += z('einzeln im Chart angesehen', '<span title="' + escHtml(st.abruf.join(', ')) + '">' + st.abruf.length + '</span>');
+    }
+    html += z('mit Stundenkerzen', _mkZahl(st.mit_stunden) + ' von ' + _mkZahl(st.gesamt));
+    html += z('mit Tageskursen', _mkZahl(st.mit_tagen) + ' von ' + _mkZahl(st.gesamt));
+    html += z('Indexlisten vom', _mkZeit(st.listen_stand, true));
+    html += z('Speicher', _mkGroesse(st.speicher) + ' · frei ' + _mkGroesse(st.frei));
+    if (st.bericht) {
+        html += z('letzte Runde', _mkZeit(st.bericht.ende, true) + ' · ' + Math.max(1, Math.round(st.bericht.dauer / 60))
+                + ' min · ' + _mkZahl(st.bericht.fehler) + ' Fehler');
+    }
+    if (st.live && st.live.stand) {
+        html += z('Heatmap-Kurse', _mkZeit(st.live.stand, true) + (st.live.laeuft ? ' · wird aufgefrischt' : ''));
+    }
+
+    if (st.fehler && st.fehler.length) {
+        html += '<div class="mk-titel">Zuletzt fehlgeschlagen</div><div class="mk-log">'
+              + st.fehler.map(function(f) {
+                    return '<div><span>' + escHtml(f.ticker) + (f.zahl > 1 ? ' ×' + f.zahl : '') + '</span>'
+                         + '<span class="lvl-warn">' + escHtml(f.fehler || '') + '</span></div>';
+                }).join('') + '</div>';
+    }
+
+    var p = (st.protokoll || []).slice().reverse();
+    html += '<div class="mk-titel">Protokoll des Sammlers</div>';
+    html += p.length
+        ? '<div class="mk-log">' + p.map(function(x) {
+              var k = x.lvl <= 1 ? 'lvl-err' : x.lvl <= 2 ? 'lvl-warn' : '';
+              return '<div><span>' + _mkZeit(x.t, true) + '</span><span class="' + k + '">' + escHtml(x.msg) + '</span></div>';
+          }).join('') + '</div>'
+        : '<div class="mk-hinweis">Noch keine Einträge seit dem letzten Neustart der App.</div>';
+    el.innerHTML = html;
+
+    var bp = document.getElementById('mkPause');
+    if (bp) {
+        bp.dataset.aktion = st.pausiert ? 'weiter' : 'pause';
+        bp.textContent    = st.pausiert ? '▶ Fortsetzen' : '⏸ Pausieren';
+    }
+    var br = document.getElementById('mkRunde');
+    if (br) br.disabled = !!(R.laeuft || st.pausiert || !st.aktiv);
+}
+
+async function marktSteuern(aktion) {
+    try {
+        var r = await fetch('/api/markt/steuerung', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ aktion: aktion })
+        });
+        var d = await r.json();
+        if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+        logIt(4, 'Marktdaten', { pause: 'Sammeln pausiert', weiter: 'Sammeln fortgesetzt',
+                                 runde: 'Sammelrunde angestoßen' }[aktion] || aktion);
+    } catch (e) {
+        logIt(1, 'Marktdaten', 'Steuerung fehlgeschlagen: ' + e.message);
+    }
+    setTimeout(marktStatusLaden, 1500);   // der Sammler wacht über einen Wecker auf
+}
 
 async function verlaufLaden() {
     try {
@@ -2164,6 +2323,7 @@ function initDrawingManager() {
     drawingManager.on('drawing:added', function(evt) {
         var d = evt.drawing || evt;
         if (d.id === '__preview__') return; // Preview nicht speichern
+        if (_importLaeuft) return;          // gerade vom Server geladen — nicht zurückschreiben
         saveDrawingWithText(d);
     });
     drawingManager.on('drawing:removed', function(evt) {
@@ -2214,7 +2374,16 @@ function initDrawingManager() {
 
 // Mappt ein Datum auf den nächsten vorhandenen Bar (für TF-übergreifende Drawings)
 function _snapAnchorTime(time) {
-    if (!_lastCandles || !_lastCandles.length || currentTF === '1D') return time;
+    var tf = chartTF();
+    if (tf === '1H') {
+        // In Tagesansichten gesetzte Anker (Datum) → erste reguläre Stundenkerze des Tages
+        if (typeof time === 'number') return time;
+        var st = stundeFuerDatum(chartTimeToStr(time));
+        return st !== null ? st : time;
+    }
+    // In der Stundenansicht gesetzte Anker (Zeitstempel) → ihr Tag
+    if (typeof time === 'number') time = chartTimeToStr(time);
+    if (!_lastCandles || !_lastCandles.length || tf === '1D') return time;
     var tMs = new Date(time).getTime();
     var best = _lastCandles[0].time, bestDiff = Infinity;
     for (var i = 0; i < _lastCandles.length; i++) {
@@ -2238,8 +2407,17 @@ function onDrawingsLoaded(data) {
     fitView();
 }
 
+/**
+ * Beim Laden meldet die Bibliothek jede Zeichnung als „hinzugefügt". Ohne diese Sperre
+ * wurde sie dann sofort zurückgespeichert — mit den an den Zeitrahmen angepassten
+ * Ankern: Im Wochenchart wanderten Tages-Anker so still auf den Montag, und eine im
+ * 1h-Chart gezogene Linie verlor beim Blick auf die Tageskerzen ihre Uhrzeit.
+ */
+var _importLaeuft = false;
+
 function _importDrawings(data) {
     if (!data || !data.length) return;
+    _importLaeuft = true;
     try {
         drawingManager.importDrawings(data, function(type, d) {
             var lcd = window.LightweightChartsDrawing;
@@ -2253,6 +2431,7 @@ function _importDrawings(data) {
             catch(e) { console.warn('importDrawings factory:', type, e); return null; }
         });
     } catch(e) { console.warn('importDrawings failed:', e); }
+    finally { _importLaeuft = false; }
 }
 
 // Wird von shared.js clearAllDrawings() aufgerufen
@@ -2350,7 +2529,8 @@ function refreshAutoLines() {
     var show = autoLineSetting('show');
     var lines = show !== 'patterns', pats = show !== 'lines';
     try {
-        res = AutoLines.detect(aggregateCandles(allCandles, currentTF), currentTF, logScale, _lastCandles[0].time, {
+        var tfA = chartTF();
+        res = AutoLines.detect(aggregateCandles(chartBasis(), tfA), tfA, logScale, _lastCandles[0].time, {
             minTouches: autoLineSetting('minTouches'), tolerance: autoLineSetting('tolerance'),
             levels:     lines ? autoLineSetting('levels') : 0,
             trendlines: lines ? autoLineSetting('trendlines') : 0,
@@ -3982,17 +4162,25 @@ async function refreshSectorEtf() {
         return;
     }
     updateSectorEtfBadge(etf);
-    var req  = ++_sectorEtfReq;
-    var data = _etfDataCache[etf];
+    var req     = ++_sectorEtfReq;
+    var stunden = chartTF() === '1H';
+    var schl    = etf + (stunden ? '|1H' : '');
+    var data    = _etfDataCache[schl];
     if (!data) {
         try {
-            var r   = await fetch('/api/prices/ensure/' + encodeURIComponent(etf), { cache: 'no-store' });
-            var raw = await r.json();
-            data = (raw || []).map(function(d) { return { time: d.date, close: d.close }; })
-                              .filter(function(d) { return d.close != null; });
-            _etfDataCache[etf] = data;
+            if (stunden) {
+                data = (await fetchStunden(etf)).map(function(k) { return { time: k.time, close: k.close }; });
+            } else {
+                var r   = await fetch('/api/prices/ensure/' + encodeURIComponent(etf), { cache: 'no-store' });
+                var raw = await r.json();
+                data = (raw || []).map(function(d) { return { time: d.date, close: d.close }; })
+                                  .filter(function(d) { return d.close != null; });
+            }
+            _etfDataCache[schl] = data;
         } catch(e) { data = []; }
     }
+    // Zeitrahmen inzwischen gewechselt? → die Daten passen nicht zur Achse
+    if ((chartTF() === '1H') !== stunden) return;
     // Ansicht/Toggle inzwischen gewechselt? → Ergebnis verwerfen.
     if (req !== _sectorEtfReq || !_showSectorEtf || currentView === 'index') return;
     _etfSymbol  = etf;

@@ -822,6 +822,28 @@ th.ibkr-sort .sort-ind { color: var(--accent); font-size: 8px; }
 }
 @media (max-width: 1100px) { .log-verlauf { width: 280px; } }
 
+/* Marktdaten-Sammler (Server) unter dem Ticker-Verlauf */
+.mk-head { border-top: 1px solid var(--border); }
+.mk-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 12px 10px; font-size: 11px; }
+.mk-zeile { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
+.mk-zeile > span { color: var(--muted); white-space: nowrap; }
+.mk-zeile > b { font-weight: 600; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.mk-balken { height: 4px; background: var(--border); margin: 4px 0 6px; }
+.mk-balken > div { height: 100%; background: var(--accent); transition: width .4s; }
+.mk-titel {
+  margin: 10px 0 3px; font-size: 9px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.mk-hinweis { color: var(--muted); margin: 2px 0 4px; }
+.mk-log { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; }
+.mk-log > div { display: grid; grid-template-columns: 82px 1fr; gap: 6px; padding: 1px 0; }
+.mk-log > div > span:first-child { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-log .lvl-err  { color: var(--red); font-weight: 600; }
+.mk-log .lvl-warn { color: #d08a1e; }
+
+/* 1h gewählt, aber nicht anwendbar (Index-Ansicht) */
+.btn.btn-na { opacity: .5; }
+
 /* ── Ticker-Suchleiste ─────────────────────────────────────────────────────── */
 .search-wrap { display: flex; gap: 4px; padding: 8px; }
 #searchInput {

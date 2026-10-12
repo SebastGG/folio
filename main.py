@@ -39,6 +39,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 import screener
+import markt
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # ── Konfiguration ──────────────────────────────────────────────────────────────
@@ -1341,7 +1342,9 @@ def _heatmap_pct(alt, neu):
         return None
     return round((neu / alt - 1) * 100, 2)
 
-def _heatmap_daten(db_file: str) -> dict:
+def _heatmap_daten(db_file: str, nur: set | None = None) -> dict:
+    """nur: auf diese Ticker beschränken (Indexquellen der Heatmap). Wechselkurs-Paare
+    bleiben trotzdem drin — sie rechnen die Marktkapitalisierung nach USD um."""
     jahr = time.strftime("%Y")
     conn = get_db(db_file)
     reihen: dict[str, list] = {}
@@ -1350,6 +1353,8 @@ def _heatmap_daten(db_file: str) -> dict:
         # Je Ticker über den Index statt einer Fensterfunktion über die ganze
         # Tabelle: bei 600 Tickern × 10 Jahren 0,2 statt 1,7 Sekunden.
         for (sym,) in conn.execute("SELECT DISTINCT ticker FROM prices").fetchall():
+            if nur is not None and sym not in nur and not sym.endswith("=X"):
+                continue
             r = conn.execute("SELECT date, close FROM prices WHERE ticker=? "
                              "ORDER BY date DESC LIMIT 300", (sym,)).fetchall()
             reihen[sym] = [(x["date"], x["close"]) for x in reversed(r)]
@@ -1415,11 +1420,76 @@ def _heatmap_daten(db_file: str) -> dict:
     return {"tickers": out}
 
 @app.get("/api/heatmap")
-async def heatmap(request: Request):
+async def heatmap(request: Request, quelle: str = ""):
     user  = get_user(request)
+    if quelle in markt.LISTEN:
+        _markt_bereit()
+        # Indexquelle: Tageskurse aus der gemeinsamen Marktdatenbank. Sind sie älter als
+        # zehn Minuten und läuft der Handel, frischt eine Hintergrundrunde sie auf —
+        # die Oberfläche fragt nach, bis sie fertig ist.
+        def lesen():
+            daten = _heatmap_daten(markt.markt_db(), nur=markt.liste(quelle))
+            gestartet = markt.live_anstossen()
+            daten["markt"] = {"stand": markt.kurs_stand(), "live": gestartet or markt._live["laeuft"],
+                              "liste": len(markt.liste(quelle))}
+            return daten
+        return JSONResponse(content=await run_in_threadpool(lesen))
     files = get_user_files(user)
     init_db(files["db"])
     return JSONResponse(content=await run_in_threadpool(_heatmap_daten, files["db"]))
+
+
+# ── Marktdaten: Stundenkerzen + Indexlisten (markt.py) ──────────────────────────
+# Der Sammler läuft als Thread im selben Prozess. FOLIO_MARKT=0 schaltet ihn ab
+# (lokale Tests ohne Netz); die Ablage wird trotzdem angelegt.
+
+def _markt_bereit():
+    """Sammler starten (bzw. nur die Ablage anlegen) — einmal; danach ohne Wirkung."""
+    if markt.VERZ is not None:
+        return
+    if os.environ.get("FOLIO_MARKT", "1") == "0":
+        markt.einrichten(BASE_DATA_DIR, init_db)
+    else:
+        markt.start(BASE_DATA_DIR, init_db)
+
+async def _markt_starten():
+    _markt_bereit()
+
+# on_event ist in FastAPI als veraltet markiert. Fällt es einmal weg, startet der
+# Sammler eben beim ersten Marktdaten-Aufruf (_markt_bereit in den Endpunkten).
+if hasattr(app, "on_event"):
+    app.on_event("startup")(_markt_starten)
+
+@app.get("/api/stunden/{ticker}")
+async def stunden(ticker: str, request: Request):
+    get_user(request)
+    _markt_bereit()
+    return JSONResponse(content=await run_in_threadpool(markt.stunden_fuer_chart, ticker))
+
+@app.get("/api/markt/status")
+async def markt_status(request: Request):
+    get_user(request)
+    _markt_bereit()
+    return JSONResponse(content=await run_in_threadpool(markt.status))
+
+@app.post("/api/markt/steuerung")
+async def markt_steuerung(request: Request):
+    get_user(request)
+    _markt_bereit()
+    body = await request.json()
+    aktion = body.get("aktion")
+    if aktion == "pause":
+        await run_in_threadpool(markt.pausieren, True)
+    elif aktion == "weiter":
+        await run_in_threadpool(markt.pausieren, False)
+    elif aktion == "runde":
+        await run_in_threadpool(markt.runde_jetzt)
+    elif aktion == "live":
+        gestartet = await run_in_threadpool(markt.live_anstossen, True)
+        return {"ok": True, "gestartet": gestartet}
+    else:
+        return JSONResponse({"ok": False, "error": "Unbekannte Aktion"}, status_code=400)
+    return {"ok": True}
 
 
 # ── Earnings-Termine ─────────────────────────────────────────────────────────────
