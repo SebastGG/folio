@@ -2,8 +2,11 @@ steps:
   - name: build-and-push
     image: docker:dind
     privileged: true
+    # Nur main deployt. Ohne den Filter baute und deployte jeder Push auf irgendeinen
+    # Branch — ein unfertiger Feature-Branch ginge so in Produktion.
     when:
       event: [push, manual]
+      branch: main
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -18,8 +21,10 @@ steps:
 
   - name: deploy
     image: alpine
+    # nur main, siehe oben
     when:
       event: [push, manual]
+      branch: main
     environment:
       CLOUDRON_TOKEN:
         from_secret: cloudron_token
