@@ -53,7 +53,10 @@ var PAGES = [
     {
         id: 'log', label: 'Protokoll', icon: '🧾',
         // renderLog() überspringt versteckte Seiten — beim Öffnen einmal nachziehen
-        onShow: function () { if (typeof renderLog === 'function') renderLog(true); }
+        onShow: function () {
+            if (typeof renderLog === 'function') renderLog(true);
+            if (typeof marktStatusLaden === 'function') marktStatusLaden();   // Stand des Marktdaten-Sammlers
+        }
     },
     {
         id: 'hilfe', label: 'Hilfe', icon: '❓',

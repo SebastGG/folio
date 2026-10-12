@@ -23,6 +23,12 @@
 var allCandles   = [];   // Alle Tageskerzen des aktuellen Views (Index oder Ticker)
 var _lastCandles = [];   // Gefärbte + aggregierte Kerzen (nach applyPeriod)
 var _volumeData  = [];   // Volumen-Daten (Tagesebene)
+// Stundenkerzen des angezeigten Einzelwerts (nur Desktop, Zeitrahmen 1H). time ist die
+// Börsen-Ortszeit als UTC-Sekunden — so beschriftet LightweightCharts die Achse in
+// New Yorker (bzw. Frankfurter …) Zeit statt in UTC.
+var _stundenKerzen = [];
+var _stundenSym    = null;   // zu welchem Ticker _stundenKerzen gehören
+var _stundenTag    = {};     // 'YYYY-MM-DD' → erste Kerze der regulären Sitzung dieses Tages
 
 // Portfolio / Baskets
 var WEIGHTS       = {};  // { AAPL: 10, GOOGL: 5 } — Anzahl Aktien pro Ticker
@@ -39,7 +45,7 @@ var currentView   = 'index'; // 'index' oder Ticker-Symbol z.B. 'AAPL'
 
 // Chart-Einstellungen
 var currentPeriod = 180;  // Tage (0 = All)
-var currentTF     = '1D'; // '1D', '1W', '1M'
+var currentTF     = '1D'; // '1H', '1D', '1W', '1M' — gewählt; gezeichnet wird chartTF()
 var logScale      = false;
 var indicators    = { ma50: false, ma200: false, reg: false };
 
@@ -244,10 +250,14 @@ function colorCandles(candles) {
     return candles.map(function(c, i) {
         var prevClose = i > 0 ? candles[i - 1].close : c.open;
         var up = c.close >= prevClose;
+        // Stundenkerzen außerhalb der regulären Sitzung (Vor-/Nachbörse, s ≠ 0) blasser
+        var col = c.s ? (up ? 'rgba(45,138,78,0.42)' : 'rgba(192,57,43,0.42)')
+                      : (up ? '#2d8a4e' : '#c0392b');
         return Object.assign({}, c, {
-            color:       up ? '#2d8a4e' : '#c0392b',
-            borderColor: up ? '#2d8a4e' : '#c0392b',
-            wickColor:   up ? '#2d8a4e' : '#c0392b',
+            up:          up,
+            color:       col,
+            borderColor: col,
+            wickColor:   col,
         });
     });
 }
@@ -279,7 +289,7 @@ function periodStartFor(dateStr, tf) {
  * @returns {Array} Aggregierte Kerzen
  */
 function aggregateCandles(candles, tf) {
-    if (tf === '1D') return candles;
+    if (tf === '1D' || tf === '1H') return candles;
     var groups = {};
     candles.forEach(function(c) {
         var key = periodStartFor(c.time, tf);
@@ -299,7 +309,7 @@ function aggregateCandles(candles, tf) {
  * Aggregiert Volumen auf Wochen- oder Monatsebene.
  */
 function aggregateVolume(candles, tf) {
-    if (tf === '1D') return candles;
+    if (tf === '1D' || tf === '1H') return candles;
     return aggregateCandles(candles, tf).map(function(c) {
         return { time: c.time, volume: c.volume || 0 };
     });
@@ -741,8 +751,12 @@ function applyPeriod() {
     }
 
     // 1. Filtern
-    var filtered = allCandles;
-    if (currentPeriod > 0) {
+    var tf       = chartTF();
+    var filtered = chartBasis();
+    if (currentPeriod > 0 && tf === '1H') {
+        var cutTs = Math.floor(Date.now() / 1000) - currentPeriod * 86400;
+        filtered = filtered.filter(function(c) { return c.time >= cutTs; });
+    } else if (currentPeriod > 0) {
         var cut = new Date();
         cut.setDate(cut.getDate() - currentPeriod);
         var cutStr = cut.toISOString().slice(0, 10);
@@ -751,13 +765,13 @@ function applyPeriod() {
         // (z. B. Mi–Fr), sitzt aber auf dem Montag und sieht aus wie eine volle
         // Woche — mit falschem Open/High/Low. Fiel der Schnitt zufällig auf einen
         // Montag, stimmte es; daher trat der Fehler nur manchmal auf.
-        cutStr = periodStartFor(cutStr, currentTF);
-        filtered = allCandles.filter(function(c) { return c.time >= cutStr; });
+        cutStr = periodStartFor(cutStr, tf);
+        filtered = filtered.filter(function(c) { return c.time >= cutStr; });
     }
 
     // 2. Aggregieren
-    var agg    = aggregateCandles(filtered, currentTF);
-    var volAgg = aggregateVolume(filtered, currentTF);
+    var agg    = aggregateCandles(filtered, tf);
+    var volAgg = aggregateVolume(filtered, tf);
 
     // 3. Einfärben
     var colored = colorCandles(agg);
@@ -770,7 +784,7 @@ function applyPeriod() {
         var regN = regPeriodEl ? Math.max(5, parseInt(regPeriodEl.value, 10) || 12) : 12;
         var regCandles = agg.slice(-regN);
         if (regCandles.length < 10) regCandles = agg;
-        var bpy = currentTF === '1W' ? 52 : currentTF === '1M' ? 12 : 252;
+        var bpy = tf === '1W' ? 52 : tf === '1M' ? 12 : tf === '1H' ? kerzenJeJahr(regCandles) : 252;
         regResult = calcLogReg(regCandles, 2, bpy);
     }
 
@@ -799,14 +813,132 @@ function setPeriod(days) {
     chartPrefsChanged();
 }
 
-function setTF(tf) {
+async function setTF(tf) {
     currentTF = tf;
+    // Stundenkerzen erst beim ersten Umschalten holen (nur Desktop, nur Einzelwerte)
+    if (tf === '1H' && stundenMoeglich() && _stundenSym !== currentView) {
+        var sym = currentView;
+        if (typeof showLoading === 'function') showLoading('Lade Stundenkerzen ' + sym + '…');
+        await loadStunden(sym);
+        if (typeof hideLoading === 'function') hideLoading();
+        if (currentView !== sym || currentTF !== tf) return;   // inzwischen gewechselt
+    }
     // Der gewählte Zeitraum bleibt stehen. Früher sprang er beim Umschalten auf
     // Wochen-/Monatskerzen still auf „Alles" — aus 6 Monaten wurden plötzlich
     // sechs Jahre, und beim Zurückschalten auf Tageskerzen blieb es dabei.
     applyPeriod();
     loadDrawings(); // Anker auf neue TF-Bars snappen
     chartPrefsChanged();
+}
+
+/**
+ * Tatsächlich gezeichneter Zeitrahmen. Stundenkerzen gibt es nur für Einzelwerte und
+ * nur, wenn sie geladen sind — in der Index-Ansicht (und auf Mobile) bleibt 1H
+ * gewählt, gezeichnet werden aber Tageskerzen.
+ */
+function chartTF() {
+    if (currentTF !== '1H') return currentTF;
+    return (currentView !== 'index' && _stundenSym === currentView && _stundenKerzen.length) ? '1H' : '1D';
+}
+
+/** Kerzen, aus denen der Chart gerade gebaut wird: Stunden- oder Tageskerzen. */
+function chartBasis() {
+    return chartTF() === '1H' ? _stundenKerzen : allCandles;
+}
+
+/** Stundenkerzen gibt es nur auf dem Desktop (desktop.js setzt CHART_STUNDEN) und für Einzelwerte. */
+function stundenMoeglich() {
+    return typeof CHART_STUNDEN !== 'undefined' && CHART_STUNDEN && currentView !== 'index';
+}
+
+/** Kerzen je Jahr aus den Daten selbst — für die Jahresrendite der LogReg auf Stundenbasis. */
+function kerzenJeJahr(kerzen) {
+    if (!kerzen || kerzen.length < 2) return 252 * 16;
+    var jahre = (kerzen[kerzen.length - 1].time - kerzen[0].time) / (365.25 * 86400);
+    return jahre > 0.02 ? kerzen.length / jahre : 252 * 16;
+}
+
+// ── Zeitzonen ─────────────────────────────────────────────────────────────────
+var _tzFormate = {}, _tzVersatzCache = {};
+
+/** Ortszeit minus UTC in Sekunden, für eine Zeitzone zu einem Zeitpunkt (UTC-Sekunden). */
+function tzVersatz(tz, t) {
+    var schl = tz + '|' + Math.floor(t / 3600);   // Sommerzeit wechselt nur zur vollen Stunde
+    if (_tzVersatzCache[schl] !== undefined) return _tzVersatzCache[schl];
+    if (!(tz in _tzFormate)) {
+        try {
+            _tzFormate[tz] = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23',
+                year: 'numeric', month: 'numeric', day: 'numeric',
+                hour: 'numeric', minute: 'numeric', second: 'numeric' });
+        } catch (e) { _tzFormate[tz] = null; }
+    }
+    var v = 0, f = _tzFormate[tz];
+    if (f) {
+        var p = {};
+        f.formatToParts(new Date(t * 1000)).forEach(function(x) { p[x.type] = x.value; });
+        v = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second) / 1000 - t;
+    }
+    return (_tzVersatzCache[schl] = v);
+}
+
+/** Zeitwert der Chartachse als Text: Datum, bei Stundenkerzen mit Uhrzeit (Börsenzeit). */
+function chartZeitText(t) {
+    if (typeof t !== 'number') return chartTimeToStr(t) || '';
+    var iso = new Date(t * 1000).toISOString();
+    return iso.slice(0, 10) + ' ' + iso.slice(11, 16);
+}
+
+var SITZUNG_NAME = { 1: 'Vorbörse', 2: 'Nachbörse', 3: 'außerhalb der Sitzungen' };
+
+/**
+ * Stundenkerzen eines Tickers vom Server. Der Server lädt bei Yahoo nach, wenn sein
+ * Stand älter als 15 Minuten ist, und nimmt den Wert in die tägliche Sammlung auf.
+ */
+async function fetchStunden(sym) {
+    var r = await fetch('/api/stunden/' + encodeURIComponent(sym), { cache: 'no-store' });
+    var d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    if (d.fehler) logIt(2, 'Kurse', sym + ': Stundenkerzen nicht aktualisiert — ' + d.fehler);
+    var tz = d.tz || 'America/New_York';
+    return (d.kerzen || []).map(function(k) {
+        return { time: k[0] + tzVersatz(tz, k[0]), open: k[1], high: k[2], low: k[3], close: k[4],
+                 volume: k[5] || 0, s: k[6] };
+    });
+}
+
+/**
+ * Lädt die Stundenkerzen des Tickers in _stundenKerzen (Fehler → leer, Chart bleibt bei Tagen).
+ * Nur die jüngste Anfrage schreibt: Beim schnellen Durchklicken überschrieb sonst eine
+ * späte Antwort für den vorigen Wert die des aktuellen.
+ */
+var _stundenReq = 0;
+async function loadStunden(sym) {
+    var req  = ++_stundenReq;
+    var done = logTimer(4, 'Chart', sym + ': Stundenkerzen laden');
+    var kerzen = [];
+    try {
+        kerzen = await fetchStunden(sym);
+        done(kerzen.length + ' Kerzen');
+    } catch (e) {
+        logIt(1, 'Chart', sym + ': Stundenkerzen nicht abrufbar — ' + e.message);
+        done('Fehler');
+    }
+    if (req !== _stundenReq) return;
+    var tage = {};
+    kerzen.forEach(function(c) {
+        var tag = chartTimeToStr(c.time), bisher = tage[tag];
+        // die erste Kerze der regulären Sitzung; gibt es keine, die erste des Tages
+        if (!bisher || (c.s === 0 && bisher.s !== 0)) tage[tag] = c;
+    });
+    _stundenKerzen = kerzen;
+    _stundenTag    = tage;
+    _stundenSym    = sym;
+}
+
+/** Zeitpunkt der Stundenkerze, auf die ein Datum ('YYYY-MM-DD') fällt — oder null. */
+function stundeFuerDatum(datum) {
+    var k = _stundenTag[String(datum).slice(0, 10)];
+    return k ? k.time : null;
 }
 
 /**
@@ -1321,7 +1453,8 @@ async function loadTickerData(sym) {
         // Gewicht ≠ 0, fasst ihn "Kurse aktualisieren" nie an, und man sah beliebig
         // alte Kurse und ein während des Handels eingefrorenes Teilvolumen.
         // Der Server drosselt selbst auf einen Yahoo-Abruf je Ticker und Minute.
-        var data    = await fetchTicker(sym, true);
+        var stunden = currentTF === '1H' && stundenMoeglich();
+        var data    = (await Promise.all([fetchTicker(sym, true), stunden ? loadStunden(sym) : null]))[0];
         if (req !== _loadSeq) { done('verworfen, inzwischen gewechselt'); return; }
         _dataMap[sym] = data;   // auch in _dataMap speichern für buildPerfData()
         allCandles  = data;

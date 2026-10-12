@@ -63,6 +63,7 @@
       </div>
       <div class="sep"></div>
       <div class="btn-group">
+        <button class="btn" id="tf1H" onclick="setTF('1H')" title="Stundenkerzen mit Vor- und Nachbörse (blass), bis zu 2 Jahre zurück — nur für Einzelwerte">1h</button>
         <button class="btn active" id="tf1D" onclick="setTF('1D')">1T</button>
         <button class="btn" id="tf1W" onclick="setTF('1W')">1W</button>
         <button class="btn" id="tf1M" onclick="setTF('1M')">1M</button>
@@ -421,7 +422,7 @@
   <div class="chart-toolbar">
     <span class="chart-title">Heatmap</span>
     <select id="hm-quelle" class="hm-select" onchange="heatmapSetze('quelle', this.value)"
-      title="Welche Ticker: alle aus den Baskets, alle Screener-Baskets zusammen, alles mit Kursen in der Datenbank oder ein einzelner Basket"></select>
+      title="Welche Ticker: alle aus den Baskets, alle Screener-Baskets zusammen, alles mit Kursen in der Datenbank, ein ganzer Index oder ein einzelner Basket"></select>
     <div class="sep"></div>
     <div class="btn-group" id="hm-zeitraum" title="Zeitraum der Veränderung (in Handelstagen wie in der Performance-Tabelle)">
       <button class="btn" data-v="d1"   onclick="heatmapSetze('zeitraum','d1')">1T</button>
@@ -1154,6 +1155,16 @@
           </span>
         </div>
         <div class="lv-body" id="verlaufListe"></div>
+        <!-- Marktdaten-Sammler (markt.py): Stundenkerzen + Tageskurse von S&P 500,
+             Nasdaq-100 und Russell 2000. Läuft auf dem Server, gemeinsam für alle. -->
+        <div class="lv-head mk-head">
+          <span class="panel-title">📡 Marktdaten</span>
+          <span class="lv-btns">
+            <button class="export-btn log-btn" id="mkPause" onclick="marktSteuern(this.dataset.aktion)" data-aktion="pause">⏸ Pausieren</button>
+            <button class="export-btn log-btn" id="mkRunde" onclick="marktSteuern('runde')" title="Sammelrunde jetzt starten statt um 20:30 New Yorker Zeit">↻ Jetzt sammeln</button>
+          </span>
+        </div>
+        <div class="mk-body" id="marktStatus"><div class="log-empty">Lade…</div></div>
       </aside>
     </div>
   </div>
@@ -1232,8 +1243,11 @@
         <dl class="help-def">
           <dt>1M … All</dt>
           <dd>Zeitraum, der beim Laden angezeigt wird.</dd>
-          <dt>1T / 1W / 1M</dt>
-          <dd>Kerzengröße (Tages-, Wochen-, Monatskerzen).</dd>
+          <dt>1h / 1T / 1W / 1M</dt>
+          <dd>Kerzengröße (Stunden-, Tages-, Wochen-, Monatskerzen). <b>1h</b> gibt es nur für
+              Einzelwerte, bis zu zwei Jahre zurück, mit Vor- und Nachbörse als <b>blasse</b> Kerzen;
+              die Uhrzeiten sind Börsenzeit (bei US-Werten New York). In der Index-Ansicht bleibt 1h
+              gewählt, der Knopf wird blass und es gibt Tageskerzen.</dd>
           <dt>MA50 / MA200</dt>
           <dd>Gleitende Durchschnitte über 50 bzw. 200 Kerzen.</dd>
           <dt>LogReg</dt>
@@ -1262,7 +1276,14 @@
         </p>
         <p class="help-tip">
           Oben links im Chart stehen beim Fahren mit der Maus <b>OHLC</b>, Volumen und das
-          Durchschnittsvolumen der jeweiligen Kerze.
+          Durchschnittsvolumen der jeweiligen Kerze — bei Stundenkerzen mit Uhrzeit und Sitzung.
+        </p>
+        <p class="help-tip">
+          Zeichnungen gelten für alle Kerzengrößen. Eine im <b>1h</b>-Chart gezogene Linie behält ihre
+          Uhrzeit; bei Tages-, Wochen- oder Monatskerzen sitzt sie auf dem Tag bzw. der Kerze, in
+          die er fällt. Umgekehrt landet ein Anker aus der Tagesansicht im 1h-Chart auf der ersten
+          Stunde der regulären Sitzung — dort stehen auch die Trade-Pfeile, denn IBKR liefert nur das
+          Datum.
         </p>
       </article>
 
@@ -1348,7 +1369,8 @@
           Oben links wählst du, welche Ticker: <b>Alle Baskets</b> (jeder Wert, der in irgendeinem
           Basket steht, auch mit Gewicht 0), <b>alle Screener-Baskets</b> zusammen (jeder Basket,
           dessen Name mit „Screener" beginnt), die <b>ganze Kursdatenbank</b> (auch Werte, die du
-          längst aus allen Baskets genommen hast) oder <b>einen Basket</b>. Gruppiert wird nach
+          längst aus allen Baskets genommen hast), einen ganzen <b>Index</b> — S&amp;P 500,
+          Nasdaq-100 oder Russell 2000, siehe <i>Marktdaten</i> — oder <b>einen Basket</b>. Gruppiert wird nach
           Sektor oder Basket, die Kachelgröße folgt der Marktkapitalisierung — wahlweise gedämpft
           (<b>√</b>), damit kleine Werte neben Apple nicht verschwinden, oder für alle gleich.
           <b>☰ Liste</b> zeigt dieselben Werte als sortierbare Tabelle.
@@ -1365,6 +1387,12 @@
           genau die angezeigten Ticker. Sektor und Marktkapitalisierung, die noch fehlen, lädt die
           Seite beim ersten Öffnen selbst nach (Fortschritt in der Statuszeile); bis dahin stehen
           diese Werte unter „Ohne Stammdaten" und mittelgroß.
+        </p>
+        <p class="help-tip">
+          Bei einem <b>Index</b> kommen Kurse, Sektor und Marktkapitalisierung aus der gemeinsamen
+          Marktdatenbank. Während des US-Handels frischt die Seite beim Öffnen die heutigen Kurse
+          auf, wenn sie älter als zehn Minuten sind (rund eine Minute, die Statuszeile sagt
+          „werden aufgefrischt"); <b>↻ Kurse auffrischen</b> tut das sofort.
         </p>
       </article>
 
@@ -1390,6 +1418,39 @@
         <p class="help-tip">
           Die Fußzeile unten sagt nach jedem Refresh, wie viele Ticker tatsächlich aktualisiert wurden.
           Steht dort etwas von Fehlern, schau ins <b>Protokoll</b>.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-marktdaten" data-t="Marktdaten">
+        <h2 class="help-h">📡 Marktdaten</h2>
+        <p>
+          Neben deinen eigenen Kursen sammelt der Server <b>Marktdaten</b> für alle Werte aus
+          <b>S&amp;P 500, Nasdaq-100 und Russell 2000</b> (rund 2.500), dazu SPY, QQQ, IWM, DIA und die
+          Sektor-ETFs: Stundenkerzen mit Vor- und Nachbörse und Tageskurse. Sie sind für alle
+          Benutzer gemeinsam und speisen die <b>Index-Heatmap</b> und den <b>1h-Chart</b>.
+        </p>
+        <p>
+          Gesammelt wird einmal je Handelstag um <b>20:30 New Yorker Zeit</b>, nach dem Ende der
+          Nachbörse — langsam, damit Yahoo nicht drosselt. Beim ersten Mal reicht jeder Wert zwei
+          Jahre zurück; weiter gibt Yahoo Stundenkerzen nicht heraus, und was älter wird, gibt es
+          dort nie wieder. Deshalb wird gesammelt statt bei Bedarf gefragt. Die Indexlisten kommen
+          wöchentlich neu von Finviz.
+        </p>
+        <p>
+          Öffnest du einen Wert im 1h-Chart, der in keinem der Indizes steht, holt der Server seine
+          Stundenkerzen sofort und sammelt ihn danach 60 Tage lang mit. Im Chart werden Stundenkerzen
+          nachgeladen, sobald sie älter als 15 Minuten sind.
+        </p>
+        <p class="help-tip">
+          Den Stand zeigt die Seite <b>Protokoll</b> unter <i>Marktdaten</i>: wie viele Werte schon
+          Kurse haben, Fortschritt der laufenden Runde, Speicherplatz, Fehlschläge.
+          <b>⏸ Pausieren</b> hält das Sammeln an (auch von selbst, wenn weniger als 2 GB frei sind),
+          <b>↻ Jetzt sammeln</b> startet eine Runde sofort. Gespeichert wird eine Datei je Monat,
+          damit eine Sicherung nur den laufenden Monat neu überträgt.
+        </p>
+        <p class="help-tip">
+          Gespeichert werden Zeitpunkte, keine festen Handelszeiten. Kommt der <b>24-Stunden-Handel</b>
+          und liefert Yahoo dann auch Nachtkerzen, landen sie ohne Umbau mit in der Sammlung.
         </p>
       </article>
 
@@ -1610,6 +1671,11 @@
           <i>aktueller Stand</i> — <b>↷ Wiederholen</b> holt sie zurück. Anders als das Protokoll
           liegt der Verlauf auf dem Server und ist nach dem Neuladen noch da.
         </p>
+        <p>
+          Darunter steht der Stand der <b>Marktdaten</b>: wie viele Index-Werte schon Stunden- und
+          Tageskurse haben, die laufende oder letzte Sammelrunde, Speicherplatz, zuletzt
+          fehlgeschlagene Werte und das Protokoll des Sammlers auf dem Server.
+        </p>
         <p class="help-tip">
           <b>Wenn etwas nicht so lädt, wie es soll, ist das hier die erste Anlaufstelle</b> — fehlende
           Kurse und abgelehnte Abrufe stehen dort im Klartext.
@@ -1666,6 +1732,9 @@
           <dd>Financial Modeling Prep, direkt vom Browser geladen.</dd>
           <dt>Screener</dt>
           <dd>Finviz für die Treffer, Yahoo für die Marktkapitalisierung.</dd>
+          <dt>Marktdaten</dt>
+          <dd>Indexlisten, Sektor und Marktkapitalisierung von Finviz (wöchentlich), Stunden- und
+              Tageskurse von Yahoo (täglich). Gemeinsam für alle Benutzer, siehe <i>Marktdaten</i>.</dd>
           <dt>Depot</dt>
           <dd>Interactive Brokers über deine eigene Flex Query.</dd>
         </dl>
@@ -1737,11 +1806,11 @@
   };
   var _origSetTF = setTF;
   setTF = function(tf) {
-    ['1D','1W','1M'].forEach(function(t) {
+    ['1H','1D','1W','1M'].forEach(function(t) {
       var b = document.getElementById('tf'+t);
       if (b) b.classList.toggle('active', t === tf);
     });
-    _origSetTF(tf);
+    return _origSetTF(tf);
   };
   var _origTogInd = togInd;
   togInd = function(name) {
