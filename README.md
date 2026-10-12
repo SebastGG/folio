@@ -89,6 +89,11 @@ Enthaltene Fremdbestandteile, jeweils mit eigener Lizenz:
   MIT ([`konvex_tax/LICENSE`](konvex_tax/LICENSE))
 - [`static/lib/lightweight-charts-drawing.umd.js`](static/lib/) — Zeichenwerkzeuge aus
   [deepentropy/lightweight-charts-drawing](https://github.com/deepentropy/lightweight-charts-drawing),
-  MIT ([`static/lib/LICENSE.lightweight-charts-drawing`](static/lib/LICENSE.lightweight-charts-drawing))
+  MIT ([`static/lib/LICENSE.lightweight-charts-drawing`](static/lib/LICENSE.lightweight-charts-drawing)).
+  Version 0.1.1, an einer Stelle angepasst: Die Beschriftungsfunktion schiebt Labels, die
+  über den rechten Rand der Zeichenfläche ragen würden, nach links. Sonst verschwinden
+  die Preise von H-Linie, H-Strahl, Kreuzlinie, Preisspanne und Fibonacci unter der
+  Preisachse. Bei einem Update der Bibliothek muss diese Änderung neu eingebaut werden
+  (`p=t.x*e` in der Funktion, die `roundRect` zeichnet).
 - [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) —
   wird zur Laufzeit von unpkg geladen, Apache-2.0
