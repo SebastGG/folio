@@ -472,6 +472,50 @@ def stunden_lesen(sym: str) -> list:
             sc.close()
     return out
 
+DOCHT_MAX = 2.0     # Docht außerhalb der Sitzung höchstens 2 × übliche Stundenspanne
+DOCHT_TAGE = 20     # übliche Spanne: Median der regulären Sitzung über so viele Handelstage
+
+def dochte_kappen(kerzen: list) -> list:
+    """Kappt Ausreißer-Dochte der Kerzen außerhalb der regulären Sitzung.
+
+    Yahoo übernimmt in Vor- und Nachbörse jeden gemeldeten Kurs ins Hoch/Tief, auch
+    offensichtliche Fehlkurse: MSFT am 30.09.2026 um 17:05 New York mit Tief 412,92 bei
+    einem Kurs von 513, NVDA tags darauf 169,85 statt 231 — Volumen jeweils 0, Eröffnung
+    und Schluss der Kerze normal. Bei großen US-Werten hat so jede fünfte Kerze außerhalb
+    der Sitzung einen Docht über dem Fünffachen der üblichen Stundenspanne; in der
+    regulären Sitzung bleiben 99 % unter dem Doppelten.
+
+    Der Docht darf deshalb höchstens DOCHT_MAX × die übliche Spanne (Median der regulären
+    Stundenkerzen der letzten DOCHT_TAGE Handelstage) über den Körper hinausreichen. Echte
+    große Bewegungen (Quartalszahlen) stecken im Körper und bleiben. Reguläre Kerzen
+    bleiben unverändert, gespeichert wird immer das Original.
+    """
+    if not kerzen:
+        return kerzen
+    # Mediane Spanne je Handelstag (UTC-Tag genügt: eine reguläre US-Sitzung liegt ganz in einem)
+    je_tag = collections.OrderedDict()
+    for t, o, h, l, c, v, s in kerzen:
+        if s == 0 and c:
+            je_tag.setdefault(t // 86400, []).append((h - l) / c)
+    tage = list(je_tag.keys())
+    tag_median = [sorted(x)[len(x) // 2] for x in je_tag.values()]
+    def spanne(t):
+        i = bisect.bisect_right(tage, t // 86400)          # Tage bis einschließlich heute
+        fenster = sorted(tag_median[max(0, i - DOCHT_TAGE):i] or tag_median[:DOCHT_TAGE])
+        return fenster[len(fenster) // 2] if fenster else None
+    out = []
+    for k in kerzen:
+        t, o, h, l, c, v, s = k
+        if s != 0:
+            r = spanne(t)
+            if r:
+                hoch, tief = max(o, c), min(o, c)
+                h = min(h, hoch * (1 + DOCHT_MAX * r))
+                l = max(l, tief * (1 - DOCHT_MAX * r))
+                k = [t, o, max(h, hoch), min(l, tief), c, v, s]
+        out.append(k)
+    return out
+
 def stunden_fuer_chart(sym: str) -> dict:
     """Für /api/stunden: bei Bedarf nachladen (höchstens einmal je Minute und Wert),
     den Wert in die tägliche Sammlung aufnehmen und alles Gespeicherte liefern."""
@@ -512,7 +556,7 @@ def stunden_fuer_chart(sym: str) -> dict:
         "tz":     (st["tz"] if st and st["tz"] else "America/New_York"),
         "stand":  st["abruf_h"] if st else None,
         "fehler": fehler,
-        "kerzen": stunden_lesen(sym),
+        "kerzen": dochte_kappen(stunden_lesen(sym)),
     }
 
 
