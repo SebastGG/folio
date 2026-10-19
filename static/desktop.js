@@ -3132,6 +3132,8 @@ updateClock();
             Promise.all([posGeladen, tradesGeladen]).then(function() {
                 _ibkrEx.bereit = true;
                 if (/^#\/?ibkr$/.test(location.hash)) ibkrExLaden();
+                // Heatmap-Quelle „Über letztem Verkauf" braucht dieselben Daten
+                if (typeof _hmSichtbar === 'function' && _hmSichtbar()) heatmapRender();
             });
         });
         // Chart-Schalter aus der Config: VRVP braucht den fertig geladenen Chart,
@@ -4172,21 +4174,35 @@ function ibkrRenderTrades() {
     tbody.innerHTML = html;
 }
 
-// ── Ehemalige über Verkaufskurs ──────────────────────────────────────────────
-// Aktien, die verkauft und nicht mehr im Depot sind, deren Kurs heute über dem
-// letzten Verkaufskurs steht. Verkaufskurs split-bereinigt (ibkrStockTrades),
-// damit er auf derselben Skala liegt wie die Kurse aus der Datenbank.
+// ── Über dem letzten Verkaufskurs ────────────────────────────────────────────
+// Aktien, von denen irgendwann etwas verkauft wurde — ganz oder nur teilweise —
+// und deren Kurs heute über dem letzten Verkaufskurs steht. Verkaufskurs
+// split-bereinigt (ibkrStockTrades), damit er auf derselben Skala liegt wie die
+// Kurse aus der Datenbank. Dieselben Zeilen speisen die Heatmap-Quelle
+// „Über letztem Verkauf" (heatmap.js).
 
 var _ibkrEx = { kurse: {}, geladen: 0, laeuft: false, bereit: false };   // bereit: Bestand + Trades geladen
 
 // Kleinwährungen bei Yahoo (Pence usw.) — IBKR rechnet in der Hauptwährung.
 var _EX_KLEIN = { GBp: 'GBP', GBX: 'GBP', ZAc: 'ZAR', ILA: 'ILS' };
 
+/** Yahoo-Symbole aller Aktien mit mindestens einem Verkauf. */
+function ibkrVerkaufteSymbole() {
+    var syms = {};
+    (ibkrTrades || []).forEach(function(t) {
+        if ((t.asset_class || '').toUpperCase() !== 'STK') return;
+        if ((t.action || '').toUpperCase().indexOf('SELL') < 0) return;
+        var sym = ibkrTradeYahoo(t);
+        if (sym) syms[sym] = true;
+    });
+    return Object.keys(syms);
+}
+
 /** Kurse holen; ohne `erzwingen` höchstens alle 15 Minuten. */
 async function ibkrExLaden(erzwingen) {
     if (_ibkrEx.laeuft || !_ibkrEx.bereit) return;
     if (!erzwingen && Date.now() - _ibkrEx.geladen < 15 * 60 * 1000) { ibkrExRender(); return; }
-    var syms = Object.keys(ibkrFormerWeights());
+    var syms = ibkrVerkaufteSymbole();
     if (!syms.length) { ibkrExRender(); return; }
     _ibkrEx.laeuft = true;
     var stand = document.getElementById('ibkrExStand');
@@ -4201,25 +4217,37 @@ async function ibkrExLaden(erzwingen) {
         _ibkrEx.geladen = Date.now();
         await loadSplits();   // nachgeladene Ticker bringen ggf. erst jetzt ihre Splits mit
     } catch (e) {
-        logIt(2, 'IBKR', 'Kurse der Ehemaligen fehlgeschlagen: ' + e.message);
+        logIt(2, 'IBKR', 'Kurse der verkauften Aktien fehlgeschlagen: ' + e.message);
     } finally {
         _ibkrEx.laeuft = false;
     }
     ibkrExRender();
 }
 
-/** Je ehemaliger Aktie: letzter Verkauf, aktueller Kurs, Abstand in %. */
-function ibkrExZeilen() {
+/**
+ * Je Aktie mit Verkauf: letzter Verkauf, aktueller Kurs, Abstand in %.
+ * @param kursVon  optional: sym → {close, date, currency}; Vorgabe sind die
+ *                 über ibkrExLaden() geholten Kurse. Die Heatmap gibt ihre eigenen.
+ */
+function ibkrExZeilen(kursVon) {
+    kursVon = kursVon || function(sym) { return _ibkrEx.kurse[sym] || _ibkrEx.kurse[sym.toUpperCase()]; };
+    var gehalten = {};
+    (ibkrPositions || []).forEach(function(p) {
+        if ((p.quantity || 0) === 0) return;
+        var sym = ibkrPosYahoo(p);
+        if (sym) gehalten[sym.toUpperCase()] = true;
+    });
     var zeilen = [];
-    Object.keys(ibkrFormerWeights()).forEach(function(sym) {
+    ibkrVerkaufteSymbole().forEach(function(sym) {
         var verk = ibkrStockTrades(sym).filter(function(t) {
             return (t.action || '').toUpperCase().indexOf('SELL') >= 0;
         });
         if (!verk.length) return;
         var v = verk[verk.length - 1];
-        var k = _ibkrEx.kurse[sym] || _ibkrEx.kurse[sym.toUpperCase()];
+        var k = kursVon(sym);
         var z = { sym: sym, datum: (v.trade_date || '').slice(0, 10), verkauf: v.adj_price,
-                  ccy: v.currency || '', kurs: null, kursDatum: '', abstand: null, hinweis: '' };
+                  ccy: v.currency || '', imDepot: !!gehalten[sym.toUpperCase()],
+                  kurs: null, kursDatum: '', abstand: null, hinweis: '' };
         if (k && k.close > 0 && z.verkauf > 0) {
             var yc = k.currency || z.ccy, faktor = 1;
             if (_EX_KLEIN[yc] && _EX_KLEIN[yc] === z.ccy) faktor = 100;
@@ -4255,7 +4283,7 @@ function ibkrExRender() {
         tbody.innerHTML = '<tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center;">'
             + (!zeilen.length ? 'Keine verkauften Aktien in den IBKR-Trades'
                : !_ibkrEx.geladen ? 'Kurse noch nicht geladen'
-               : 'Keine ehemalige Position steht über ihrem letzten Verkaufskurs')
+               : 'Keine verkaufte Aktie steht über ihrem letzten Verkaufskurs')
             + '</td></tr>';
         return;
     }
@@ -4265,7 +4293,9 @@ function ibkrExRender() {
         var abst  = z.abstand == null ? escHtml(z.hinweis || '-')
                   : (z.abstand > 0 ? '+' : '') + f2(z.abstand) + ' %';
         return '<tr style="cursor:pointer" title="Chart öffnen" onclick="ibkrExOeffnen(\'' + escHtml(z.sym) + '\')">'
-            + '<td style="font-weight:500">' + escHtml(z.sym) + '</td>'
+            + '<td style="font-weight:500">' + escHtml(z.sym)
+            + (z.imDepot ? ' <span style="font-size:9px;color:var(--muted);font-weight:600" title="Nur teilweise verkauft — ein Rest liegt noch im Depot">im Depot</span>' : '')
+            + '</td>'
             + '<td style="color:var(--muted)">' + z.datum + '</td>'
             + '<td style="text-align:right">' + f2(z.verkauf) + ' ' + escHtml(z.ccy) + '</td>'
             + '<td style="text-align:right">' + (z.kurs != null ? f2(z.kurs) + ' ' + escHtml(z.ccy) : '-') + '</td>'
@@ -4275,11 +4305,14 @@ function ibkrExRender() {
     }).join('');
 }
 
-/** Chart öffnen — im Ehemalige-Basket, wenn es einen gibt, sonst im aktiven. */
+/** Chart öffnen — im aktiven Basket, wenn er den Wert enthält, sonst im
+ *  Ehemalige-Basket, sonst im ersten, der ihn hat, sonst im aktiven. */
 async function ibkrExOeffnen(sym) {
-    var ziel = Object.keys(baskets).find(function(id) {
-        return baskets[id] && baskets[id].ibkrFormer && (baskets[id].weights || {})[sym] != null;
+    var mit = Object.keys(baskets).filter(function(id) {
+        return baskets[id] && (baskets[id].weights || {})[sym] != null;
     });
+    var ziel = mit.indexOf(currentBasket) >= 0 ? currentBasket
+             : mit.filter(function(id) { return baskets[id].ibkrFormer; })[0] || mit[0];
     location.hash = '#/charts';
     if (ziel && ziel !== currentBasket) await switchBasket(ziel);
     if (currentView !== sym) switchView(sym);

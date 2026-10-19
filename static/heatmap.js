@@ -19,7 +19,8 @@
     // Zeitraum statt am größten Wert ausgerichtet: sonst färbt ein einzelner
     // Ausreißer alle anderen Kacheln grau, und gleiche Farbe hieße an jedem Tag etwas anderes.
     // Durch 3 teilbar, damit die Legende (Drittel-Stufen) glatte Zahlen zeigt.
-    var SKALA = { d1: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45 };
+    // vk: Abstand zum letzten Verkaufskurs (Quelle „Über letztem Verkauf")
+    var SKALA = { d1: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45, vk: 50 };
 
     // Divergierende Skala: neutrales Grau in der Mitte, Grün/Rot an den Enden wie
     // überall in der App. Je Theme eigene Stufen — hell werden die Enden dunkler,
@@ -235,6 +236,8 @@ function _hmPrefsLaden() {
     // laufen die Screener-Baskets nach dem Aufräumen neu an, gilt die Wahl wieder)
     if (p.quelle.indexOf('b:') === 0 && !baskets[p.quelle.slice(2)]) p.quelle = 'alle';
     if (p.quelle === 'screener' && !_screenerBasketIds().length) p.quelle = 'alle';
+    // „Seit Verkauf" gibt es nur bei der Verkaufs-Quelle
+    if (p.zeitraum === 'vk' && p.quelle !== 'verkauft') p.zeitraum = 'd1';
     return p;
 }
 
@@ -254,6 +257,12 @@ function heatmapSetze(schluessel, wert) {
     if (!_HM.bereit) return;
     if (!_HM.prefs) _HM.prefs = _hmPrefsLaden();
     _HM.prefs[schluessel] = wert;
+    // Die Verkaufs-Quelle färbt vorgabemäßig nach dem Abstand zum Verkaufskurs;
+    // wer sie verlässt, bekommt einen Zeitraum, den es dort auch gibt.
+    if (schluessel === 'quelle') {
+        if (wert === 'verkauft') _HM.prefs.zeitraum = 'vk';
+        else if (_HM.prefs.zeitraum === 'vk') _HM.prefs.zeitraum = 'd1';
+    }
     if (!appearance) appearance = {};
     appearance.heatmap = Object.assign({}, _HM.prefs);
     if (typeof saveAppearanceSoon === 'function') saveAppearanceSoon();
@@ -295,6 +304,7 @@ function _hmBasketsMit(sym) {
 function _hmAuswahl() {
     var nachT = {};
     _HM.daten.forEach(function(e) { nachT[e.t] = e; });
+    if (_HM.prefs.quelle === 'verkauft') return _hmAuswahlVerkauft(nachT);
     // Ganze Kursdatenbank und Indizes: alles, was der Server liefert (er filtert die Indizes)
     if (_HM.prefs.quelle === 'db' || _hmIndex()) return { eintraege: _HM.daten.slice(), ohneKurse: [] };
     var syms = {};
@@ -382,6 +392,30 @@ function _hmTheme() {
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
+/**
+ * Quelle „Über letztem Verkauf": Aktien mit mindestens einem Verkauf (ganz oder
+ * teilweise), die heute darüber stehen. Rechnet mit den Kursen der Heatmap, damit
+ * Kachel und Abstand vom selben Kurs ausgehen. Die Einträge sind Kopien mit
+ * vk (Abstand in %), vkDatum, vkKurs, vkCcy und imDepot.
+ */
+function _hmAuswahlVerkauft(nachT) {
+    if (typeof ibkrExZeilen !== 'function') return { eintraege: [], ohneKurse: [] };
+    var zeilen = ibkrExZeilen(function(sym) {
+        var e = nachT[sym];
+        return e ? { close: e.price, date: e.last, currency: e.ccy } : null;
+    });
+    var eintraege = [], ohne = [];
+    zeilen.forEach(function(z) {
+        if (!nachT[z.sym]) { ohne.push(z.sym); return; }
+        if (!(z.abstand > 0)) return;
+        eintraege.push(Object.assign({}, nachT[z.sym], {
+            vk: Math.round(z.abstand * 100) / 100, vkDatum: z.datum,
+            vkKurs: z.verkauf, vkCcy: z.ccy, imDepot: z.imDepot
+        }));
+    });
+    return { eintraege: eintraege, ohneKurse: ohne.sort() };
+}
+
 function _hmToolbar() {
     var sel = document.getElementById('hm-quelle');
     if (sel) {
@@ -389,8 +423,11 @@ function _hmToolbar() {
             return (baskets[a].name || a).localeCompare(baskets[b].name || b, undefined, { sensitivity: 'base', numeric: true });
         });
         var nScr = _screenerBasketIds().length;
+        var hatVerkauf = _HM.prefs.quelle === 'verkauft'
+            || (typeof ibkrVerkaufteSymbole === 'function' && ibkrVerkaufteSymbole().length > 0);
         var html = '<option value="alle">Alle Baskets</option>'
                  + (nScr ? '<option value="screener">Alle Screener-Baskets (' + nScr + ')</option>' : '')
+                 + (hatVerkauf ? '<option value="verkauft">Über letztem Verkauf</option>' : '')
                  + '<option value="db">Ganze Kursdatenbank</option>'
                  + '<optgroup label="Index (ganzer Markt)">'
                  + HM_INDIZES.map(function(i) { return '<option value="idx:' + i.id + '">' + i.name + '</option>'; }).join('')
@@ -410,6 +447,8 @@ function _hmToolbar() {
             b.classList.toggle('active', b.getAttribute('data-v') === _HM.prefs[k]);
         });
     });
+    var vkBtn = document.querySelector('#hm-zeitraum [data-v="vk"]');
+    if (vkBtn) vkBtn.style.display = _HM.prefs.quelle === 'verkauft' ? '' : 'none';
     var rb = document.getElementById('hm-refresh');
     if (rb && !rb.disabled) {
         rb.textContent = _hmIndex() ? '↻ Kurse auffrischen' : '↻ Kurse aktualisieren';
@@ -759,10 +798,20 @@ var HM_SPALTEN = [
     { k: 'last',    l: 'Stand',    txt: true },
 ]);
 
+/** Spalten der Liste — bei der Verkaufs-Quelle mit Abstand und Verkaufstag. */
+function _hmSpalten() {
+    if (_HM.prefs.quelle !== 'verkauft') return HM_SPALTEN;
+    var i = HM_SPALTEN.findIndex(function(s) { return s.k === 'price'; }) + 1;
+    return HM_SPALTEN.slice(0, i).concat([
+        { k: 'vk',      l: 'Seit Verkauf', pct: true },
+        { k: 'vkDatum', l: 'Verkauft',     txt: true },
+    ], HM_SPALTEN.slice(i));
+}
+
 function heatmapSortiere(k) {
     var aktiv = _HM.sort || _HM.prefs.zeitraum;
     if (aktiv === k) _HM.sortAuf = !_HM.sortAuf;
-    else { _HM.sort = k; _HM.sortAuf = !!(HM_SPALTEN.filter(function(s) { return s.k === k; })[0] || {}).txt; }
+    else { _HM.sort = k; _HM.sortAuf = !!(_hmSpalten().filter(function(s) { return s.k === k; })[0] || {}).txt; }
     _hmListeZeichnen();
 }
 
@@ -780,14 +829,15 @@ function _hmListeZeichnen() {
         var r = typeof x === 'string' ? x.localeCompare(y, 'de', { numeric: true }) : x - y;
         return auf ? r : -r;
     });
-    var kopf = HM_SPALTEN.map(function(s) {
+    var spalten = _hmSpalten();
+    var kopf = spalten.map(function(s) {
         var pfeil = s.k === key ? (auf ? ' ▲' : ' ▼') : '';
         return '<th class="' + (s.txt ? 'hm-l' : '') + (s.k === _HM.prefs.zeitraum ? ' hm-akt' : '') + '"'
              + ' onclick="heatmapSortiere(\'' + s.k + '\')">' + s.l + pfeil + '</th>';
     }).join('');
     var rumpf = zeilen.map(function(e) {
         var veraltet = _hmTage(e.last, juengst) > HM_VERALTET_TAGE;
-        return '<tr data-t="' + escHtml(e.t) + '">' + HM_SPALTEN.map(function(s) {
+        return '<tr data-t="' + escHtml(e.t) + '">' + spalten.map(function(s) {
             if (s.pct) {
                 var v = e[s.k];
                 var cls = v > 0 ? 'hm-auf' : v < 0 ? 'hm-ab' : '';
@@ -798,6 +848,7 @@ function _hmListeZeichnen() {
             if (s.k === '_sek')    return '<td class="hm-l">' + escHtml(_hmSektor(e)) + '</td>';
             if (s.k === 'price')   return '<td>' + _hmKurs(e) + '</td>';
             if (s.k === 'cap_usd') return '<td>' + _hmKap(e.cap, e.ccy) + '</td>';
+            if (s.k === 'vkDatum') return '<td class="hm-l">' + _hmDatum(e.vkDatum) + '</td>';
             return '<td class="hm-l' + (veraltet ? ' hm-warn' : '') + '">' + _hmDatum(e.last) + '</td>';
         }).join('') + '</tr>';
     }).join('');
@@ -822,6 +873,10 @@ function _hmTooltip(e, veraltet, ev) {
         + '<div>Kurs <b>' + _hmKurs(e) + '</b> · ' + _hmDatum(e.last)
         + (veraltet ? ' <span class="hm-warn">⚠ veraltet</span>' : '') + '</div>'
         + '<div>Marktkap. ' + _hmKap(e.cap, e.ccy) + '</div>'
+        + (e.vkDatum ? '<div>Zuletzt verkauft ' + _hmDatum(e.vkDatum) + ' zu <b>'
+              + e.vkKurs.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              + ' ' + escHtml(e.vkCcy || '') + '</b> · seit Verkauf <span class="hm-auf">' + _hmPct(e.vk) + '</span>'
+              + (e.imDepot ? ' · Rest im Depot' : '') + '</div>' : '')
         + '<div class="hm-tip-perf">' + kopf + zahlen + '</div>'
         + (inB.length ? '<div class="hm-tip-m">In: ' + escHtml(inB.join(', ')) + '</div>' : '')
         + '<div class="hm-tip-m">Klick öffnet den Chart</div>';
