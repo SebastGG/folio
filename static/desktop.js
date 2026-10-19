@@ -6483,14 +6483,22 @@ async function _scrPoll() {
             _SCR.polling = false;
             _scrSetState('Fehler', 'err');
             _scrMsg(s.error || 'Screening fehlgeschlagen', 'err');
+            logIt(1, 'Screener', s.error || 'Screening fehlgeschlagen');
             document.getElementById('scr-btn-run').disabled = false;
             return;
         }
 
         // done
         _SCR.polling = false;
-        _scrSetState('fertig', 'ok');
-        _scrMsg('Screening abgeschlossen', 'ok');
+        // Teilweise nicht auswertbar: Ergebnis zeigen, aber laut sagen, dass es lückenhaft ist
+        if (s.warning) {
+            _scrSetState('fertig, lückenhaft', 'err');
+            _scrMsg('⚠ ' + s.warning, 'err');
+            logIt(2, 'Screener', s.warning);
+        } else {
+            _scrSetState('fertig', 'ok');
+            _scrMsg('Screening abgeschlossen', 'ok');
+        }
         _SCR.results = s.results || {};
         document.getElementById('scr-btn-run').disabled = false;
         document.getElementById('scr-btn-export').disabled = false;

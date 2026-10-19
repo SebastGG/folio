@@ -37,7 +37,8 @@ BASE_URL = "https://finviz.com/screener.ashx?v=111&f="
 INDEXES = {
     "S&P 500":      "idx_sp500",
     "NASDAQ 100":   "idx_ndx",
-    "DJIA":         "idx_djia",
+    "DJIA":         "idx_dji",     # nicht idx_djia: den Code kennt Finviz nicht und
+                                   # ignoriert ihn still → ganzer Markt statt 30 Werte
     "Russell 2000": "idx_rut",
 }
 
@@ -125,7 +126,7 @@ FILTER_LEGEND = [
     {"group": "Index", "items": [
         {"code": "idx_sp500", "desc": "S&P 500"},
         {"code": "idx_ndx",   "desc": "Nasdaq 100"},
-        {"code": "idx_djia",  "desc": "Dow Jones"},
+        {"code": "idx_dji",   "desc": "Dow Jones"},
         {"code": "idx_rut",   "desc": "Russell 2000"},
     ]},
     {"group": "Sektor (sec_…)", "items": [
@@ -265,8 +266,9 @@ def _extract_tickers(soup) -> list[str]:
 
     Seit Oktober 2026 rendert Finviz die Tabelle neu (`fv-table`, div statt td):
     das Symbol steht dort in `data-ticker` der Ticker-Zelle und in `data-row-key`
-    der Zeile. `data-boxover-ticker` gibt es nicht mehr — ohne diesen Weg fand der
-    Screener bei unveränderter Trefferzahl keinen einzigen Ticker.
+    der Zeile, in der Ticker-Ansicht (v=411) in `data-ticker` der Links im Raster
+    `screener-tickers-grid`. `data-boxover-ticker` gibt es nicht mehr — ohne diese
+    Wege fand der Screener bei unveränderter Trefferzahl keinen einzigen Ticker.
     """
     out, seen = [], set()
 
@@ -282,6 +284,13 @@ def _extract_tickers(soup) -> list[str]:
     if not out:
         for el in soup.find_all(attrs={"role": "row", "data-row-key": True}):
             _add(el.get("data-row-key"))
+
+    if not out:
+        # Ticker-Ansicht (v=411, vom Marktdaten-Sammler genutzt): ein Raster aus Links
+        raster = soup.find(attrs={"data-testid": "screener-tickers-grid"})
+        if raster:
+            for el in raster.find_all(attrs={"data-ticker": True}):
+                _add(el.get("data-ticker"))
 
     if not out:
         for td in soup.find_all(attrs={"data-boxover-ticker": True}):
@@ -314,9 +323,18 @@ def _fetch_soup(url: str) -> BeautifulSoup:
 
 
 def _total_hits(soup) -> int | None:
-    """Liest Finviz' eigene Trefferzahl („#1 / 86 Total"). None = nicht gefunden."""
-    m = re.search(r"#\d+\s*/\s*([\d,]+)\s*Total", soup.get_text(" ", strip=True))
+    """Liest Finviz' eigene Trefferzahl („#1 / 86 Total", ohne Treffer „0 Total").
+    None = nicht gefunden."""
+    m = re.search(r"(?:#\d+\s*/\s*)?\b([\d,]+)\s*Total\b", soup.get_text(" ", strip=True))
     return int(m.group(1).replace(",", "")) if m else None
+
+
+class FinvizLesefehler(Exception):
+    """Finviz hat geantwortet, aber die Seite lässt sich nicht auswerten — meist
+    hat Finviz den Seitenaufbau geändert (so im Oktober 2026), seltener ist es
+    eine Sperr- oder Captcha-Seite. Anders als „0 Treffer" ist das ein Fehler,
+    den der Benutzer sehen muss: sonst sieht ein kaputter Screener genauso aus
+    wie ein ruhiger Börsentag."""
 
 
 def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> list[str]:
@@ -336,12 +354,20 @@ def _screen_sector(index_code: str, sector_code: str, filters: list[str]) -> lis
         url = base + (f"&r={offset + 1}" if offset else "")
         try:
             soup = _fetch_soup(url)
-        except Exception:
-            break                              # Netzfehler → mit dem Bisherigen weiter
-        if total is None:
+        except Exception as e:
+            if page == 0:                      # gar nichts bekommen → Fehler, nicht „0 Treffer"
+                raise FinvizLesefehler(f"Finviz nicht erreichbar: {e}") from e
+            break                              # Netzfehler mitten im Blättern → mit dem Bisherigen weiter
+        if page == 0:
             total = _total_hits(soup)
         tickers = _extract_tickers(soup)
         if not tickers:
+            if page == 0 and total:
+                raise FinvizLesefehler(f"Finviz meldet {total} Treffer, aber kein Ticker ist lesbar "
+                                       f"— Seitenaufbau vermutlich geändert")
+            if page == 0 and total is None:
+                raise FinvizLesefehler("Finviz-Seite ohne Ergebnistabelle und ohne Trefferzahl "
+                                       "— gesperrt oder Seitenaufbau geändert")
             break
         new = [t for t in tickers if t not in seen_set]
         for t in new:
@@ -428,6 +454,7 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
         raw_scan = {name: set() for name in SECTORS}
         total = len(active_indexes) * len(SECTORS)
         counter = 0
+        lesefehler = []                        # (Index, Sektor, Meldung)
 
         for idx_name, idx_code in active_indexes:
             _log(job_id, "")
@@ -438,6 +465,9 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
                     tickers = _screen_sector(idx_code, sec_code, filters)
                     raw_scan[sec_name].update(tickers)
                     _log(job_id, f"[{counter}/{total}] {sec_name}: {len(tickers)} Ticker")
+                except FinvizLesefehler as e:
+                    lesefehler.append((idx_name, sec_name, str(e)))
+                    _log(job_id, f"[{counter}/{total}] {sec_name}: ⚠ FEHLER – {e}")
                 except Exception as e:
                     _log(job_id, f"[{counter}/{total}] {sec_name}: Fehler – {e}")
                 _set(job_id, progress=counter / total)
@@ -446,6 +476,20 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
 
         raw_total = sum(len(t) for t in raw_scan.values())
         _log(job_id, "")
+        warnung = None
+        if lesefehler:
+            grund = lesefehler[0][2]
+            if raw_total == 0:
+                # Nichts gelesen und Abrufe kaputt: ein leeres Ergebnis sähe aus wie
+                # „heute keine Treffer" — deshalb Fehler statt „fertig"
+                _log(job_id, f"✕ {len(lesefehler)} von {total} Abrufen nicht auswertbar, kein Ticker gelesen: {grund}")
+                _set(job_id, status="error",
+                     error=f"Screening fehlgeschlagen, kein Ticker gelesen — {grund}")
+                return
+            warnung = (f"{len(lesefehler)} von {total} Abrufen bei Finviz nicht auswertbar "
+                       f"({', '.join(f'{i} {s}' for i, s, _ in lesefehler[:4])}"
+                       f"{' …' if len(lesefehler) > 4 else ''}) — dort fehlen Treffer. Grund: {grund}")
+            _log(job_id, "⚠ " + warnung)
         _log(job_id, f"✓ Finviz fertig — {raw_total} Ticker (mit Duplikaten je Sektor)")
 
         # Phase 2: MarktCap-Filter
@@ -491,7 +535,7 @@ def _run_job(job_id: str, index_names: list[str], cap_min, cap_max, unit: str,
         _log(job_id, "✓ Screening komplett")
         _log(job_id, "═" * 50)
 
-        _set(job_id, status="done", results=final, blocked=blockiert, progress=1.0)
+        _set(job_id, status="done", results=final, blocked=blockiert, warning=warnung, progress=1.0)
 
     except Exception as e:
         _set(job_id, status="error", error=str(e))
@@ -510,6 +554,7 @@ def start_job(index_names: list[str], cap_min, cap_max, unit: str,
             "results":    {},
             "blocked":    [],
             "error":      None,
+            "warning":    None,
             "progress":   0.0,
             "created_at": time.time(),
         }
@@ -535,6 +580,7 @@ def get_status(job_id: str) -> dict | None:
             "results":  dict(j["results"]),
             "blocked":  list(j.get("blocked") or []),
             "error":    j["error"],
+            "warning":  j.get("warning"),
         }
 
 
