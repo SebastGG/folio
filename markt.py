@@ -19,6 +19,11 @@ jeder Kerze (regulär / Vorbörse / Nachbörse / sonst) kommt aus Yahoos `tradin
 Was in keine dieser Spannen fällt, bekommt „sonst" (3) — liefert Yahoo Nachtkerzen, landen
 sie ohne Umbau mit in der Sammlung.
 
+Daneben eine zweite, reine Tagesrunde für die Screening-Märkte (universen.py): US-Gesamtmarkt,
+STOXX Europe 600, MDAX, SDAX und S&P/TSX Composite — nur Tageskerzen, dazu Marktkapitalisierung,
+Börsengang und Sektor. Sie läuft Mo–Fr um TAGES_UM Berliner Zeit, nach US-Schluss und klar vor
+dem nächtlichen Backup. Der Screener rechnet seine Filter daraus selbst.
+
 Yahoo drosselt inoffiziell (HTTP 429). Der Sammler läuft deshalb bewusst langsam, und nach
 wiederholter Drosselung bricht er die Runde ab und versucht es eine Stunde später — die
 normalen Kurs-Updates der Benutzer laufen über dieselbe Server-IP und sollen nicht leiden.
@@ -41,13 +46,16 @@ import urllib.error
 import urllib.request
 
 import screener   # Finviz: Seiten holen, Ticker und Trefferzahl lesen
+import universen  # Mitgliederlisten der Screening-Märkte
 
 try:
     from zoneinfo import ZoneInfo
     _NY = ZoneInfo("America/New_York")
+    _BERLIN = ZoneInfo("Europe/Berlin")
 except Exception:          # ohne Zeitzonendaten: Sommerzeitregel unten von Hand
     ZoneInfo = None
     _NY = None
+    _BERLIN = None
 
 
 # ── Einstellungen ───────────────────────────────────────────────────────────────
@@ -73,6 +81,14 @@ DROSSEL_MAX   = 3              # so oft gedrosselt → Runde abbrechen
 MIN_FREI      = 2 * 1024 ** 3  # weniger freier Platz → Sammeln pausiert von selbst
 SKALA         = 10000          # Kurse als ganze Zahlen in 1/10000 — spart ein Drittel Platz
 
+# Tagesrunde der Screening-Märkte
+TAGES_UM      = (22, 30)       # Berliner Zeit: US-Schluss ist spätestens 22:00, Europa 17:30
+TAGES_LISTEN_ALTER = 20 * 3600 # Mitgliederlisten täglich (Nasdaq-Verzeichnis: IPOs)
+TAGE_FRISCH   = 6 * 3600       # so frisch geholte Tageskerzen lässt die Stundenrunde liegen
+SEKTOR_JE_NACHT = 500          # Sektor einzeln bei Yahoo nachfragen: höchstens so viele je Runde
+SEKTOR_NEU_NACH = 30 * 86400   # ohne Ergebnis frühestens nach 30 Tagen wieder fragen
+QUOTE_JE_ABRUF = 150           # Werte je Yahoo-Sammelabruf (Marktkap., Börsengang)
+
 _SYMBOL_RE = re.compile(r"^[A-Z0-9^][A-Z0-9.\-=^]{0,14}$")
 
 VERZ = None                    # {BASE}/_markt — gesetzt von start()
@@ -84,6 +100,7 @@ _schreiben = threading.Lock()  # Split-Prüfung + Schreiben eines Werts nicht ve
 _thread    = None
 _log       = collections.deque(maxlen=300)
 _runde     = {"laeuft": False}
+_tagesrunde = {"laeuft": False}
 _live      = {"laeuft": False}
 _drossel_ensure: dict = {}
 _drossel_lock = threading.Lock()
@@ -145,6 +162,19 @@ def _einrichten():
         conn.execute("""CREATE TABLE IF NOT EXISTS meta (
             k TEXT PRIMARY KEY,
             v TEXT)""")
+        # Screening-Märkte (nur Tageskerzen); getrennt von `mitglied`, damit die
+        # Stundenrunde bei ihren drei Indizes bleibt
+        conn.execute("""CREATE TABLE IF NOT EXISTS tagesmitglied (
+            liste  TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            quelle TEXT,              -- Kürzel der Quelle bzw. ISIN (Xetra)
+            sektor TEXT,              -- aus der Quelle, falls sie einen nennt
+            PRIMARY KEY (liste, ticker))""")
+        # Kürzel/ISIN der Quelle → Yahoo-Symbol, wenn Yahoo den Wert anders führt
+        conn.execute("""CREATE TABLE IF NOT EXISTS alias (
+            quelle TEXT PRIMARY KEY,
+            ticker TEXT,
+            zeit   REAL)""")
         conn.commit()
     finally:
         conn.close()
@@ -230,6 +260,39 @@ def _naechster_termin(jetzt: float) -> float:
     while d.weekday() >= 5:
         d += datetime.timedelta(days=1)
     return _ny_zu_ts(d)
+
+def _berlin(ts: float) -> datetime.datetime:
+    """Berliner Ortszeit eines Zeitstempels (naiv)."""
+    if _BERLIN:
+        return datetime.datetime.fromtimestamp(ts, _BERLIN).replace(tzinfo=None)
+    # Ersatz: Sommerzeit vom letzten Sonntag im März bis zum letzten im Oktober, je 1:00 UTC
+    u = datetime.datetime.utcfromtimestamp(ts)
+    def letzter_sonntag(monat):
+        d = datetime.datetime(u.year, monat, 31)
+        return d - datetime.timedelta(days=(d.weekday() + 1) % 7)
+    sommer = letzter_sonntag(3) + datetime.timedelta(hours=1) <= u < letzter_sonntag(10) + datetime.timedelta(hours=1)
+    return u + datetime.timedelta(hours=2 if sommer else 1)
+
+def _berlin_zu_ts(lokal: datetime.datetime) -> float:
+    if _BERLIN:
+        return lokal.replace(tzinfo=_BERLIN).timestamp()
+    for stunden in (2, 1):
+        ts = calendar.timegm((lokal - datetime.timedelta(hours=stunden)).timetuple())
+        if _berlin(ts) == lokal:
+            return ts
+    return calendar.timegm((lokal - datetime.timedelta(hours=1)).timetuple())
+
+def _tagestermin(jetzt: float, richtung: int) -> float:
+    """Letzter (richtung −1) bzw. nächster (+1) Termin der Tagesrunde: Mo–Fr um TAGES_UM Berlin."""
+    lokal = _berlin(jetzt)
+    d = lokal.replace(hour=TAGES_UM[0], minute=TAGES_UM[1], second=0, microsecond=0)
+    if richtung < 0 and d > lokal:
+        d -= datetime.timedelta(days=1)
+    if richtung > 0 and d <= lokal:
+        d += datetime.timedelta(days=1)
+    while d.weekday() >= 5:
+        d += datetime.timedelta(days=richtung)
+    return _berlin_zu_ts(d)
 
 def markt_offen(jetzt: float = None) -> bool:
     """Reguläre US-Sitzung (mit einer Stunde Nachlauf für die Schlusskurse)."""
@@ -900,8 +963,11 @@ def _runde_fahren(soll: float):
         _runde["aktuell"] = sym
         try:
             stunden_holen(sym)
-            _stop.wait(PAUSE)
-            tage_holen(sym)
+            # Die Tagesrunde (TAGES_UM Berlin) hat die Tageskerzen meist schon geholt
+            st = stand.get(sym)
+            if not (st and (st["abruf_d"] or 0) > time.time() - TAGE_FRISCH):
+                _stop.wait(PAUSE)
+                tage_holen(sym)
             mc = _db(_pfad_markt())
             try:
                 _stand_setzen(mc, sym, runde=time.time(), fehler=None, fehler_zahl=0)
@@ -947,6 +1013,390 @@ def _runde_fahren(soll: float):
         mc.close()
         _runde.update(laeuft=False, aktuell=None)
 
+# ── Tagesrunde: Screening-Märkte ────────────────────────────────────────────────
+def tageslisten_auffrischen():
+    """Mitgliederlisten der Screening-Märkte neu laden. Eine Liste wird nur ersetzt,
+    wenn sie vollständig ankam (universen.py prüft Mindestgrößen)."""
+    mc = _db(_pfad_markt())
+    try:
+        _meta_setzen(mc, "tageslisten_versuch", time.time())
+        mc.commit()
+        alias = {r["quelle"]: r["ticker"] for r in mc.execute("SELECT quelle, ticker FROM alias")}
+    finally:
+        mc.close()
+    universen.neu_laden()
+    ok = 0
+    for uid, (name, _f) in universen.UNIVERSEN.items():
+        if _stop.is_set():
+            return
+        try:
+            eintraege = universen.laden(uid)
+        except Exception as e:
+            log(1, f"Liste {name} nicht abrufbar: {e}")
+            continue
+        zeilen = {}
+        for e in eintraege:
+            sym = alias.get(e["quelle"]) or e["symbol"]
+            zeilen[sym] = (uid, sym, e["quelle"], e.get("sektor"))
+        mc = _db(_pfad_markt())
+        try:
+            alt = {r[0] for r in mc.execute("SELECT ticker FROM tagesmitglied WHERE liste=?", (uid,))}
+            mc.execute("DELETE FROM tagesmitglied WHERE liste=?", (uid,))
+            mc.executemany("INSERT INTO tagesmitglied VALUES (?,?,?,?)", list(zeilen.values()))
+            mc.commit()
+        finally:
+            mc.close()
+        rein, raus = sorted(set(zeilen) - alt), sorted(alt - set(zeilen))
+        text = f"Liste {name}: {len(zeilen)} Werte"
+        if alt and (rein or raus):
+            text += f" (neu: {', '.join(rein[:12]) or '–'}{' …' if len(rein) > 12 else ''}; " \
+                    f"raus: {', '.join(raus[:12]) or '–'}{' …' if len(raus) > 12 else ''})"
+        log(4, text)
+        ok += 1
+    if ok == len(universen.UNIVERSEN):
+        mc = _db(_pfad_markt())
+        try:
+            _meta_setzen(mc, "tageslisten_stand", time.time())
+            mc.commit()
+        finally:
+            mc.close()
+
+def tagesliste(mc=None) -> list:
+    """Alle Werte der Screening-Märkte (ohne Doppelte)."""
+    eigene = mc is None
+    mc = mc or _db(_pfad_markt())
+    try:
+        return sorted({r[0] for r in mc.execute("SELECT DISTINCT ticker FROM tagesmitglied")})
+    finally:
+        if eigene:
+            mc.close()
+
+_ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}\d$")
+
+def _alias_suchen(sym: str) -> str | None:
+    """Yahoo kennt `sym` nicht: über die ISIN der Quelle das Yahoo-Symbol suchen,
+    merken und die Mitgliedschaft umschreiben. Nur für Quellen mit ISIN (Xetra)."""
+    mc = _db(_pfad_markt())
+    try:
+        r = mc.execute("SELECT quelle FROM tagesmitglied WHERE ticker=? LIMIT 1", (sym,)).fetchone()
+        isin = r["quelle"] if r else None
+        if not isin or not _ISIN_RE.match(isin):
+            return None
+        a = mc.execute("SELECT ticker, zeit FROM alias WHERE quelle=?", (isin,)).fetchone()
+        if a and time.time() - (a["zeit"] or 0) < 7 * 86400:
+            return None                       # erst kürzlich gesucht
+    finally:
+        mc.close()
+    url = ("https://query2.finance.yahoo.com/v1/finance/search?q=" + urllib.parse.quote(isin) +
+           "&quotesCount=6&newsCount=0")
+    try:
+        treffer = [q.get("symbol") for q in (_hole_json(url, timeout=15).get("quotes") or [])
+                   if q.get("symbol") and q.get("quoteType") == "EQUITY"]
+    except Gedrosselt:
+        raise
+    except Exception as e:
+        log(2, f"{sym}: ISIN-Suche fehlgeschlagen ({e})")
+        treffer = []
+    # Nur an derselben Börse: eine Regionalbörse (TUIA.HA statt Xetra) hätte ein
+    # Bruchteil des Volumens und verfälschte die Filter. Kennt Yahoo die Notierung
+    # noch nicht, wird es in einer Woche erneut versucht.
+    endung = sym[sym.rfind("."):] if "." in sym else ""
+    neu = next((t for t in treffer if endung and t.endswith(endung)), None)
+    mc = _db(_pfad_markt())
+    try:
+        mc.execute("INSERT OR REPLACE INTO alias VALUES (?,?,?)", (isin, neu or sym, time.time()))
+        if not neu:
+            log(2, f"{sym}: Yahoo kennt die Notierung noch nicht (ISIN {isin}, gefunden: "
+                   f"{', '.join(treffer[:4]) or 'nichts'}) — neuer Versuch in einer Woche")
+        if neu and neu != sym:
+            mc.execute("UPDATE OR REPLACE tagesmitglied SET ticker=? WHERE ticker=?", (neu, sym))
+        mc.commit()
+    finally:
+        mc.close()
+    if neu and neu != sym:
+        log(4, f"{sym} heißt bei Yahoo {neu} (über ISIN {isin})")
+        return neu
+    return None
+
+# Yahoo-Sitzung (Cookie + Crumb) für Sammelabrufe; hält eine Stunde.
+# Über curl_cffi mit Chrome-Fingerabdruck: mit urllib verweigert Yahoo den Crumb
+# immer wieder mit 401 (es prüft den TLS-Handshake) — dasselbe Mittel nutzt yfinance.
+_yahoo = {"sitzung": None, "crumb": None, "zeit": 0}
+
+def _yahoo_sitzung():
+    from curl_cffi import requests as cr
+    if _yahoo["sitzung"] and time.time() - _yahoo["zeit"] < 3600:
+        return _yahoo["sitzung"], _yahoo["crumb"]
+    s = cr.Session(impersonate="chrome")
+    try:
+        s.get("https://fc.yahoo.com", timeout=15)          # setzt das Cookie (antwortet 404)
+    except Exception:
+        pass
+    r = s.get("https://query1.finance.yahoo.com/v1/test/getcrumb", timeout=15)
+    crumb = (r.text or "").strip()
+    if r.status_code != 200 or not crumb or "<" in crumb:
+        raise RuntimeError(f"Yahoo-Crumb nicht erhältlich (HTTP {r.status_code})")
+    _yahoo.update(sitzung=s, crumb=crumb, zeit=time.time())
+    return s, crumb
+
+def _yahoo_get(pfad: str, params: dict = None) -> dict:
+    s, crumb = _yahoo_sitzung()
+    r = s.get("https://query1.finance.yahoo.com" + pfad, params={**(params or {}), "crumb": crumb}, timeout=25)
+    if r.status_code in (429, 999, 503):
+        raise Gedrosselt(f"HTTP {r.status_code}")
+    if r.status_code == 401:
+        _yahoo["sitzung"] = None                           # Crumb verfallen → beim nächsten Mal neu
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}")
+    return r.json()
+
+def _info_lesen(mc, sym) -> dict:
+    r = mc.execute("SELECT data FROM ticker_info WHERE symbol=?", (sym,)).fetchone()
+    try:
+        return json.loads(r["data"]) if r and r["data"] else {}
+    except ValueError:
+        return {}
+
+def tages_stammdaten(syms: list) -> int:
+    """Marktkapitalisierung, Währung, Name und ersten Handelstag per Sammelabruf
+    (QUOTE_JE_ABRUF Werte je Anfrage) in ticker_info nachtragen. Vorhandenes
+    (Finviz-Sektor, Branche) bleibt stehen. Rückgabe: Zahl der aktualisierten Werte."""
+    sektor_quelle = {}
+    mc = _db(_pfad_markt())
+    try:
+        for r in mc.execute("SELECT ticker, sektor FROM tagesmitglied WHERE sektor IS NOT NULL"):
+            sektor_quelle[r["ticker"]] = r["sektor"]
+    finally:
+        mc.close()
+    n = 0
+    for i in range(0, len(syms), QUOTE_JE_ABRUF):
+        if _stop.is_set():
+            break
+        teil = syms[i:i + QUOTE_JE_ABRUF]
+        try:
+            d = _yahoo_get("/v7/finance/quote", {"symbols": ",".join(teil)})
+        except Gedrosselt:
+            raise
+        except Exception as e:
+            log(2, f"Stammdaten-Sammelabruf ab {teil[0]}: {e}")
+            continue
+        jetzt = time.time()
+        with _schreiben:
+            mc = _db(_pfad_markt())
+            try:
+                for q in ((d.get("quoteResponse") or {}).get("result") or []):
+                    sym = q.get("symbol")
+                    if not sym:
+                        continue
+                    info = _info_lesen(mc, sym)
+                    info["symbol"] = sym
+                    info["name"] = info.get("name") or q.get("longName") or q.get("shortName") or sym
+                    if q.get("marketCap"):
+                        info["market_cap"] = q["marketCap"]
+                        info["market_cap_stand"] = time.strftime("%Y-%m-%d", time.gmtime(jetzt))
+                    info["currency"] = q.get("currency") or info.get("currency")
+                    info["quote_type"] = q.get("quoteType") or info.get("quote_type")
+                    info["exchange"] = q.get("fullExchangeName") or info.get("exchange")
+                    if q.get("firstTradeDateMilliseconds"):
+                        info["erster_handel"] = time.strftime(
+                            "%Y-%m-%d", time.gmtime(q["firstTradeDateMilliseconds"] / 1000))
+                    if not info.get("sector") and sektor_quelle.get(sym):
+                        info["sector"] = sektor_quelle[sym]
+                    info.setdefault("quelle", "yahoo")
+                    mc.execute("INSERT OR REPLACE INTO ticker_info VALUES (?,?,?)", (sym, json.dumps(info), jetzt))
+                    n += 1
+                mc.commit()
+            finally:
+                mc.close()
+        _stop.wait(1.0)
+    return n
+
+def tages_sektoren(syms: list) -> int:
+    """Sektor und Branche einzeln bei Yahoo (quoteSummary) für Werte ohne Sektor —
+    höchstens SEKTOR_JE_NACHT je Runde; erfolglose erst nach SEKTOR_NEU_NACH wieder."""
+    mc = _db(_pfad_markt())
+    try:
+        offen = []
+        for sym in syms:
+            info = _info_lesen(mc, sym)
+            if info.get("sector") or info.get("quote_type") not in (None, "EQUITY"):
+                continue
+            if time.time() - (info.get("sektor_versucht") or 0) < SEKTOR_NEU_NACH:
+                continue
+            offen.append(sym)
+    finally:
+        mc.close()
+    n = 0
+    for sym in offen[:SEKTOR_JE_NACHT]:
+        if _stop.is_set():
+            break
+        try:
+            d = _yahoo_get(f"/v10/finance/quoteSummary/{urllib.parse.quote(sym)}", {"modules": "assetProfile"})
+            prof = (((d.get("quoteSummary") or {}).get("result") or [{}])[0] or {}).get("assetProfile") or {}
+        except Gedrosselt:
+            raise
+        except Exception as e:
+            # Kein „versucht" vermerken: ein Netz- oder Crumb-Fehler sagt nichts über den Wert
+            log(7, f"{sym}: Sektor nicht abrufbar ({e})")
+            _stop.wait(PAUSE)
+            continue
+        with _schreiben:
+            mc = _db(_pfad_markt())
+            try:
+                info = _info_lesen(mc, sym)
+                info.update(symbol=sym, sektor_versucht=time.time())
+                if prof.get("sector"):
+                    info["sector"], info["industry"] = prof["sector"], prof.get("industry")
+                    info["country"] = info.get("country") or prof.get("country")
+                    n += 1
+                mc.execute("INSERT OR REPLACE INTO ticker_info VALUES (?,?,?)", (sym, json.dumps(info), time.time()))
+                mc.commit()
+            finally:
+                mc.close()
+        _stop.wait(PAUSE)
+    if offen:
+        log(4, f"Sektoren: {n} von {min(len(offen), SEKTOR_JE_NACHT)} nachgetragen"
+               + (f", {len(offen) - SEKTOR_JE_NACHT} folgen in den nächsten Runden" if len(offen) > SEKTOR_JE_NACHT else ""))
+    return n
+
+def _tagesrunde_faellig(mc, jetzt: float):
+    if jetzt - _meta_zahl(mc, "tagesrunde_abbruch") < 3600:
+        return None
+    soll = max(_tagestermin(jetzt, -1), _meta_zahl(mc, "tagesrunde_soll"))
+    return soll if _meta_zahl(mc, "tagesrunde_ende") < soll else None
+
+def _tagesrunde_fahren(soll: float):
+    mc = _db(_pfad_markt())
+    try:
+        syms = tagesliste(mc)
+        stand = {r["ticker"]: r for r in mc.execute("SELECT * FROM sammelstand")}
+        _meta_setzen(mc, "tagesrunde_start", time.time())
+        mc.commit()
+    finally:
+        mc.close()
+    jetzt = time.time()
+    def rang(s):                               # nie Geholtes zuerst, dann die ältesten
+        st = stand.get(s)
+        return (1 if st and st["abruf_d"] else 0, (st["abruf_d"] or 0) if st else 0)
+    offen = [s for s in sorted(syms, key=rang)
+             if not (stand.get(s) and (stand[s]["abruf_d"] or 0) >= soll)
+             and not (stand.get(s) and (stand[s]["fehler_zahl"] or 0) >= 5
+                      and jetzt - (stand[s]["fehler_zeit"] or 0) < 7 * 86400)]
+    neu = sum(1 for s in offen if not (stand.get(s) and stand[s]["abruf_d"]))
+    _tagesrunde.update(laeuft=True, start=time.time(), gesamt=len(offen), fertig=0, fehler=0,
+                       gedrosselt=0, neu=neu, aktuell=None, phase="Tageskerzen")
+    log(4, f"Tagesrunde: {len(offen)} Werte" + (f", davon {neu} neu (je {TAGE_START} Tage)" if neu else ""))
+    abbruch = None
+    for sym in offen:
+        if _stop.is_set():
+            abbruch = "App wird beendet"
+            break
+        if _pausiert():
+            abbruch = "pausiert"
+            break
+        if _platz_frei() < MIN_FREI:
+            abbruch = f"weniger als {MIN_FREI // 1024 ** 3} GB frei"
+            break
+        _tagesrunde["aktuell"] = sym
+        try:
+            try:
+                tage_holen(sym)
+            except RuntimeError as e:
+                neu_sym = _alias_suchen(sym) if "404" in str(e) else None
+                if not neu_sym:
+                    raise
+                _stop.wait(PAUSE)
+                tage_holen(neu_sym)
+                sym = neu_sym
+            mc = _db(_pfad_markt())
+            try:
+                _stand_setzen(mc, sym, fehler=None, fehler_zahl=0)
+                mc.commit()
+            finally:
+                mc.close()
+        except Gedrosselt as e:
+            _tagesrunde["gedrosselt"] += 1
+            log(2, f"Yahoo drosselt ({e}) bei {sym} — Pause 5 min")
+            if _tagesrunde["gedrosselt"] >= DROSSEL_MAX:
+                abbruch = "Yahoo drosselt wiederholt, neuer Versuch in einer Stunde"
+                break
+            _stop.wait(300)
+        except Exception as e:
+            _tagesrunde["fehler"] += 1
+            log(7, f"{sym}: {e}")
+            mc = _db(_pfad_markt())
+            try:
+                st = _stand(mc, sym)
+                _stand_setzen(mc, sym, fehler=str(e)[:300], fehler_zeit=time.time(),
+                              fehler_zahl=((st["fehler_zahl"] or 0) if st else 0) + 1)
+                mc.commit()
+            finally:
+                mc.close()
+        _tagesrunde["fertig"] += 1
+        _stop.wait(PAUSE)
+    stamm = sek = 0
+    if not abbruch:
+        try:
+            _tagesrunde.update(phase="Stammdaten", aktuell=None)
+            stamm = tages_stammdaten(tagesliste())
+            _tagesrunde["phase"] = "Sektoren"
+            sek = tages_sektoren(tagesliste())
+        except Gedrosselt as e:
+            log(2, f"Stammdaten: Yahoo drosselt ({e}) — beim nächsten Mal weiter")
+        except Exception as e:
+            log(1, f"Stammdaten: {e}")
+    dauer = time.time() - _tagesrunde["start"]
+    mc = _db(_pfad_markt())
+    try:
+        if abbruch:
+            _meta_setzen(mc, "tagesrunde_abbruch", time.time())
+            log(2 if abbruch == "pausiert" else 1,
+                f"Tagesrunde abgebrochen nach {_tagesrunde['fertig']} von {_tagesrunde['gesamt']}: {abbruch}")
+        else:
+            _meta_setzen(mc, "tagesrunde_ende", time.time())
+            _meta_setzen(mc, "tagesrunde_bericht", json.dumps({
+                "ende": time.time(), "dauer": round(dauer), "werte": _tagesrunde["gesamt"],
+                "fehler": _tagesrunde["fehler"], "gedrosselt": _tagesrunde["gedrosselt"],
+                "stammdaten": stamm, "sektoren": sek}))
+            log(4, f"Tagesrunde fertig: {_tagesrunde['gesamt']} Werte in {round(dauer / 60)} min, "
+                   f"{_tagesrunde['fehler']} Fehler, Stammdaten {stamm}, Sektoren {sek}")
+        mc.commit()
+    finally:
+        mc.close()
+        _tagesrunde.update(laeuft=False, aktuell=None, phase=None)
+
+def _arbeit_tages():
+    mc = _db(_pfad_markt())
+    try:
+        if _pausiert(mc):
+            return
+        jetzt = time.time()
+        listen_faellig = (jetzt - _meta_zahl(mc, "tageslisten_stand") > TAGES_LISTEN_ALTER
+                          and jetzt - _meta_zahl(mc, "tageslisten_versuch") > 3600)
+    finally:
+        mc.close()
+    if listen_faellig:
+        tageslisten_auffrischen()
+    mc = _db(_pfad_markt())
+    try:
+        leer = not mc.execute("SELECT 1 FROM tagesmitglied LIMIT 1").fetchone()
+        soll = None if leer else _tagesrunde_faellig(mc, time.time())
+    finally:
+        mc.close()
+    if soll:
+        _tagesrunde_fahren(soll)
+
+def tagesrunde_jetzt():
+    """Tagesrunde außer der Reihe anstoßen (Protokoll-Seite)."""
+    mc = _db(_pfad_markt())
+    try:
+        _meta_setzen(mc, "tagesrunde_soll", time.time())
+        _meta_setzen(mc, "tagesrunde_abbruch", 0)
+        mc.commit()
+    finally:
+        mc.close()
+    _wecker.set()
+
 def _arbeit():
     mc = _db(_pfad_markt())
     try:
@@ -977,6 +1427,10 @@ def _schleife():
             _arbeit()
         except Exception as e:
             log(1, f"Sammler: {e}")
+        try:
+            _arbeit_tages()
+        except Exception as e:
+            log(1, f"Tagesrunde: {e}")
         _wecker.wait(60)
         _wecker.clear()
 
@@ -1159,6 +1613,13 @@ def status() -> dict:
             bericht = json.loads(_meta(mc, "runde_bericht") or "null")
         except ValueError:
             bericht = None
+        try:
+            tagesbericht = json.loads(_meta(mc, "tagesrunde_bericht") or "null")
+        except ValueError:
+            tagesbericht = None
+        tageszahl = {uid: 0 for uid in universen.UNIVERSEN}
+        for r in mc.execute("SELECT liste, COUNT(*) n FROM tagesmitglied GROUP BY liste"):
+            tageszahl[r["liste"]] = r["n"]
         jetzt = time.time()
         out = {
             "ok":          True,
@@ -1175,6 +1636,16 @@ def status() -> dict:
             "bericht":     bericht,
             "abbruch":     _meta_zahl(mc, "runde_abbruch") or None,
             "naechste":    _naechster_termin(jetzt),
+            "tages": {
+                "listen":   [{"id": uid, "name": universen.UNIVERSEN[uid][0], "anzahl": tageszahl[uid]}
+                             for uid in universen.UNIVERSEN],
+                "listen_stand": _meta_zahl(mc, "tageslisten_stand") or None,
+                "gesamt":   len(tagesliste(mc)),
+                "runde":    dict(_tagesrunde),
+                "bericht":  tagesbericht,
+                "abbruch":  _meta_zahl(mc, "tagesrunde_abbruch") or None,
+                "naechste": _tagestermin(jetzt, +1),
+            },
             "live":        {"stand": _meta_zahl(mc, "live_stand") or None, "laeuft": _live["laeuft"]},
             "speicher":    _groesse(),
             "frei":        _platz_frei(),

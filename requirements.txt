@@ -9,6 +9,7 @@ itsdangerous
 httpx
 fpdf2
 yfinance
+curl_cffi
 beautifulsoup4
 lxml
 pypdf
