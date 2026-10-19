@@ -287,7 +287,8 @@
           O <span id="ov" class="stat-val">-</span>
           H <span id="oh" class="stat-val">-</span>
           L <span id="ol" class="stat-val">-</span>
-          C <span id="oc" class="stat-val">-</span><br>
+          C <span id="oc" class="stat-val">-</span>
+          <span id="ochg" class="stat-val" title="Veränderung zum Schluss der vorigen Kerze"></span><br>
           Vol <span id="ovol" class="stat-val">-</span>
           Vol∅ <span id="ovola" class="stat-val">-</span>
         </div>
@@ -515,6 +516,22 @@
             <tbody id="ibkrBody"></tbody>
             <tfoot id="ibkrFoot"></tfoot>
           </table>
+          <div style="margin-top:12px;border-top:2px solid var(--border);padding-top:6px;">
+            <div style="display:flex;align-items:center;gap:10px;padding:4px 6px;">
+              <span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);">Ehemalige über Verkaufskurs</span>
+              <span id="ibkrExStand" style="font-size:9px;color:var(--muted);"></span>
+              <label style="font-size:9px;color:var(--muted);margin-left:auto;cursor:pointer;" title="Auch die ehemaligen Positionen zeigen, die noch unter dem letzten Verkaufskurs stehen">
+                <input type="checkbox" id="ibkrExAlle" onchange="ibkrExRender()"> alle Ehemaligen
+              </label>
+              <button onclick="ibkrExLaden(true)" class="refresh-btn" style="font-size:9px;padding:2px 8px;" title="Kurse der ehemaligen Positionen neu holen">↻</button>
+            </div>
+            <table class="perf-table">
+              <thead><tr>
+                <th>Ticker</th><th>Verkauft</th><th style="text-align:right">Verkaufskurs</th><th style="text-align:right">Aktuell</th><th style="text-align:right">Abstand</th><th>Kurs vom</th>
+              </tr></thead>
+              <tbody id="ibkrExBody"></tbody>
+            </table>
+          </div>
           <div style="margin-top:12px;border-top:2px solid var(--border);padding-top:6px;">
             <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:4px 6px;">Trades</div>
             <table class="perf-table">
@@ -1279,6 +1296,9 @@
         <p class="help-tip">
           Oben links im Chart stehen beim Fahren mit der Maus <b>OHLC</b>, Volumen und das
           Durchschnittsvolumen der jeweiligen Kerze — bei Stundenkerzen mit Uhrzeit und Sitzung.
+          Hinter dem Schlusskurs steht, wie viel die Kerze <b>gegenüber dem Schluss der vorigen</b>
+          gemacht hat, absolut und in Prozent; auf der jüngsten Kerze ist das die laufende
+          Veränderung.
         </p>
         <p class="help-tip">
           Zeichnungen gelten für alle Kerzengrößen. Eine im <b>1h</b>-Chart gezogene Linie behält ihre
@@ -1484,6 +1504,12 @@
           <dt>+ Ehemalige</dt>
           <dd>Watchlist aller je gehandelten Aktien, die nicht mehr im Depot liegen — aktualisiert
               sich bei jedem Sync.</dd>
+          <dt>Ehemalige über Verkaufskurs</dt>
+          <dd>Abschnitt unter den Positionen: verkaufte Aktien, die nicht mehr im Depot liegen und
+              heute <b>über dem letzten Verkaufskurs</b> stehen, nach Abstand sortiert. Der
+              Verkaufskurs ist split-bereinigt. <b>alle Ehemaligen</b> zeigt auch die darunter;
+              ein Klick auf eine Zeile öffnet den Chart. Die Kurse werden beim Öffnen der Seite
+              geholt (höchstens alle 15 Minuten, <b>↻</b> erzwingt es).</dd>
         </dl>
         <p class="help-tip">
           Der Hinweisstreifen über der Positionstabelle meldet Positionen, die in keinem Basket
@@ -1639,6 +1665,10 @@
               Sperrzeit läuft. Willst du wirklich bei null anfangen, nimm
               <b>Screener-Baskets löschen</b>.</li>
         </ol>
+        <p>
+          Was ein Lauf neu in einen Basket einträgt, trägt in der Kursliste <b>am selben Tag</b> die
+          Marke <span class="wl-neu">neu</span>. Ab Mitternacht verschwindet sie.
+        </p>
         <p>
           Aussortierte Ticker landen auf der <b>Blacklist</b> und kommen beim nächsten Screening nicht
           wieder, solange die Sperrzeit läuft (Vorgabe 6 Monate, einstellbar). Über das <b>×</b> in der

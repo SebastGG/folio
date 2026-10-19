@@ -440,6 +440,23 @@ function initChart() {
 
         // Tatsächliches Volumen aus _lastCandles (nicht normalisierter volSeries-Wert)
         var idx = _lastCandles.findIndex(function(c) { return c.time === param.time; });
+
+        // Plus/Minus der Kerze: gegen den Schluss der vorigen Kerze (wie die
+        // Tagesveränderung), bei der ersten sichtbaren gegen ihren eigenen Open.
+        // Auf der jüngsten Kerze ist das die laufende Veränderung.
+        var chgEl = document.getElementById('ochg');
+        if (chgEl) {
+            var basis = idx > 0 ? _lastCandles[idx - 1].close : bar.open;
+            if (basis > 0 && bar.close != null) {
+                var d  = bar.close - basis, pc = d / basis * 100;
+                var vz = d > 0 ? '+' : d < 0 ? '−' : '±';
+                // Punkt statt Komma wie OHLC und Kursliste daneben
+                chgEl.textContent = vz + Math.abs(d).toFixed(2) + ' (' + vz + Math.abs(pc).toFixed(2) + '%)';
+                chgEl.style.color = d > 0 ? 'var(--green)' : d < 0 ? 'var(--red)' : '';
+            } else {
+                chgEl.textContent = '';
+            }
+        }
         var actualVol = idx >= 0 ? (_lastCandles[idx].volume || 0) : 0;
         setEl('ovol', fmtVol(actualVol));
 
@@ -1245,6 +1262,10 @@ function renderWatchlist() {
     var ibkrVals = ibkrWatchlistValues();
     // × zum Entfernen — nicht in IBKR-Baskets, die baut der Sync ohnehin neu.
     var entfernbar = !basketIstVerwaltet(baskets[currentBasket]);
+    // Vom Screener heute ergänzte Ticker — „neu" gilt nur am ersten Tag
+    var heute = heuteLokal(), neuHeute = {};
+    var neuSeit = (baskets[currentBasket] || {}).neuSeit || {};
+    Object.keys(neuSeit).forEach(function(t) { if (neuSeit[t] === heute) neuHeute[t] = true; });
 
     // Ticker (alphabetisch) — dieselbe Reihenfolge nehmen die Pfeiltasten
     watchlistTicker().forEach(function(sym) {
@@ -1273,7 +1294,9 @@ function renderWatchlist() {
         }
 
         div.innerHTML = '<div class="wl-left">'
-            + '<div class="wl-sym">' + logoHtml + sym + '</div>'
+            + '<div class="wl-sym">' + logoHtml + sym
+            + (neuHeute[sym] ? '<span class="wl-neu" title="Heute vom Screener hinzugekommen">neu</span>' : '')
+            + '</div>'
             + metaHtml
             + '</div>'
             + '<div class="wl-right">'
@@ -3092,16 +3115,23 @@ updateClock();
         }).catch(function() { /* Konten sind kein Startblocker */ });
 
         ibkrLoadIsinMap().then(function() {
-            ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
+            var posGeladen = ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
                 ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
                 ibkrLoadSectors().then(function() { ibkrRenderTable(); });
             });
             // Trades treffen erst NACH loadData() ein — Stammdaten-Fenster und
             // Chart-Marker deshalb hier noch einmal nachziehen.
-            ibkrLoadTrades().then(function() {
+            var tradesGeladen = ibkrLoadTrades().then(function() {
                 ibkrRenderTrades();
                 refreshTradeMarkers();
                 updateChartMeta();
+            });
+            // Ehemalige brauchen Bestand UND Trades — ohne Bestand zählte jede
+            // je gehandelte Aktie als verkauft. Geladen wird erst beim Öffnen der
+            // IBKR-Seite, es sei denn, sie ist schon offen.
+            Promise.all([posGeladen, tradesGeladen]).then(function() {
+                _ibkrEx.bereit = true;
+                if (/^#\/?ibkr$/.test(location.hash)) ibkrExLaden();
             });
         });
         // Chart-Schalter aus der Config: VRVP braucht den fertig geladenen Chart,
@@ -3734,6 +3764,8 @@ async function ibkrSync() {
                 updateChartMeta();   // Trade-Fenster unter dem Chart nachziehen
             }
             ibkrLoadSectors().then(function() { ibkrRenderTable(); });
+            _ibkrEx.bereit = true;
+            ibkrExLaden(true);   // Verkäufe können sich geändert haben
         } else {
             alert('IBKR Sync Fehler: ' + (result.error || 'Unbekannter Fehler'));
         }
@@ -4138,6 +4170,119 @@ function ibkrRenderTrades() {
             + '</tr>';
     });
     tbody.innerHTML = html;
+}
+
+// ── Ehemalige über Verkaufskurs ──────────────────────────────────────────────
+// Aktien, die verkauft und nicht mehr im Depot sind, deren Kurs heute über dem
+// letzten Verkaufskurs steht. Verkaufskurs split-bereinigt (ibkrStockTrades),
+// damit er auf derselben Skala liegt wie die Kurse aus der Datenbank.
+
+var _ibkrEx = { kurse: {}, geladen: 0, laeuft: false, bereit: false };   // bereit: Bestand + Trades geladen
+
+// Kleinwährungen bei Yahoo (Pence usw.) — IBKR rechnet in der Hauptwährung.
+var _EX_KLEIN = { GBp: 'GBP', GBX: 'GBP', ZAc: 'ZAR', ILA: 'ILS' };
+
+/** Kurse holen; ohne `erzwingen` höchstens alle 15 Minuten. */
+async function ibkrExLaden(erzwingen) {
+    if (_ibkrEx.laeuft || !_ibkrEx.bereit) return;
+    if (!erzwingen && Date.now() - _ibkrEx.geladen < 15 * 60 * 1000) { ibkrExRender(); return; }
+    var syms = Object.keys(ibkrFormerWeights());
+    if (!syms.length) { ibkrExRender(); return; }
+    _ibkrEx.laeuft = true;
+    var stand = document.getElementById('ibkrExStand');
+    if (stand) stand.textContent = 'Kurse werden geholt …';
+    try {
+        var r = await fetch('/api/prices/last', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tickers: syms, refresh: true })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        _ibkrEx.kurse   = await r.json() || {};
+        _ibkrEx.geladen = Date.now();
+        await loadSplits();   // nachgeladene Ticker bringen ggf. erst jetzt ihre Splits mit
+    } catch (e) {
+        logIt(2, 'IBKR', 'Kurse der Ehemaligen fehlgeschlagen: ' + e.message);
+    } finally {
+        _ibkrEx.laeuft = false;
+    }
+    ibkrExRender();
+}
+
+/** Je ehemaliger Aktie: letzter Verkauf, aktueller Kurs, Abstand in %. */
+function ibkrExZeilen() {
+    var zeilen = [];
+    Object.keys(ibkrFormerWeights()).forEach(function(sym) {
+        var verk = ibkrStockTrades(sym).filter(function(t) {
+            return (t.action || '').toUpperCase().indexOf('SELL') >= 0;
+        });
+        if (!verk.length) return;
+        var v = verk[verk.length - 1];
+        var k = _ibkrEx.kurse[sym] || _ibkrEx.kurse[sym.toUpperCase()];
+        var z = { sym: sym, datum: (v.trade_date || '').slice(0, 10), verkauf: v.adj_price,
+                  ccy: v.currency || '', kurs: null, kursDatum: '', abstand: null, hinweis: '' };
+        if (k && k.close > 0 && z.verkauf > 0) {
+            var yc = k.currency || z.ccy, faktor = 1;
+            if (_EX_KLEIN[yc] && _EX_KLEIN[yc] === z.ccy) faktor = 100;
+            else if (yc && z.ccy && yc !== z.ccy) z.hinweis = 'Kurs in ' + yc + ', verkauft in ' + z.ccy;
+            z.kurs      = k.close / faktor;
+            z.kursDatum = k.date || '';
+            if (!z.hinweis) z.abstand = (z.kurs / z.verkauf - 1) * 100;
+        } else if (!k) {
+            z.hinweis = 'kein Kurs';
+        }
+        zeilen.push(z);
+    });
+    zeilen.sort(function(a, b) {
+        return (b.abstand == null ? -1e9 : b.abstand) - (a.abstand == null ? -1e9 : a.abstand);
+    });
+    return zeilen;
+}
+
+function ibkrExRender() {
+    var tbody = document.getElementById('ibkrExBody');
+    if (!tbody) return;
+    var alle   = (document.getElementById('ibkrExAlle') || {}).checked;
+    var zeilen = ibkrExZeilen();
+    var drueber = zeilen.filter(function(z) { return z.abstand != null && z.abstand > 0; });
+    var stand = document.getElementById('ibkrExStand');
+    if (stand && !_ibkrEx.laeuft) {
+        stand.textContent = zeilen.length
+            ? drueber.length + ' von ' + zeilen.length + ' über dem letzten Verkaufskurs'
+            : '';
+    }
+    var zeigen = alle ? zeilen : drueber;
+    if (!zeigen.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="padding:10px;color:var(--muted);text-align:center;">'
+            + (!zeilen.length ? 'Keine verkauften Aktien in den IBKR-Trades'
+               : !_ibkrEx.geladen ? 'Kurse noch nicht geladen'
+               : 'Keine ehemalige Position steht über ihrem letzten Verkaufskurs')
+            + '</td></tr>';
+        return;
+    }
+    var f2 = function(n) { return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    tbody.innerHTML = zeigen.map(function(z) {
+        var farbe = z.abstand == null ? 'var(--muted)' : z.abstand > 0 ? '#2d8a4e' : '#c0392b';
+        var abst  = z.abstand == null ? escHtml(z.hinweis || '-')
+                  : (z.abstand > 0 ? '+' : '') + f2(z.abstand) + ' %';
+        return '<tr style="cursor:pointer" title="Chart öffnen" onclick="ibkrExOeffnen(\'' + escHtml(z.sym) + '\')">'
+            + '<td style="font-weight:500">' + escHtml(z.sym) + '</td>'
+            + '<td style="color:var(--muted)">' + z.datum + '</td>'
+            + '<td style="text-align:right">' + f2(z.verkauf) + ' ' + escHtml(z.ccy) + '</td>'
+            + '<td style="text-align:right">' + (z.kurs != null ? f2(z.kurs) + ' ' + escHtml(z.ccy) : '-') + '</td>'
+            + '<td style="text-align:right;font-weight:600;color:' + farbe + '">' + abst + '</td>'
+            + '<td style="color:var(--muted)">' + escHtml(z.kursDatum) + '</td>'
+            + '</tr>';
+    }).join('');
+}
+
+/** Chart öffnen — im Ehemalige-Basket, wenn es einen gibt, sonst im aktiven. */
+async function ibkrExOeffnen(sym) {
+    var ziel = Object.keys(baskets).find(function(id) {
+        return baskets[id] && baskets[id].ibkrFormer && (baskets[id].weights || {})[sym] != null;
+    });
+    location.hash = '#/charts';
+    if (ziel && ziel !== currentBasket) await switchBasket(ziel);
+    if (currentView !== sym) switchView(sym);
 }
 
 function toggleTradeMarkers(btn) {
@@ -6306,6 +6451,7 @@ async function screenerToBaskets() {
         if (baskets[id] && baskets[id].name) byName[baskets[id].name] = id;
     });
     var alteDatierte = _screenerDatierteBaskets();
+    var heute = heuteLokal();
 
     var created = 0, updated = 0, migriert = 0, firstId = null, aktivBetroffen = false;
     var ergaenzt = 0, behalten = 0;   // nachgetragene / aus früheren Läufen gebliebene Ticker
@@ -6337,11 +6483,13 @@ async function screenerToBaskets() {
             // Gewicht 0 nicht überschrieben wird.
             var vorher   = baskets[existingId].weights || {};
             var zusammen = Object.assign({}, vorher);
+            var neuSeit  = _screenerNeuAufraeumen(baskets[existingId]);
             Object.keys(weights).forEach(function (t) {
-                if (zusammen[t] == null) { zusammen[t] = weights[t]; ergaenzt++; }
+                if (zusammen[t] == null) { zusammen[t] = weights[t]; neuSeit[t] = heute; ergaenzt++; }
             });
             Object.keys(vorher).forEach(function (t) { if (weights[t] == null) behalten++; });
             baskets[existingId].weights = zusammen;
+            baskets[existingId].neuSeit = neuSeit;
             updated++;
             if (existingId === currentBasket) aktivBetroffen = true;
             if (!firstId) firstId = existingId;
@@ -6355,7 +6503,9 @@ async function screenerToBaskets() {
                 indicators: { ma50: false, ma200: false, reg: false },
                 logScale: false,
                 showIndex: false,   // Screener-Baskets standardmäßig nicht als Index anzeigen
+                neuSeit: {},
             };
+            tickers.forEach(function (t) { baskets[id].neuSeit[t] = heute; });
             created++;
             if (!firstId) firstId = id;
         }
@@ -6386,6 +6536,26 @@ async function screenerToBaskets() {
     } catch (e) {
         _scrMsg('Speichern fehlgeschlagen: ' + e, 'err');
     }
+}
+
+/* Heutiges Datum als „YYYY-MM-DD" in Ortszeit — der „neu"-Tag endet um
+   Mitternacht beim Benutzer, nicht in UTC. */
+function heuteLokal() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+         + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+/* `neuSeit` eines Baskets ({Ticker: Datum des Hinzukommens}) ohne Altlasten:
+   Ticker, die nicht mehr drin sind, und Einträge älter als eine Woche fliegen
+   raus. Angezeigt wird „neu" ohnehin nur am Tag selbst (renderWatchlist). */
+function _screenerNeuAufraeumen(b) {
+    var grenze = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    var raus = {};
+    Object.keys(b.neuSeit || {}).forEach(function (t) {
+        if ((b.weights || {})[t] != null && b.neuSeit[t] >= grenze) raus[t] = b.neuSeit[t];
+    });
+    return raus;
 }
 
 /* Baskets aus der alten Benennung "Screener {Sektor} {YYYY-MM-DD}".

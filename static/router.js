@@ -29,8 +29,12 @@ var PAGES = [
     },
     {
         id: 'ibkr', label: 'IBKR', icon: '📋',
-        // Neu rendern, damit der Depotwert die aktuellsten Live-Kurse nutzt
-        onShow: function () { if (typeof ibkrRenderTable === 'function') ibkrRenderTable(); }
+        // Neu rendern, damit der Depotwert die aktuellsten Live-Kurse nutzt;
+        // Kurse der Ehemaligen höchstens alle 15 Minuten neu
+        onShow: function () {
+            if (typeof ibkrRenderTable === 'function') ibkrRenderTable();
+            if (typeof ibkrExLaden === 'function') ibkrExLaden();   // Ehemalige über Verkaufskurs
+        }
     },
     {
         id: 'konten', label: 'Konten', icon: '🏦',

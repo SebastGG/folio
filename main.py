@@ -1114,6 +1114,71 @@ async def ensure_prices(ticker: str, request: Request):
         conn.close()
     return JSONResponse(content=[dict(r) for r in rows])
 
+@app.post("/api/prices/last")
+async def last_prices(request: Request):
+    """Letzter Schlusskurs + Währung je Ticker: {ticker: {close, date, currency}}.
+
+    Für Übersichten über viele Ticker, die nicht im aktiven Basket liegen (etwa
+    die ehemaligen Positionen): statt je Ticker die ganze Kursreihe zu holen.
+    Mit `refresh` werden Ticker, deren letzter Kurs älter als ein Tag ist oder
+    die ganz fehlen, vorher bei Yahoo nachgeladen — mit derselben 60-s-Drossel
+    je (Benutzer, Ticker) wie /api/prices/ensure.
+    """
+    user  = get_user(request)
+    files = get_user_files(user)
+    init_db(files["db"])
+    body  = await request.json()
+    tickers = sorted({str(t).strip().upper() for t in (body.get("tickers") or []) if str(t).strip()})[:500]
+    if not tickers:
+        return JSONResponse(content={})
+
+    def lesen():
+        conn = get_db(files["db"])
+        try:
+            ph = ",".join("?" * len(tickers))
+            rows = conn.execute(
+                f"SELECT p.ticker, p.date, p.close FROM prices p "
+                f"JOIN (SELECT ticker, MAX(date) AS d FROM prices WHERE ticker IN ({ph}) GROUP BY ticker) m "
+                f"ON m.ticker = p.ticker AND m.d = p.date", tickers).fetchall()
+            ccy = dict(conn.execute(
+                f"SELECT ticker, currency FROM ticker_currency WHERE ticker IN ({ph})", tickers).fetchall())
+        finally:
+            conn.close()
+        return {r["ticker"]: {"close": r["close"], "date": r["date"], "currency": ccy.get(r["ticker"])}
+                for r in rows}
+
+    out = await run_in_threadpool(lesen)
+    if body.get("refresh"):
+        gestern = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+        alt = []
+        with _last_ensure_lock:
+            for t in tickers:
+                if t in out and out[t]["date"] >= gestern:
+                    continue
+                key = f"{user}:{t}"
+                if time.time() - _last_ensure.get(key, 0) >= 60:
+                    _last_ensure[key] = time.time()
+                    alt.append(t)
+
+        def nachladen(t):
+            conn = get_db(files["db"])
+            try:
+                _n, split_factors = update_ticker(t, conn)
+                if split_factors:
+                    _adjust_drawings_for_split(files["data_dir"], "ticker:" + t, split_factors)
+            except Exception as e:
+                print(f"[Kurse] {t} nachladen fehlgeschlagen: {e}")
+            finally:
+                conn.close()
+
+        if alt:
+            def alle():
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    list(ex.map(nachladen, alt))
+            await run_in_threadpool(alle)
+            out = await run_in_threadpool(lesen)
+    return JSONResponse(content=out)
+
 @app.get("/api/splits")
 async def get_splits(request: Request):
     """Alle bekannten Splits je Ticker: {"AAPL": [{"date": ..., "ratio": 4.0}, …]}.
