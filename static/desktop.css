@@ -568,6 +568,9 @@ header {
 .wl-item.active { background: var(--accent); color: white; }
 .wl-item.active .wl-price, .wl-item.active .wl-chg { color: rgba(255,255,255,0.85); }
 .wl-sym { font-weight: 600; font-size: 12px; display:flex; align-items:center; gap:5px; }
+.scr-ipo { margin-left: 5px; font-size: 8px; font-weight: 700; padding: 0 4px; border-radius: 3px;
+           background: var(--accent, #2962ff); color: #fff; vertical-align: 1px; }
+.scr-junge { display: block; font-size: 11px; margin: 6px 0 2px; cursor: pointer; }
 .wl-neu { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
           padding: 1px 4px; border-radius: 3px; background: var(--accent, #2962ff); color: #fff; }
 .wl-item.active .wl-neu { background: rgba(255,255,255,0.25); }

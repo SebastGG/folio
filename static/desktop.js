@@ -1712,7 +1712,8 @@ async function marktStatusLaden() {
         return;
     }
     _marktZeichnen(st);
-    _marktTimer = setTimeout(marktStatusLaden, st.runde && st.runde.laeuft ? 4000 : 30000);
+    var laeuft = (st.runde && st.runde.laeuft) || (st.tages && st.tages.runde && st.tages.runde.laeuft);
+    _marktTimer = setTimeout(marktStatusLaden, laeuft ? 4000 : 30000);
 }
 
 function _marktZeichnen(st) {
@@ -1751,6 +1752,28 @@ function _marktZeichnen(st) {
     }
     if (st.live && st.live.stand) {
         html += z('Heatmap-Kurse', _mkZeit(st.live.stand, true) + (st.live.laeuft ? ' · wird aufgefrischt' : ''));
+    }
+
+    // Tagesrunde der Screening-Märkte (nur Tageskerzen, für den Screener)
+    var T = st.tages || {}, TR = T.runde || {};
+    if (T.listen) {
+        html += '<div class="mk-titel">Screener-Märkte (nur Tageskurse)</div>';
+        html += z('Tagesrunde', TR.laeuft
+            ? (TR.phase && TR.phase !== 'Tageskerzen' ? escHtml(TR.phase) + ' …'
+               : _mkZahl(TR.fertig) + ' von ' + _mkZahl(TR.gesamt) + (TR.aktuell ? ' · ' + escHtml(TR.aktuell) : ''))
+            : 'nächste ' + _mkZeit(T.naechste, true));
+        if (TR.laeuft && TR.gesamt && (!TR.phase || TR.phase === 'Tageskerzen')) {
+            html += '<div class="mk-balken"><div style="width:' + Math.round(TR.fertig / TR.gesamt * 100) + '%"></div></div>';
+        }
+        T.listen.forEach(function(l) { html += z(escHtml(l.name), _mkZahl(l.anzahl) + ' Werte'); });
+        html += z('Listen vom', _mkZeit(T.listen_stand, true));
+        if (T.bericht) {
+            html += z('letzte Tagesrunde', _mkZeit(T.bericht.ende, true) + ' · '
+                    + Math.max(1, Math.round(T.bericht.dauer / 60)) + ' min · ' + _mkZahl(T.bericht.fehler) + ' Fehler');
+        }
+        if (T.abbruch && !TR.laeuft && Date.now() / 1000 - T.abbruch < 3600) {
+            html += '<div class="mk-hinweis">Letzte Tagesrunde abgebrochen — neuer Versuch ab ' + _mkZeit(T.abbruch + 3600) + '.</div>';
+        }
     }
 
     if (st.fehler && st.fehler.length) {
@@ -6006,8 +6029,10 @@ var _SCR = {
     jobId:     null,
     polling:   false,   // verhindert zwei parallele Poll-Schleifen
     pollTimer: null,
-    indexes:   [],   // alle verfügbaren Indizes
+    indexes:   [],   // alle verfügbaren Indizes (Finviz, ausgeblendet)
     defaults:  ['Russell 2000'],
+    maerkte:   [],   // [{id, name}] — lokales Screening
+    maerkteDefaults: [],
     filters:        [],   // Katalog [{group, items:[{code,label}]}]
     filterDefaults: [],   // voreingestellte Filter-Codes
     legend:         [],   // Finviz-Code-Referenz [{group, items:[{code,desc}]}]
@@ -6020,11 +6045,21 @@ async function screenerInit() {
     try {
         var cfg = await fetch('/api/screener/config').then(function (r) { return r.json(); });
         _SCR.indexes        = cfg.indexes || [];
+        _SCR.maerkte        = cfg.maerkte || [];
+        _SCR.maerkteDefaults = cfg.maerkte_defaults || [];
         _SCR.filters        = cfg.filters || [];
         _SCR.filterDefaults = cfg.filter_defaults || [];
         _SCR.legend         = cfg.legend || [];
     } catch (e) {
         _SCR.indexes = ['S&P 500', 'NASDAQ 100', 'DJIA', 'Russell 2000'];
+    }
+    var mbox = document.getElementById('scr-maerkte');
+    if (mbox) {
+        mbox.innerHTML = _SCR.maerkte.map(function (m) {
+            return '<label><input type="checkbox" data-markt="' + escHtml(m.id) + '"'
+                + (_SCR.maerkteDefaults.indexOf(m.id) >= 0 ? ' checked' : '') + '> '
+                + escHtml(m.name) + '</label>';
+        }).join('');
     }
     var box = document.getElementById('scr-indexes');
     if (!box) return;
@@ -6165,6 +6200,14 @@ function _scrMsg(text, cls) {
     el.className = 'settings-msg' + (cls ? ' ' + cls : '');
 }
 
+function _scrSelectedMaerkte() {
+    var out = [];
+    document.querySelectorAll('#scr-maerkte input[type="checkbox"]').forEach(function (cb) {
+        if (cb.checked) out.push(cb.dataset.markt);
+    });
+    return out;
+}
+
 function _scrSelectedIndexes() {
     var out = [];
     document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
@@ -6214,7 +6257,10 @@ function _scrCustomFilters() {
 function _scrCollectSettings() {
     var num = function (id) { return parseFloat((document.getElementById(id) || {}).value) || 0; };
     var unitEl = document.getElementById('scr-cap-unit');
+    var jung = document.getElementById('scr-junge');
     return {
+        maerkte: _scrSelectedMaerkte(),
+        junge:   !!(jung && jung.checked),
         indexes: _scrSelectedIndexes(),
         cap_min: num('scr-cap-min'),
         cap_max: num('scr-cap-max'),
@@ -6231,6 +6277,13 @@ function _scrCollectSettings() {
  */
 function _scrApplySettings(st) {
     if (!st || typeof st !== 'object' || !Object.keys(st).length) return false;
+    if (Array.isArray(st.maerkte)) {
+        document.querySelectorAll('#scr-maerkte input[type="checkbox"]').forEach(function (cb) {
+            cb.checked = st.maerkte.indexOf(cb.dataset.markt) >= 0;
+        });
+    }
+    var jung = document.getElementById('scr-junge');
+    if (jung && st.junge != null) jung.checked = !!st.junge;
     if (Array.isArray(st.indexes)) {
         document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
             cb.checked = st.indexes.indexOf(cb.dataset.idx) >= 0;
@@ -6329,6 +6382,11 @@ async function screenerResetSettings() {
         var r = await fetch('/api/screener/settings', { method: 'DELETE' });
         if (!r.ok) failed = 'HTTP ' + r.status;
     } catch (e) { failed = e.message; }
+    document.querySelectorAll('#scr-maerkte input[type="checkbox"]').forEach(function (cb) {
+        cb.checked = _SCR.maerkteDefaults.indexOf(cb.dataset.markt) >= 0;
+    });
+    var jung = document.getElementById('scr-junge');
+    if (jung) jung.checked = false;
     document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
         cb.checked = _SCR.defaults.indexOf(cb.dataset.idx) >= 0;
     });
@@ -6356,7 +6414,7 @@ async function screenerResetSettings() {
 
 /** Hängt das automatische Speichern an alle Eingabefelder des Screeners. */
 function _scrWireSettingsAutosave() {
-    ['scr-indexes', 'scr-filters'].forEach(function (id) {
+    ['scr-maerkte', 'scr-indexes', 'scr-filters', 'scr-junge'].forEach(function (id) {
         var box = document.getElementById(id);
         if (box) box.addEventListener('change', _scrSettingsChanged);
     });
@@ -6387,9 +6445,9 @@ function _scrAddCustomCode(code) {
 }
 
 async function screenerStart() {
-    var indexes = _scrSelectedIndexes();
-    if (!indexes.length) {
-        _scrMsg('Mindestens einen Index auswählen', 'err');
+    var maerkte = _scrSelectedMaerkte();
+    if (!maerkte.length) {
+        _scrMsg('Mindestens einen Markt auswählen', 'err');
         return;
     }
     var mn = parseFloat(document.getElementById('scr-cap-min').value) || 0;
@@ -6417,8 +6475,10 @@ async function screenerStart() {
     _scrSaveTimer = null;
     _scrSaveSettings();
 
+    // Lokal gerechnet (screening.py). Der Finviz-Weg nähme `indexes` statt `maerkte`.
     var body = {
-        indexes:  indexes,
+        maerkte:  maerkte,
+        junge:    !!(document.getElementById('scr-junge') || {}).checked,
         cap_min:  mn,
         cap_max:  mx,
         unit:     document.getElementById('scr-cap-unit').value,
@@ -6500,6 +6560,7 @@ async function _scrPoll() {
             _scrMsg('Screening abgeschlossen', 'ok');
         }
         _SCR.results = s.results || {};
+        _SCR.details = s.details || {};
         document.getElementById('scr-btn-run').disabled = false;
         document.getElementById('scr-btn-export').disabled = false;
         document.getElementById('scr-btn-baskets').disabled = false;
@@ -6530,10 +6591,24 @@ function _scrRenderResults(results) {
             '<span class="scr-sector-count">' + tickers.length + '</span>';
         var list = document.createElement('div');
         list.className = 'scr-ticker-list';
+        var markt = {};
+        (_SCR.maerkte || []).forEach(function (m) { markt[m.id] = m.name; });
         tickers.forEach(function (t) {
             var chip = document.createElement('span');
             chip.className = 'scr-ticker';
             chip.textContent = t;
+            var d = (_SCR.details || {})[t];
+            if (d) {
+                chip.title = (d.maerkte || [d.markt]).map(function (m) { return markt[m] || m; }).join(', ')
+                    + (d.alter_tage != null ? ' · an der Börse seit ' + d.alter_tage + ' Tagen' : '');
+                if (d.jung) {
+                    var ipo = document.createElement('span');
+                    ipo.className = 'scr-ipo';
+                    ipo.textContent = 'IPO ' + (d.alter_tage < 60 ? d.alter_tage + ' T'
+                                                : Math.round(d.alter_tage / 30) + ' M');
+                    chip.appendChild(ipo);
+                }
+            }
             list.appendChild(chip);
         });
         sec.appendChild(head);

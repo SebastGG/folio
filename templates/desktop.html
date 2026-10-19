@@ -667,14 +667,20 @@
         <span id="scr-state" class="settings-badge">bereit</span>
       </h2>
       <p class="settings-hint">
-        Finviz-Screening je Index × Sektor mit frei wählbaren Filtern (Hochs, SMA, RSI, Performance,
-        Fundamental — oder eigene Finviz-Codes), optional gefiltert nach MarktCap.
-        Ergebnis als TradingView-Watchliste exportierbar.
-        Indizes, Filter und MarktCap werden automatisch gespeichert und beim nächsten Öffnen
-        wiederhergestellt.
+        Durchsucht USA, Europa und Kanada nach technischen Kriterien (Hochs, SMA, RSI, Performance),
+        gerechnet aus den Tageskursen, die Folio jeden Abend sammelt — optional gefiltert nach
+        MarktCap. Märkte, Filter und MarktCap werden automatisch gespeichert und beim nächsten
+        Öffnen wiederhergestellt.
       </p>
 
       <div class="scr-row">
+        <span class="scr-label">Märkte</span>
+        <div id="scr-maerkte" class="scr-checks"></div>
+      </div>
+
+      <!-- Finviz-Screening (Indizes, eigene Finviz-Codes) ist vorerst ausgeblendet;
+           der Weg über /api/screener/run mit `indexes` besteht weiter. -->
+      <div class="scr-row" style="display:none">
         <span class="scr-label">Indizes</span>
         <div id="scr-indexes" class="scr-checks"></div>
       </div>
@@ -683,11 +689,14 @@
         <span class="scr-label">Filter</span>
         <div class="scr-filters-wrap">
           <div id="scr-filters" class="scr-filter-groups"></div>
-          <label class="scr-custom">Eigene Finviz-Codes
+          <label class="scr-custom" style="display:none">Eigene Finviz-Codes
             <input type="text" id="scr-filters-custom" placeholder="z.B. ta_pattern_channelup, sh_avgvol_o500"
               autocomplete="off">
           </label>
-          <span class="settings-hint">↳ Mehrfachauswahl wird UND-verknüpft · eigene Codes kommagetrennt (siehe Finviz-Screener-URL)</span>
+          <label class="scr-junge" title="Werte, die noch nicht lange genug gehandelt werden (z. B. kein SMA200 nach drei Monaten), fallen sonst durch. Angehakt wird ein Filter, für den die Historie fehlt, übersprungen; das 52-Wochen-Hoch gilt ohnehin seit dem Börsengang.">
+            <input type="checkbox" id="scr-junge"> junge Werte (IPOs) prüfen, auch wenn die Historie für einen Filter nicht reicht
+          </label>
+          <span class="settings-hint">↳ Mehrfachauswahl wird UND-verknüpft</span>
         </div>
       </div>
 
@@ -708,7 +717,7 @@
         <button id="scr-btn-run"     class="scr-btn scr-btn-run"     onclick="screenerStart()">▶ Screening starten</button>
         <button id="scr-btn-baskets" class="scr-btn scr-btn-baskets" onclick="screenerToBaskets()" disabled
                 title="Schreibt die Treffer je Sektor in einen festen Basket „Screener {Sektor}“. Jeder Lauf trägt in dieselben Baskets nach: was schon drin steht, bleibt stehen, neue Treffer kommen dazu. Es entstehen keine neuen Baskets mit Datum.">＋ Baskets anlegen</button>
-        <button id="scr-btn-export"  class="scr-btn scr-btn-export"  onclick="screenerExport()"    disabled>⬇ TradingView-Export</button>
+        <button id="scr-btn-export"  class="scr-btn scr-btn-export"  onclick="screenerExport()"    disabled style="display:none">⬇ TradingView-Export</button>
         <span id="scr-msg" class="settings-msg"></span>
         <button id="scr-btn-reset"   class="scr-btn"                 onclick="screenerResetSettings()"
                 title="Indizes, Filter und MarktCap zurück auf die Vorgaben. Die Einstellungen werden sonst automatisch gespeichert und beim nächsten Öffnen wiederhergestellt.">↺ Einstellungen zurücksetzen</button>
@@ -770,7 +779,7 @@
 
     </div><!-- end .scr-main -->
 
-    <aside class="scr-legend-col">
+    <aside class="scr-legend-col" style="display:none">
       <div class="settings-card scr-card">
         <h2 class="settings-h">Finviz-Codes
           <a href="https://finviz.com/screener.ashx" target="_blank" rel="noopener"
@@ -1656,25 +1665,30 @@
       <article class="help-card" id="help-screener" data-t="Screener">
         <h2 class="help-h">🔍 Screener</h2>
         <p>
-          Der Screener durchsucht Finviz je Index und Sektor nach technischen Kriterien und
-          filtert die Treffer optional nach Marktkapitalisierung.
+          Der Screener durchsucht <b>USA</b> (alle an US-Börsen notierten Aktien, auch ganz frische
+          IPOs), den <b>STOXX Europe 600</b>, <b>MDAX</b>, <b>SDAX</b> und den <b>S&amp;P/TSX Composite</b>
+          nach technischen Kriterien — Hochs und Tiefs, gleitende Durchschnitte, Golden/Death Cross,
+          RSI, Performance — und filtert optional nach Marktkapitalisierung (in US-Dollar umgerechnet).
+          Gerechnet wird aus den Tageskursen, die Folio jeden Werktag um <b>22:30</b> für all diese
+          Werte sammelt; ein Lauf dauert deshalb nur Sekunden.
         </p>
         <ol class="help-steps">
-          <li>Indizes ankreuzen, Filter wählen (eigene Finviz-Codes kommagetrennt möglich), MarktCap
-              eingrenzen — <b>0</b> heißt „keine Grenze".</li>
-          <li><b>▶ Screening starten</b>. Der Lauf läuft im Hintergrund weiter, auch wenn du die Seite
-              neu lädst.</li>
+          <li>Märkte ankreuzen, Filter wählen, MarktCap eingrenzen — <b>0</b> heißt „keine Grenze".</li>
+          <li><b>▶ Screening starten</b>.</li>
           <li><b>＋ Baskets anlegen</b> schreibt die Treffer je Sektor in einen <b>festen</b> Basket
               namens „Screener {Sektor}". Es entstehen keine neuen Baskets mit Datum.</li>
           <li>Die Charts durchgehen und aus dem Basket werfen, was nicht überzeugt.</li>
           <li>Beim nächsten Lauf <b>trägt der Screener nur nach</b>: was du behalten hast, bleibt
-              stehen, die neuen Treffer kommen dazu. Aussortiertes kommt nicht zurück, solange die
-              Sperrzeit läuft. Willst du wirklich bei null anfangen, nimm
-              <b>Screener-Baskets löschen</b>.</li>
+              stehen, die neuen Treffer kommen dazu und tragen in der Kursliste am selben Tag die Marke
+              <span class="wl-neu">neu</span>. Aussortiertes kommt nicht zurück, solange die Sperrzeit
+              läuft. Willst du wirklich bei null anfangen, nimm <b>Screener-Baskets löschen</b>.</li>
         </ol>
         <p>
-          Was ein Lauf neu in einen Basket einträgt, trägt in der Kursliste <b>am selben Tag</b> die
-          Marke <span class="wl-neu">neu</span>. Ab Mitternacht verschwindet sie.
+          <b>Junge Werte:</b> Wer erst seit drei Monaten gehandelt wird, hat keinen SMA200 — ein Filter,
+          für den die Historie fehlt, gilt als nicht erfüllt. Mit <b>junge Werte (IPOs) prüfen</b> wird er
+          stattdessen übersprungen. Das 52-Wochen-Hoch gilt ohnehin seit dem Börsengang. In den
+          Ergebnissen trägt ein Wert, der kürzer als ein Jahr an der Börse ist, die Marke
+          <span class="scr-ipo">IPO 3 M</span>.
         </p>
         <p>
           Aussortierte Ticker landen auf der <b>Blacklist</b> und kommen beim nächsten Screening nicht
@@ -1682,9 +1696,10 @@
           Blacklist bekommt ein Wert seine Chance zurück. Löschst du einen <i>ganzen</i> Basket, gilt
           das als Aufräumen und nicht als Absage — es wird nichts gesperrt.
         </p>
-        <p>
-          <b>⬇ TradingView-Export</b> gibt die bereinigte Liste als Textdatei aus.
-          <b>🗑 Screener-Baskets löschen</b> entfernt alle Baskets, deren Name mit „Screener " beginnt.
+        <p class="help-tip">
+          Sind noch nicht für alle Werte Kurse gesammelt (etwa in der ersten Nacht), sagt der Screener
+          das und markiert das Ergebnis als unvollständig. Den Stand des Sammlers zeigt die
+          Protokoll-Seite unter <i>Screener-Märkte</i>.
         </p>
       </article>
 
@@ -1777,7 +1792,10 @@
           <dt>Logos</dt>
           <dd>Financial Modeling Prep, direkt vom Browser geladen.</dd>
           <dt>Screener</dt>
-          <dd>Finviz für die Treffer, Yahoo für die Marktkapitalisierung.</dd>
+          <dd>Eigene Rechnung aus Yahoo-Tageskursen. Welche Werte dazugehören, kommt aus dem
+              Symbolverzeichnis der Nasdaq (USA), den Bestandslisten der iShares-ETFs (STOXX Europe 600,
+              S&amp;P/TSX Composite) und der Instrumentenliste von Xetra (MDAX, SDAX) — täglich neu.
+              Marktkapitalisierung, Börsengang und Sektor von Yahoo.</dd>
           <dt>Marktdaten</dt>
           <dd>Indexlisten, Sektor und Marktkapitalisierung von Finviz (wöchentlich), Stunden- und
               Tageskurse von Yahoo (täglich). Gemeinsam für alle Benutzer, siehe <i>Marktdaten</i>.</dd>

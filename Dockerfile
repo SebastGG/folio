@@ -21,6 +21,7 @@ COPY tax_pdf_konvex.py .
 COPY screener.py .
 COPY markt.py .
 COPY universen.py .
+COPY screening.py .
 COPY konvex_tax/ konvex_tax/
 COPY start.sh .
 RUN echo "$BUILD_HASH" > /app/code/build_hash.txt
