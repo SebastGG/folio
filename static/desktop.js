@@ -2266,6 +2266,7 @@ function pasteDrawings() {
 function initDrawingManager() {
     var lcd = window.LightweightChartsDrawing;
     if (!lcd || !chart || !csSeries) return;
+    _zeichnungsAchseErweitern(lcd);   // Anker außerhalb der Kerzen nicht verschlucken
     drawingManager = new lcd.DrawingManager();
     var _dmContainer = document.getElementById('chartContainer');
     drawingManager.attach(chart, csSeries, _dmContainer);
@@ -2440,26 +2441,114 @@ function initDrawingManager() {
     });
 }
 
-// Mappt ein Datum auf den nächsten vorhandenen Bar (für TF-übergreifende Drawings)
+// ── Zeichnungen über alle Kerzengrößen ───────────────────────────────────────
+// Ein Anker ist ein Zeitpunkt + Preis. LightweightCharts kennt aber nur die
+// Zeitpunkte, an denen eine Kerze steht: timeToCoordinate() liefert für jeden
+// anderen null, und die Bibliothek lässt die GANZE Zeichnung weg. Das passierte
+// bei Ankern auf einem Feiertag (Monats-/Wochenanker im Tageschart), vor dem
+// Beginn des gewählten Zeitraums, rechts der letzten Kerze und im 1h-Chart vor
+// Beginn der Stunden-Historie. Deshalb zwei Stufen:
+//   1. _snapAnchorTime(): Anker auf die Kerze legen, in die er fällt.
+//   2. _zeitZuX(): was danach noch auf keiner Kerze liegt, wird zwischen den
+//      Nachbarkerzen eingepasst bzw. über den Rand hinaus fortgeschrieben.
+// Die gespeicherten Anker bleiben dabei unverändert.
+
+/** Zeitwert (Datum, Zeitstempel oder {year,month,day}) → Sekunden, UTC. */
+function _zeitSek(t) {
+    if (typeof t === 'number') return t;
+    var d = chartTimeToStr(t);
+    return d ? Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 1000 : null;
+}
+
+/** Index der letzten Kerze mit Zeit ≤ sek (−1: vor der ersten). */
+function _kerzeBis(sek) {
+    var lo = 0, hi = _lastCandles.length - 1, r = -1;
+    while (lo <= hi) {
+        var m = (lo + hi) >> 1;
+        if (_zeitSek(_lastCandles[m].time) <= sek) { r = m; lo = m + 1; } else hi = m - 1;
+    }
+    return r;
+}
+
+/**
+ * x-Position eines Zeitpunkts, der auf keiner Kerze liegt — oder null.
+ * Zwischen zwei Kerzen anteilig nach der Zeit; vor der ersten bzw. nach der
+ * letzten mit dem durchschnittlichen Zeitabstand der Kerzen fortgeschrieben,
+ * damit eine schräge Linie ihre Steigung behält, auch wenn ein Ende außerhalb
+ * des gewählten Zeitraums liegt.
+ */
+function _zeitZuX(time, ts) {
+    var n = _lastCandles ? _lastCandles.length : 0, sek = _zeitSek(time);
+    if (n < 2 || sek === null) return null;
+    var x = function(i) { return ts.timeToCoordinate(_lastCandles[i].time); };
+    var i = _kerzeBis(sek);
+    if (i >= 0 && i < n - 1) {
+        var t0 = _zeitSek(_lastCandles[i].time), t1 = _zeitSek(_lastCandles[i + 1].time);
+        var x0 = x(i), x1 = x(i + 1);
+        if (x0 === null || x1 === null) return null;
+        return x0 + (x1 - x0) * (sek - t0) / ((t1 - t0) || 1);
+    }
+    var xa = x(0), xe = x(n - 1);
+    if (xa === null || xe === null) return null;
+    var ta = _zeitSek(_lastCandles[0].time), te = _zeitSek(_lastCandles[n - 1].time);
+    var pxProSek = (xe - xa) / ((te - ta) || 1);
+    return i < 0 ? xa - (ta - sek) * pxProSek : xe + (sek - te) * pxProSek;
+}
+
+/**
+ * Hängt _zeitZuX() an getViewport() der Bibliothek. Über diese eine Stelle holen
+ * Zeichnungen wie DrawingManager (Treffertest) die Zeitachse — alle anderen
+ * Nutzer von timeToCoordinate() (Trade-Pfeile, Earnings, VRVP) bleiben unberührt.
+ */
+function _zeichnungsAchseErweitern(lcd) {
+    var protos = [lcd.DrawingManager && lcd.DrawingManager.prototype];
+    var p = lcd.TrendLine && lcd.TrendLine.prototype;
+    while (p && !Object.prototype.hasOwnProperty.call(p, 'getViewport')) p = Object.getPrototypeOf(p);
+    protos.push(p);
+    protos.forEach(function(proto) {
+        if (!proto || typeof proto.getViewport !== 'function' || proto.getViewport._folio) return;
+        var orig = proto.getViewport;
+        proto.getViewport = function() {
+            var vp = orig.apply(this, arguments);
+            if (vp && vp.timeScale) {
+                var t2c = vp.timeScale.timeToCoordinate;
+                vp.timeScale.timeToCoordinate = function(t) {
+                    var x = t2c(t);
+                    return x !== null ? x : _zeitZuX(t, { timeToCoordinate: t2c });
+                };
+            }
+            return vp;
+        };
+        proto.getViewport._folio = true;
+    });
+}
+
+/**
+ * Anker auf die Kerze legen, in die er bei der aktuellen Kerzengröße fällt:
+ * im Wochen-/Monatschart auf die Kerze seiner Woche bzw. seines Monats, im
+ * Tageschart auf den Handelstag (fällt er auf Wochenende/Feiertag, den nächsten),
+ * im 1h-Chart auf die erste Stunde der regulären Sitzung des Tages. Gibt es die
+ * Kerze nicht, bleibt der Zeitpunkt stehen — den Rest erledigt _zeitZuX().
+ */
 function _snapAnchorTime(time) {
     var tf = chartTF();
     if (tf === '1H') {
         // In Tagesansichten gesetzte Anker (Datum) → erste reguläre Stundenkerze des Tages
         if (typeof time === 'number') return time;
         var st = stundeFuerDatum(chartTimeToStr(time));
-        return st !== null ? st : time;
+        return st !== null ? st : _zeitSek(time);
     }
     // In der Stundenansicht gesetzte Anker (Zeitstempel) → ihr Tag
-    if (typeof time === 'number') time = chartTimeToStr(time);
-    if (!_lastCandles || !_lastCandles.length || tf === '1D') return time;
-    var tMs = new Date(time).getTime();
-    var best = _lastCandles[0].time, bestDiff = Infinity;
-    for (var i = 0; i < _lastCandles.length; i++) {
-        var diff = Math.abs(new Date(_lastCandles[i].time).getTime() - tMs);
-        if (diff < bestDiff) { bestDiff = diff; best = _lastCandles[i].time; }
-        else break; // Array ist aufsteigend sortiert
-    }
-    return best;
+    var tag = chartTimeToStr(time);
+    if (!tag) return time;
+    if (tf === '1W' || tf === '1M') return periodStartFor(tag, tf);
+    // 1D: liegt keine Kerze auf dem Tag, die nächste danach (höchstens eine Woche weiter)
+    var n = _lastCandles ? _lastCandles.length : 0;
+    var i = n ? _kerzeBis(_zeitSek(tag)) : -1;
+    if (i >= 0 && chartTimeToStr(_lastCandles[i].time) === tag) return tag;
+    var naechste = i + 1 < n ? _lastCandles[i + 1].time : null;
+    if (naechste && _zeitSek(naechste) - _zeitSek(tag) <= 7 * 86400) return chartTimeToStr(naechste);
+    return tag;
 }
 
 // Wird von shared.js loadDrawings() aufgerufen — beim Start und nach jedem
