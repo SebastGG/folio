@@ -88,6 +88,9 @@ TAGE_FRISCH   = 6 * 3600       # so frisch geholte Tageskerzen lässt die Stunde
 SEKTOR_JE_NACHT = 500          # Sektor einzeln bei Yahoo nachfragen: höchstens so viele je Runde
 SEKTOR_NEU_NACH = 30 * 86400   # ohne Ergebnis frühestens nach 30 Tagen wieder fragen
 QUOTE_JE_ABRUF = 150           # Werte je Yahoo-Sammelabruf (Marktkap., Börsengang)
+# Wechselkurse für die Marktkapitalisierung in USD (Screener-Filter)
+FX_PAARE      = ["EURUSD=X", "GBPUSD=X", "CHFUSD=X", "SEKUSD=X", "DKKUSD=X",
+                 "NOKUSD=X", "PLNUSD=X", "CADUSD=X"]
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9^][A-Z0-9.\-=^]{0,14}$")
 
@@ -1286,6 +1289,12 @@ def _tagesrunde_fahren(soll: float):
     _tagesrunde.update(laeuft=True, start=time.time(), gesamt=len(offen), fertig=0, fehler=0,
                        gedrosselt=0, neu=neu, aktuell=None, phase="Tageskerzen")
     log(4, f"Tagesrunde: {len(offen)} Werte" + (f", davon {neu} neu (je {TAGE_START} Tage)" if neu else ""))
+    for paar in FX_PAARE:                      # zuerst: der Screener rechnet damit in USD um
+        try:
+            tage_holen(paar)
+        except Exception as e:
+            log(2, f"Wechselkurs {paar}: {e}")
+        _stop.wait(PAUSE)
     abbruch = None
     for sym in offen:
         if _stop.is_set():
@@ -1348,8 +1357,11 @@ def _tagesrunde_fahren(soll: float):
     dauer = time.time() - _tagesrunde["start"]
     mc = _db(_pfad_markt())
     try:
-        if abbruch:
+        if abbruch and abbruch != "App wird beendet":
+            # Ein Neustart (Deploy) ist keine Störung: nach dem Hochfahren geht es gleich
+            # mit den noch offenen Werten weiter, statt eine Stunde zu warten
             _meta_setzen(mc, "tagesrunde_abbruch", time.time())
+        if abbruch:
             log(2 if abbruch == "pausiert" else 1,
                 f"Tagesrunde abgebrochen nach {_tagesrunde['fertig']} von {_tagesrunde['gesamt']}: {abbruch}")
         else:

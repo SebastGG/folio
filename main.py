@@ -39,6 +39,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 import screener
+import screening      # Screener, der selbst rechnet (Tageskurse aus markt.py)
+import universen
 import markt
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
@@ -5390,7 +5392,10 @@ async def screener_config(request: Request):
     get_user(request)
     return {"indexes": list(screener.INDEXES.keys()),
             "sectors": list(screener.SECTORS.keys()),
-            "filters": screener.FILTERS,
+            # Lokales Screening: Märkte statt Indizes, Katalog ohne Fundamentaldaten
+            "maerkte": [{"id": uid, "name": name} for uid, (name, _f) in universen.UNIVERSEN.items()],
+            "maerkte_defaults": list(universen.UNIVERSEN.keys()),
+            "filters": screening.lokale_filter(),
             "filter_defaults": screener.DEFAULT_FILTERS,
             "legend": screener.FILTER_LEGEND}
 
@@ -5414,7 +5419,7 @@ def _sanitize_screener_settings(body: dict) -> dict:
     except (TypeError, ValueError):
         cap_min = cap_max = 0.0
     unit = body.get("unit") if body.get("unit") in ("Mrd $", "Mio $") else "Mrd $"
-    return {
+    out = {
         "indexes": idx,
         "cap_min": cap_min,
         "cap_max": cap_max,
@@ -5424,6 +5429,13 @@ def _sanitize_screener_settings(body: dict) -> dict:
         "filters": screener.sanitize_filters(body.get("filters")),
         "custom":  screener.sanitize_filters(body.get("custom")),
     }
+    # Lokales Screening — nur mitschreiben, wenn die Oberfläche es schickt, damit
+    # eine alte Einstellungsdatei nicht mit leerer Marktauswahl ankommt
+    if "maerkte" in body:
+        out["maerkte"] = [m for m in (body.get("maerkte") or []) if m in universen.UNIVERSEN]
+    if "junge" in body:
+        out["junge"] = bool(body.get("junge"))
+    return out
 
 
 @app.get("/api/screener/settings")
@@ -5680,6 +5692,8 @@ async def screener_blacklist_free(ticker: str, request: Request):
 async def screener_run(request: Request):
     user = get_user(request)
     body = await request.json()
+    if "maerkte" in body:
+        return await _screener_run_lokal(user, body)
     index_names = body.get("indexes") or []
     if not isinstance(index_names, list) or not index_names:
         return JSONResponse({"ok": False, "error": "Mindestens einen Index auswählen"},
@@ -5713,6 +5727,34 @@ async def screener_run(request: Request):
 
     job_id = screener.start_job(index_names, cap_min, cap_max, unit, filters,
                                 blacklist=gesperrt)
+    _save_last_screener_job(user, job_id)
+    return {"ok": True, "job_id": job_id, "blacklist": len(gesperrt)}
+
+
+async def _screener_run_lokal(user: str, body: dict):
+    """Screening aus den gesammelten Tageskursen (screening.py) statt über Finviz."""
+    maerkte = body.get("maerkte") or []
+    if not isinstance(maerkte, list) or not maerkte:
+        return JSONResponse({"ok": False, "error": "Mindestens einen Markt auswählen"}, status_code=400)
+    unit = body.get("unit", "Mrd $")
+    multiplier = 1_000_000_000 if unit == "Mrd $" else 1_000_000
+    try:
+        mn = float(body.get("cap_min", 0) or 0)
+        mx = float(body.get("cap_max", 0) or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Ungültiger MarktCap-Wert"}, status_code=400)
+    if mn > 0 and mx > 0 and mn >= mx:
+        return JSONResponse({"ok": False, "error": "Min muss kleiner sein als Max"}, status_code=400)
+    filters = screener.sanitize_filters(body.get("filters") if isinstance(body.get("filters"), list) else [])
+    bl = _screener_blacklist_load(user)
+    gesperrt = set(_screener_aktive_sperren(bl)) if bl.get("active", True) else set()
+    _markt_bereit()
+    try:
+        job_id = screening.start_job(maerkte, int(mn * multiplier) if mn > 0 else None,
+                                     int(mx * multiplier) if mx > 0 else None, unit, filters,
+                                     blacklist=gesperrt, junge=bool(body.get("junge")))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     _save_last_screener_job(user, job_id)
     return {"ok": True, "job_id": job_id, "blacklist": len(gesperrt)}
 

@@ -581,6 +581,7 @@ def get_status(job_id: str) -> dict | None:
             "blocked":  list(j.get("blocked") or []),
             "error":    j["error"],
             "warning":  j.get("warning"),
+            "details":  dict(j.get("details") or {}),   # nur lokales Screening (screening.py)
         }
 
 
