@@ -697,28 +697,18 @@ def _finviz_stammdaten_abschnitt(f: str, out: dict):
             break
         if gesamt is None:
             gesamt = screener._total_hits(soup)
-        tabelle = None
-        for t in soup.find_all("table"):
-            if t.find(attrs={"data-boxover-ticker": True}):
-                tabelle = t
-        if not tabelle:
+        zeilen = _finviz_zeilen(soup)
+        if not zeilen:
+            if seite == 0 and gesamt:
+                # Finviz meldet Treffer, die Tabelle ist aber nicht lesbar → Seitenaufbau
+                # geändert (so im Oktober 2026). Laut melden, statt still nichts zu tun.
+                log(1, f"Finviz-Stammdaten {f}: {gesamt} Treffer gemeldet, aber keine Zeile lesbar "
+                       f"— Seitenaufbau vermutlich geändert")
             break
-        zeilen = tabelle.find_all("tr")
-        kopf = [x.get_text(" ", strip=True) for x in zeilen[0].find_all(["th", "td"])]
-        sp = {name: i for i, name in enumerate(kopf)}
         neu = 0
-        for z in zeilen[1:]:
-            zellen = z.find_all("td")
-            sym = None
-            for td in zellen:
-                if td.get("data-boxover-ticker"):
-                    sym = td.get("data-boxover-ticker").strip().upper()
-                    break
-            if not sym or sym in out:
+        for sym, feld in zeilen:
+            if sym in out:
                 continue
-            def feld(name):
-                i = sp.get(name)
-                return zellen[i].get_text(" ", strip=True) if i is not None and i < len(zellen) else ""
             sektor = feld("Sector") or None
             if sektor == "Financial":
                 sektor = "Financial Services"     # Yahoos Name — so gruppiert die Heatmap sonst auch
@@ -733,6 +723,46 @@ def _finviz_stammdaten_abschnitt(f: str, out: dict):
         if not neu or (gesamt and len(out) - vorher >= gesamt):
             break
         _stop.wait(1.2)
+
+# Spalten-IDs der neuen Finviz-Tabelle (fv-table) → Überschriften der alten
+_FV_SPALTEN = {"Company": "company", "Sector": "sector", "Industry": "industry",
+               "Country": "country", "Market Cap": "marketCap", "Price": "price"}
+
+def _finviz_zeilen(soup) -> list:
+    """Zeilen der Übersicht als [(Symbol, feld(Überschrift) → Text)].
+
+    Neue Tabelle (seit Oktober 2026): div-Zeilen mit `data-row-key`, Zellen mit
+    `data-column-id`. Alte Tabelle als Rückfall: <tr>/<td> mit `data-boxover-ticker`
+    und Spalten nach der Kopfzeile.
+    """
+    out = []
+    for z in soup.find_all(attrs={"role": "row", "data-row-key": True}):
+        zellen = {c.get("data-column-id"): c.get_text(" ", strip=True)
+                  for c in z.find_all(attrs={"data-column-id": True})}
+        out.append((z.get("data-row-key").strip().upper(),
+                    lambda name, zellen=zellen: zellen.get(_FV_SPALTEN.get(name, name), "")))
+    if out:
+        return out
+    tabelle = None
+    for t in soup.find_all("table"):
+        if t.find(attrs={"data-boxover-ticker": True}):
+            tabelle = t
+    if not tabelle:
+        return out
+    zeilen = tabelle.find_all("tr")
+    kopf = [x.get_text(" ", strip=True) for x in zeilen[0].find_all(["th", "td"])]
+    sp = {name: i for i, name in enumerate(kopf)}
+    for z in zeilen[1:]:
+        zellen = z.find_all("td")
+        sym = next((td.get("data-boxover-ticker").strip().upper() for td in zellen
+                    if td.get("data-boxover-ticker")), None)
+        if not sym:
+            continue
+        def feld(name, zellen=zellen):
+            i = sp.get(name)
+            return zellen[i].get_text(" ", strip=True) if i is not None and i < len(zellen) else ""
+        out.append((sym, feld))
+    return out
 
 def listen_auffrischen():
     """Indexlisten und Stammdaten neu holen. Eine Liste wird nur ersetzt, wenn sie
