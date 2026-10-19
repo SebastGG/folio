@@ -262,6 +262,11 @@ def _extract_tickers(soup) -> list[str]:
     Das Attribut `data-boxover-ticker` der Zelle trägt das Symbol unverfälscht.
 
     Fällt auf den Link `stock?t=SYMBOL` zurück, falls Finviz das Attribut aufgibt.
+
+    Seit Oktober 2026 rendert Finviz die Tabelle neu (`fv-table`, div statt td):
+    das Symbol steht dort in `data-ticker` der Ticker-Zelle und in `data-row-key`
+    der Zeile. `data-boxover-ticker` gibt es nicht mehr — ohne diesen Weg fand der
+    Screener bei unveränderter Trefferzahl keinen einzigen Ticker.
     """
     out, seen = [], set()
 
@@ -271,8 +276,16 @@ def _extract_tickers(soup) -> list[str]:
             seen.add(sym)
             out.append(sym)
 
-    for td in soup.find_all(attrs={"data-boxover-ticker": True}):
-        _add(td.get("data-boxover-ticker"))
+    for el in soup.find_all(attrs={"data-column-id": "ticker", "data-ticker": True}):
+        _add(el.get("data-ticker"))
+
+    if not out:
+        for el in soup.find_all(attrs={"role": "row", "data-row-key": True}):
+            _add(el.get("data-row-key"))
+
+    if not out:
+        for td in soup.find_all(attrs={"data-boxover-ticker": True}):
+            _add(td.get("data-boxover-ticker"))
 
     if not out:
         for a in soup.find_all("a", class_="company-ticker"):
