@@ -433,6 +433,7 @@
       <button class="btn" data-v="d126" onclick="heatmapSetze('zeitraum','d126')">6M</button>
       <button class="btn" data-v="ytd"  onclick="heatmapSetze('zeitraum','ytd')">YTD</button>
       <button class="btn" data-v="d252" onclick="heatmapSetze('zeitraum','d252')">1J</button>
+      <button class="btn" data-v="vk"   onclick="heatmapSetze('zeitraum','vk')" style="display:none" title="Abstand zum letzten Verkaufskurs">Seit Verkauf</button>
     </div>
     <div class="sep"></div>
     <span class="hm-lbl">Gruppen</span>
@@ -518,12 +519,12 @@
           </table>
           <div style="margin-top:12px;border-top:2px solid var(--border);padding-top:6px;">
             <div style="display:flex;align-items:center;gap:10px;padding:4px 6px;">
-              <span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);">Ehemalige über Verkaufskurs</span>
+              <span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);">Über letztem Verkaufskurs</span>
               <span id="ibkrExStand" style="font-size:9px;color:var(--muted);"></span>
-              <label style="font-size:9px;color:var(--muted);margin-left:auto;cursor:pointer;" title="Auch die ehemaligen Positionen zeigen, die noch unter dem letzten Verkaufskurs stehen">
-                <input type="checkbox" id="ibkrExAlle" onchange="ibkrExRender()"> alle Ehemaligen
+              <label style="font-size:9px;color:var(--muted);margin-left:auto;cursor:pointer;" title="Auch die verkauften Aktien zeigen, die noch unter dem letzten Verkaufskurs stehen">
+                <input type="checkbox" id="ibkrExAlle" onchange="ibkrExRender()"> alle Verkauften
               </label>
-              <button onclick="ibkrExLaden(true)" class="refresh-btn" style="font-size:9px;padding:2px 8px;" title="Kurse der ehemaligen Positionen neu holen">↻</button>
+              <button onclick="ibkrExLaden(true)" class="refresh-btn" style="font-size:9px;padding:2px 8px;" title="Kurse der verkauften Aktien neu holen">↻</button>
             </div>
             <table class="perf-table">
               <thead><tr>
@@ -1390,7 +1391,9 @@
         <p>
           Oben links wählst du, welche Ticker: <b>Alle Baskets</b> (jeder Wert, der in irgendeinem
           Basket steht, auch mit Gewicht 0), <b>alle Screener-Baskets</b> zusammen (jeder Basket,
-          dessen Name mit „Screener" beginnt), die <b>ganze Kursdatenbank</b> (auch Werte, die du
+          dessen Name mit „Screener" beginnt), <b>Über letztem Verkauf</b> (nur Aktien, die heute
+          über dem Kurs stehen, zu dem du sie zuletzt verkauft hast — dazu der Zeitraum
+          <b>Seit Verkauf</b>, der nach diesem Abstand einfärbt), die <b>ganze Kursdatenbank</b> (auch Werte, die du
           längst aus allen Baskets genommen hast), einen ganzen <b>Index</b> — S&amp;P 500,
           Nasdaq-100 oder Russell 2000, siehe <i>Marktdaten</i> — oder <b>einen Basket</b>. Gruppiert wird nach
           Sektor oder Basket, die Kachelgröße folgt der Marktkapitalisierung — wahlweise gedämpft
@@ -1504,12 +1507,14 @@
           <dt>+ Ehemalige</dt>
           <dd>Watchlist aller je gehandelten Aktien, die nicht mehr im Depot liegen — aktualisiert
               sich bei jedem Sync.</dd>
-          <dt>Ehemalige über Verkaufskurs</dt>
-          <dd>Abschnitt unter den Positionen: verkaufte Aktien, die nicht mehr im Depot liegen und
-              heute <b>über dem letzten Verkaufskurs</b> stehen, nach Abstand sortiert. Der
-              Verkaufskurs ist split-bereinigt. <b>alle Ehemaligen</b> zeigt auch die darunter;
-              ein Klick auf eine Zeile öffnet den Chart. Die Kurse werden beim Öffnen der Seite
-              geholt (höchstens alle 15 Minuten, <b>↻</b> erzwingt es).</dd>
+          <dt>Über letztem Verkaufskurs</dt>
+          <dd>Abschnitt unter den Positionen: Aktien, von denen du etwas verkauft hast — ganz oder
+              nur teilweise (dann mit dem Vermerk <i>im Depot</i>) — und die heute <b>über dem
+              letzten Verkaufskurs</b> stehen, nach Abstand sortiert. Der Verkaufskurs ist
+              split-bereinigt. <b>alle Verkauften</b> zeigt auch die darunter; ein Klick auf eine
+              Zeile öffnet den Chart. Die Kurse werden beim Öffnen der Seite geholt (höchstens alle
+              15 Minuten, <b>↻</b> erzwingt es). Dieselbe Auswahl gibt es als Heatmap-Quelle
+              <b>Über letztem Verkauf</b>.</dd>
         </dl>
         <p class="help-tip">
           Der Hinweisstreifen über der Positionstabelle meldet Positionen, die in keinem Basket
