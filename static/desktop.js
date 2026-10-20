@@ -2231,12 +2231,110 @@ function saveDrawingWithText(drawing) {
     } catch(e) { console.warn('saveDrawingWithText:', e); }
 }
 
+// ── Mehrfachauswahl ─────────────────────────────────────────────────────────
+// Die Bibliothek kennt nur EINE ausgewählte Zeichnung (_selectedId) und setzt
+// beim Auswählen die vorige zurück auf „normal". Die Menge _multiSelected führt
+// deshalb Folio selbst; _auswahlZeigen() hebt danach alle darin hervor.
+var _auswahlIntern = false;  // Auswahl wird gerade per Code gesetzt — Ereignisse nicht deuten
+var _auswahlHalten = false;  // nach Gruppen-Ziehen/Rahmen: der folgende Klick ersetzt die Auswahl nicht
+
+function _auswahlZeigen() {
+    if (!drawingManager) return;
+    drawingManager.getAllDrawings().forEach(function(d) {
+        if (d.id === '__preview__' || d._state === 'editing') return;
+        var soll = _multiSelected.has(d) ? 'selected' : 'normal';
+        if (d._state !== soll) d.setState(soll);
+    });
+}
+
+/** Auswahl auf genau diese Zeichnungen setzen; die letzte wird die „aktive" der Bibliothek. */
+function _auswahlSetzen(liste) {
+    if (!drawingManager) return;
+    _multiSelected.clear();
+    liste.forEach(function(d) { _multiSelected.add(d); });
+    _auswahlIntern = true;
+    try {
+        if (liste.length) drawingManager.selectDrawing(liste[liste.length - 1].id);
+        else { drawingManager.deselectAll(); _drawSelected = null; }
+    } finally { _auswahlIntern = false; }
+    _auswahlZeigen();
+}
+
+/** Eigene Zeichnungen der Ansicht (ohne Vorschau und Auto-Linien). */
+function _eigeneZeichnungen() {
+    if (!drawingManager) return [];
+    return drawingManager.getAllDrawings().filter(function(d) {
+        return d.id !== '__preview__' && !_isAutoLine(d) && !(d.options && d.options.visible === false);
+    });
+}
+
+/** x eines Ankers — auch neben den Kerzen (siehe _zeitZuX). */
+function _ankerX(time) {
+    var ts = chart.timeScale(), x = ts.timeToCoordinate(time);
+    return x !== null ? x : _zeitZuX(time, ts);
+}
+
+/** Schneidet die Strecke p–q das Rechteck r? (Liang-Barsky) */
+function _streckeImRechteck(p, q, r) {
+    var t0 = 0, t1 = 1, dx = q.x - p.x, dy = q.y - p.y;
+    var pr = [[-dx, p.x - r.x0], [dx, r.x1 - p.x], [-dy, p.y - r.y0], [dy, r.y1 - p.y]];
+    for (var i = 0; i < 4; i++) {
+        var a = pr[i][0], b = pr[i][1];
+        if (a === 0) { if (b < 0) return false; continue; }
+        var t = b / a;
+        if (a < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+        else       { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+}
+
+/** Zeichnungen, die das Rechteck (Pixel) berühren: ein Anker darin oder eine Strecke hindurch. */
+function _zeichnungenImRahmen(r) {
+    return _eigeneZeichnungen().filter(function(d) {
+        var pts = (d.anchors || []).map(function(a) {
+            return { x: _ankerX(a.time), y: csSeries.priceToCoordinate(a.price) };
+        });
+        if (d.type === 'horizontal-line' || d.type === 'horizontal-ray')
+            return pts.some(function(p) { return p.y !== null && p.y >= r.y0 && p.y <= r.y1; });
+        if (d.type === 'vertical-line')
+            return pts.some(function(p) { return p.x !== null && p.x >= r.x0 && p.x <= r.x1; });
+        pts = pts.filter(function(p) { return p.x !== null && p.y !== null; });
+        if (pts.length === 1) return _streckeImRechteck(pts[0], pts[0], r);
+        for (var i = 0; i + 1 < pts.length; i++)
+            if (_streckeImRechteck(pts[i], pts[i + 1], r)) return true;
+        return false;
+    });
+}
+
+function selectAllDrawings() {
+    var alle = _eigeneZeichnungen();
+    if (!alle.length) return false;
+    _auswahlSetzen(alle);
+    return true;
+}
+
 // ── Kopieren / Einfügen (Strg+C / Strg+V) ──────────────────────────────────
-// Zwischenablage nur im Speicher (JSON wie beim Speichern). Nach jedem Einfügen
-// wird sie durch die eingefügten Kopien ersetzt, damit mehrfaches Einfügen
-// jeweils weiter versetzt landet.
-var _drawClipboard = [];
+// Ablage = JSON wie beim Speichern + die Ansicht, aus der kopiert wurde. Sie liegt
+// zusätzlich im localStorage, damit sie Ticker-Wechsel, Neuladen und andere Tabs
+// übersteht. Eingefügt wird in der Ursprungsansicht versetzt (sonst läge die Kopie
+// genau auf dem Original), in einer anderen Ansicht auf denselben Datum/Preis —
+// wie bei TradingView. Jedes weitere Einfügen in dieselbe Ansicht rückt eine Stufe weiter.
+var _drawClipboard = null;   // { view, items, zaehler: {view: n} }
 var _PASTE_OFFSET_PX = 20;
+var _ABLAGE_KEY = 'folio.zeichnungsAblage';
+
+function _ablageLesen() {
+    try {
+        var s = localStorage.getItem(_ABLAGE_KEY);
+        if (s) return JSON.parse(s);
+    } catch(e) {}
+    return _drawClipboard;
+}
+
+function _ablageSchreiben(a) {
+    _drawClipboard = a;
+    try { localStorage.setItem(_ABLAGE_KEY, JSON.stringify(a)); } catch(e) {}
+}
 
 function _drawingJSON(drawing) {
     var json = drawing.toJSON();
@@ -2250,24 +2348,31 @@ function _drawingJSON(drawing) {
 function copySelectedDrawings() {
     var targets = _getTargets().filter(function(d) { return d && d.id !== '__preview__'; });
     if (!targets.length) return false;
-    _drawClipboard = targets.map(_drawingJSON);
+    _ablageSchreiben({ view: getViewKey(), items: targets.map(_drawingJSON), zaehler: {} });
     return true;
 }
 
 function pasteDrawings() {
     var lcd = window.LightweightChartsDrawing;
-    if (!lcd || !drawingManager || !_drawClipboard.length) return false;
+    var ablage = _ablageLesen();
+    if (!lcd || !drawingManager || !ablage || !(ablage.items || []).length) return false;
+    var view = getViewKey();
+    ablage.zaehler = ablage.zaehler || {};
+    var stufe = (ablage.zaehler[view] || 0) + (ablage.view === view ? 1 : 0);
+    var versatz = stufe * _PASTE_OFFSET_PX;
     var ts = chart.timeScale();
     var pasted = [];
-    _drawClipboard.forEach(function(d) {
+    ablage.items.forEach(function(d) {
         var Cls = lcd[_TOOL_CLASS[d.type]];
         if (typeof Cls !== 'function') return;
         var anchors = (d.anchors || []).map(function(a) {
-            var x = ts.timeToCoordinate(a.time), y = csSeries.priceToCoordinate(a.price);
-            if (x === null || y === null) return { time: a.time, price: a.price };
-            var nt = ts.coordinateToTime(x + _PASTE_OFFSET_PX);
-            var np = csSeries.coordinateToPrice(y + _PASTE_OFFSET_PX);
-            return { time: nt !== null ? nt : a.time, price: np !== null ? np : a.price };
+            var t = _snapAnchorTime(a.time);
+            if (!versatz) return { time: t, price: a.price };
+            var x = _ankerX(t), y = csSeries.priceToCoordinate(a.price);
+            if (x === null || y === null) return { time: t, price: a.price };
+            var nt = ts.coordinateToTime(x + versatz);
+            var np = csSeries.coordinateToPrice(y + versatz);
+            return { time: nt !== null ? nt : t, price: np !== null ? np : a.price };
         });
         var id = 'draw_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
         var options = Object.assign({}, d.options || {}, { visible: _drawVisible });
@@ -2278,11 +2383,10 @@ function pasteDrawings() {
         } catch(e) { console.warn('pasteDrawings:', d.type, e); }
     });
     if (!pasted.length) return false;
-    _drawClipboard = pasted.map(_drawingJSON);
+    ablage.zaehler[view] = (ablage.zaehler[view] || 0) + 1;
+    _ablageSchreiben(ablage);
     // Eingefügte Kopien auswählen, damit sie direkt verschoben werden können
-    _lastClickCtrl = false;
-    drawingManager.selectDrawing(pasted[pasted.length - 1].id);
-    pasted.forEach(function(d) { _multiSelected.add(d); });
+    _auswahlSetzen(pasted);
     return true;
 }
 
@@ -2297,12 +2401,31 @@ function initDrawingManager() {
     // Disable chart panning while dragging anchor or translating drawing
     var _xlate = null; // translate-drag state
     var _xlateActive = false;
+    var _rahmen = null; // Auswahlrahmen (Umschalt+Ziehen)
+
+    // Der Chart reagiert auf Pointer-Ereignisse: beim Rahmen gar nicht erst
+    // durchlassen, sonst verschiebt er sich mit und meldet am Ende einen Klick.
+    _dmContainer.addEventListener('pointerdown', function(e) {
+        if (e.shiftKey && e.button === 0 && !_activeToolType) e.stopPropagation();
+    }, true);
 
     _dmContainer.addEventListener('mousedown', function(e) {
         if (!drawingManager) return;
         _lastClickCtrl = e.ctrlKey || e.metaKey;
+        _auswahlHalten = false;
         var rect = _dmContainer.getBoundingClientRect();
         var pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+        // Umschalt+Ziehen: Rahmen aufziehen. Das Ereignis erreicht den Chart nicht,
+        // also kein Verschieben und kein Klick der Bibliothek.
+        if (e.shiftKey && e.button === 0 && !_activeToolType) {
+            e.preventDefault(); e.stopPropagation();
+            var el = document.createElement('div');
+            el.className = 'draw-rahmen';
+            _dmContainer.appendChild(el);
+            _rahmen = { x0: pt.x, y0: pt.y, el: el, rect: rect, dazu: _lastClickCtrl };
+            return;
+        }
 
         if (drawingManager.hitTestAnchor(pt) !== null) {
             // Anchor drag — existing behaviour
@@ -2312,17 +2435,22 @@ function initDrawingManager() {
         if (_activeToolType) return; // creating a new drawing — don't intercept
 
         var hit = drawingManager.hitTest(pt);
-        if (!hit && !_lastClickCtrl) _multiSelected.clear();
-        if (hit) {
+        if (hit && !_drawLock) {
             chart.applyOptions({ handleScroll: false, handleScale: false });
-            var ts = chart.timeScale();
+            // Gehört die Zeichnung zur Mehrfachauswahl, zieht die ganze Auswahl mit
+            var gruppe = (!_lastClickCtrl && _multiSelected.has(hit) && _multiSelected.size > 1)
+                ? Array.from(_multiSelected) : [hit];
             _xlate = {
-                drawing: hit,
                 startX: pt.x, startY: pt.y,
-                pixAnchors: hit.anchors.map(function(a) {
-                    return { x: ts.timeToCoordinate(a.time), y: csSeries.priceToCoordinate(a.price) };
-                }),
-                origAnchors: hit.anchors.map(function(a) { return { time: a.time, price: a.price }; })
+                teile: gruppe.map(function(d) {
+                    return {
+                        drawing: d,
+                        pixAnchors: d.anchors.map(function(a) {
+                            return { x: _ankerX(a.time), y: csSeries.priceToCoordinate(a.price) };
+                        }),
+                        origAnchors: d.anchors.map(function(a) { return { time: a.time, price: a.price }; })
+                    };
+                })
             };
             _xlateActive = false;
         }
@@ -2336,21 +2464,50 @@ function initDrawingManager() {
         if (!_xlateActive && dx * dx + dy * dy < 16) return; // 4 px threshold
         _xlateActive = true;
         var ts = chart.timeScale();
-        var newAnchors = _xlate.pixAnchors.map(function(ap, i) {
-            var nx = ap.x + dx, ny = ap.y + dy;
-            var nt = ts.coordinateToTime(nx), np = csSeries.coordinateToPrice(ny);
-            return (nt !== null && np !== null) ? { time: nt, price: np } : _xlate.origAnchors[i];
+        _xlate.teile.forEach(function(t) {
+            t.drawing.setAnchors(t.pixAnchors.map(function(ap, i) {
+                if (ap.x === null || ap.y === null) return t.origAnchors[i];
+                var nt = ts.coordinateToTime(ap.x + dx), np = csSeries.coordinateToPrice(ap.y + dy);
+                return (nt !== null && np !== null) ? { time: nt, price: np } : t.origAnchors[i];
+            }));
         });
-        _xlate.drawing.setAnchors(newAnchors);
     }, true);
 
     var _endXlate = function() {
-        if (_xlate && _xlateActive) saveDrawingWithText(_xlate.drawing);
+        if (_xlate && _xlateActive) {
+            _xlate.teile.forEach(function(t) { saveDrawingWithText(t.drawing); });
+            if (_xlate.teile.length > 1) _auswahlHalten = true;
+        }
         _xlate = null; _xlateActive = false;
         chart.applyOptions({ handleScroll: true, handleScale: true });
     };
     _dmContainer.addEventListener('mouseup', _endXlate, true);
     _dmContainer.addEventListener('mouseleave', _endXlate, true);
+
+    // Rahmen läuft über document, damit er auch außerhalb des Charts sauber endet
+    var _rahmenMasse = function(e) {
+        var x = Math.max(0, Math.min(_rahmen.rect.width,  e.clientX - _rahmen.rect.left));
+        var y = Math.max(0, Math.min(_rahmen.rect.height, e.clientY - _rahmen.rect.top));
+        return { x0: Math.min(_rahmen.x0, x), x1: Math.max(_rahmen.x0, x),
+                 y0: Math.min(_rahmen.y0, y), y1: Math.max(_rahmen.y0, y) };
+    };
+    document.addEventListener('mousemove', function(e) {
+        if (!_rahmen) return;
+        var r = _rahmenMasse(e), s = _rahmen.el.style;
+        s.left = r.x0 + 'px'; s.top = r.y0 + 'px';
+        s.width = (r.x1 - r.x0) + 'px'; s.height = (r.y1 - r.y0) + 'px';
+    });
+    document.addEventListener('mouseup', function(e) {
+        if (!_rahmen) return;
+        var r = _rahmenMasse(e), dazu = _rahmen.dazu;
+        _rahmen.el.remove();
+        _rahmen = null;
+        _auswahlHalten = true;   // falls der Chart doch noch einen Klick meldet
+        if (r.x1 - r.x0 < 4 && r.y1 - r.y0 < 4) return;   // nur geklickt
+        var treffer = _zeichnungenImRahmen(r);
+        if (dazu) treffer = Array.from(_multiSelected).concat(treffer.filter(function(d) { return !_multiSelected.has(d); }));
+        _auswahlSetzen(treffer);
+    });
 
     // Hilfsfunktion: Preview-Zeichnung erstellen/aktualisieren
     function _refreshPreview(anchors) {
@@ -2424,9 +2581,19 @@ function initDrawingManager() {
         deleteDrawing(id);
     });
     drawingManager.on('drawing:selected', function(evt) {
-        _drawSelected = evt && (evt.drawing || null);
-        if (!_lastClickCtrl) _multiSelected.clear();
-        if (_drawSelected) _multiSelected.add(_drawSelected);
+        var d = evt && (evt.drawing || null);
+        if (!_auswahlIntern && !(_auswahlHalten && _multiSelected.has(d))) {
+            if (_lastClickCtrl && d && _multiSelected.has(d)) {
+                // Strg+Klick auf eine schon ausgewählte Zeichnung: abwählen
+                _multiSelected.delete(d);
+                _auswahlSetzen(Array.from(_multiSelected));
+                return;
+            }
+            if (!_lastClickCtrl) _multiSelected.clear();
+            if (d) _multiSelected.add(d);
+        }
+        _drawSelected = d;
+        _auswahlZeigen();
         if (_drawSelected && _drawSelected.style) {
             var inp = document.getElementById('dsColor');
             var c = _drawSelected.style.lineColor || '#2962ff';
@@ -2434,15 +2601,13 @@ function initDrawingManager() {
             _syncDashButtons(_drawSelected.style.lineDash);
         }
     });
-    drawingManager.on('drawing:deselected', function(evt) {
-        var d = evt && (evt.drawing || null);
-        if (!_lastClickCtrl) {
-            _drawSelected = null;
-            _multiSelected.clear();
-        } else if (d) {
-            // Ctrl gehalten: aus Menge entfernen statt alles leeren
-            _multiSelected.delete(d);
-        }
+    drawingManager.on('drawing:deselected', function() {
+        // Klick ins Leere leert die Auswahl — außer mit Strg, nach Gruppen-Ziehen
+        // oder wenn Folio die Auswahl gerade selbst setzt
+        if (_auswahlIntern || _lastClickCtrl || _auswahlHalten) return;
+        _drawSelected = null;
+        _multiSelected.clear();
+        _auswahlZeigen();
     });
     drawingManager.on('drawing:updated', function(evt) {
         var d = evt && (evt.drawing || null);
@@ -2579,6 +2744,7 @@ function _snapAnchorTime(time) {
 function onDrawingsLoaded(data) {
     if (!drawingManager) return;
     drawingManager.clearAll();
+    _multiSelected.clear(); _drawSelected = null;   // clearAll meldet kein Abwählen
     refreshAutoLines();   // clearAll hat auch die Auto-Linien entfernt
     _importDrawings(data);
     // Zum Schluss wie der Fit-Knopf einpassen. Zeichnungen und Auto-Linien gehen
@@ -2617,6 +2783,7 @@ function _importDrawings(data) {
 // Wird von shared.js clearAllDrawings() aufgerufen
 function onDrawingsCleared() {
     if (drawingManager) drawingManager.clearAll();
+    _multiSelected.clear(); _drawSelected = null;
     refreshAutoLines();
 }
 
@@ -3145,16 +3312,20 @@ document.addEventListener('keydown', function(e) {
         var k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey)              { e.preventDefault(); verlaufSchritt(true);  return; }
         if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); verlaufSchritt(false); return; }
-        // Strg+C / Strg+V: Zeichnungen duplizieren. Ohne Auswahl bzw. leere
-        // Zwischenablage bleibt das normale Browser-Verhalten.
-        if (k === 'c' && !e.shiftKey && copySelectedDrawings()) { e.preventDefault(); return; }
-        if (k === 'v' && !e.shiftKey && pasteDrawings())        { e.preventDefault(); return; }
     }
     // ↑/↓ blättern die Kursliste nur auf der Charts-Seite. Sonst blockierten sie das
     // Scrollen der anderen Seiten (Heatmap-Liste, Hilfe, Protokoll) und wechselten
     // im Hintergrund den Chart.
     var vc = document.getElementById('view-charts');
     var chartsAktiv = !vc || vc.classList.contains('active');
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && chartsAktiv) {
+        // Strg+C / Strg+V: Zeichnungen kopieren, auch in einen anderen Ticker.
+        // Strg+A: alle Zeichnungen der Ansicht. Ohne Auswahl, ohne Ablage bzw. ohne
+        // Zeichnungen bleibt das normale Browser-Verhalten.
+        if (k === 'c' && copySelectedDrawings()) { e.preventDefault(); return; }
+        if (k === 'v' && pasteDrawings())        { e.preventDefault(); return; }
+        if (k === 'a' && selectAllDrawings())    { e.preventDefault(); return; }
+    }
     if (chartsAktiv && e.key === 'ArrowDown') { e.preventDefault(); navigateWatchlist(+1); }
     if (chartsAktiv && e.key === 'ArrowUp')   { e.preventDefault(); navigateWatchlist(-1); }
     // Delete/Backspace → ausgewählte Zeichnung(en) löschen
@@ -3167,6 +3338,7 @@ document.addEventListener('keydown', function(e) {
     // Escape → Zeichnungsmodus beenden
     if (e.key === 'Escape') {
         if (typeof setDrawTool === 'function') setDrawTool(null);
+        if (_multiSelected.size || _drawSelected) _auswahlSetzen([]);
         document.querySelectorAll('.draw-group').forEach(function(g) { g.classList.remove('open'); });
     }
 });
