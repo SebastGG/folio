@@ -429,6 +429,10 @@ header {
   background: var(--chart-bg, var(--bg));
 }
 #chartContainer { width: 100%; height: 100%; position: relative; z-index: 2; }
+/* Auswahlrahmen für Zeichnungen (Umschalt+Ziehen) */
+.draw-rahmen { position: absolute; z-index: 10; pointer-events: none;
+               border: 1px dashed var(--accent);
+               background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* Ticker-Wasserzeichen im Hintergrund (scheint durch den transparenten Chart) */
 .chart-watermark {
