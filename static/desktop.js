@@ -743,15 +743,21 @@ function _drawTradeMarkers(target) {
 function _snapEarningsTime(date) {
     var bars = _lastCandles;
     if (!bars || !bars.length) return null;
-    if (chartTF() === '1H') return _snapTradeTime(date);   // künftige Termine: keine Zukunftsachse
-    // Vergangenheit / innerhalb der Kerzen: Balken, in den der Termin fällt (wie Trades)
-    if (date <= bars[bars.length - 1].time) {
+    var tf = chartTF();
+    if (tf === '1H') return _snapTradeTime(date);   // künftige Termine: keine Zukunftsachse
+    // Wochen-/Monatskerzen tragen das Datum ihres Beginns. Verglichen wird deshalb der
+    // Beginn der Periode, in die der Termin fällt — sonst rutschte ein Termin später in
+    // der laufenden Woche als „Zukunft" in die Folgewoche, und ein künftiger Freitag
+    // ebenso (der nächste Montag liegt näher als der davor). 1D: der Tag selbst.
+    var key = periodStartFor(date, tf);
+    // Vergangenheit / laufende Periode: Balken, in den der Termin fällt (wie Trades)
+    if (key <= bars[bars.length - 1].time) {
         if (date < bars[0].time) return null;   // vor dem Chartbeginn
         return _snapTradeTime(date);
     }
-    // Zukunft: nächstgelegener Ghost-Tag
-    if (!_ghostDates.length || date > _ghostDates[_ghostDates.length - 1]) return null;
-    var best = _ghostDates[0], bestDiff = Infinity, tMs = new Date(date).getTime();
+    // Zukunft: Ghost-Kerze der Periode (1D: nächstgelegener Ghost-Tag)
+    if (!_ghostDates.length || key > _ghostDates[_ghostDates.length - 1]) return null;
+    var best = _ghostDates[0], bestDiff = Infinity, tMs = new Date(key).getTime();
     for (var i = 0; i < _ghostDates.length; i++) {
         var diff = Math.abs(new Date(_ghostDates[i]).getTime() - tMs);
         if (diff < bestDiff) { bestDiff = diff; best = _ghostDates[i]; }
