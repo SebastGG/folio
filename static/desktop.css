@@ -1307,3 +1307,4 @@ footer {
   border-radius: 3px; padding: 2px 8px; white-space: nowrap;
 }
 .kz-taste.aufnahme { border-color: var(--accent); color: var(--accent); }
+.scr-auto-fehler { color: var(--red); }
