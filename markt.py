@@ -104,6 +104,9 @@ _thread    = None
 _log       = collections.deque(maxlen=300)
 _runde     = {"laeuft": False}
 _tagesrunde = {"laeuft": False}
+# Wird nach jeder vollständigen Tagesrunde aufgerufen (main.py: automatisches Screening).
+# Läuft im Sammler-Thread — wer länger braucht, startet einen eigenen.
+nach_tagesrunde: list = []
 _live      = {"laeuft": False}
 _drossel_ensure: dict = {}
 _drossel_lock = threading.Lock()
@@ -1376,6 +1379,26 @@ def _tagesrunde_fahren(soll: float):
     finally:
         mc.close()
         _tagesrunde.update(laeuft=False, aktuell=None, phase=None)
+    if not abbruch:
+        for fn in list(nach_tagesrunde):
+            try:
+                fn()
+            except Exception as e:
+                log(1, f"Nach der Tagesrunde: {e}")
+
+def tagesrunde_ende() -> float:
+    """Zeitpunkt der letzten vollständigen Tagesrunde, 0 = noch keine."""
+    if VERZ is None:
+        return 0.0
+    mc = _db(_pfad_markt())
+    try:
+        return _meta_zahl(mc, "tagesrunde_ende")
+    finally:
+        mc.close()
+
+def berlin_datum(ts: float) -> str:
+    """„YYYY-MM-DD" in Berliner Zeit."""
+    return _berlin(ts).strftime("%Y-%m-%d")
 
 def _arbeit_tages():
     mc = _db(_pfad_markt())

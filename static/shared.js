@@ -35,6 +35,11 @@ var WEIGHTS       = {};  // { AAPL: 10, GOOGL: 5 } — Anzahl Aktien pro Ticker
 var TICKERS       = [];  // Alle Ticker mit Daten in der DB
 var baskets       = {};  // { basket_id: { name, weights, period, tf, ... } }
 var currentBasket = '';  // Aktiver Basket-ID
+// Automatisches Screening (main.py): Stand der Läufe, den dieser Browser geladen
+// hat — geht beim Speichern mit, damit der Server Nacht-Treffer wieder einmischt,
+// die dieser Tab noch nicht kennt. Dazu der jüngste Lauf für die „neu"-Marke.
+var screenerAutoStand   = 0;
+var screenerAutoLetzter = null;
 // Aussehen (pro Nutzer in der Config gespeichert). Defaults = bisheriges Aussehen.
 // chartBg (optional) = eigene Hintergrundfarbe des Charts, '' bedeutet „wie Theme".
 var appearance    = { theme: 'light', contrast: 'normal', fontSize: 'compact', accent: 'green' };
@@ -1030,6 +1035,8 @@ async function loadConfig() {
         var cfg = await r.json();
         baskets       = cfg.baskets       || {};
         currentBasket = cfg.currentBasket || '';
+        screenerAutoStand   = cfg.screenerAutoStand || 0;
+        screenerAutoLetzter = cfg.screenerAutoLetzter || null;
         // Aussehen wiederherstellen und anwenden
         appearance    = Object.assign(appearance, cfg.appearance || {});
         if (typeof applyAppearance === 'function') applyAppearance();
@@ -1087,7 +1094,8 @@ async function saveBasketsToServer(quelle) {
         var r = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance, layout: _layout || {} })
+            body: JSON.stringify({ baskets: baskets, currentBasket: currentBasket, appearance: appearance,
+                                   layout: _layout || {}, screenerAutoStand: screenerAutoStand })
         });
         // Aus einem Screener-Basket entfernte Werte wandern serverseitig auf die
         // Blacklist. Ins Protokoll, damit das nicht unsichtbar passiert.
@@ -1101,6 +1109,17 @@ async function saveBasketsToServer(quelle) {
                 console.error('[Config] ' + res.error);
             }
             return res;
+        }
+        // Der Server hat Treffer eines automatischen Screenings eingemischt, die
+        // dieser Tab noch nicht kannte — neu laden, sonst fehlen sie hier weiter
+        // und wären beim nächsten Speichern wieder ein Fall fürs Einmischen.
+        if (res && res.nachgeladen) {
+            logIt(3, 'Screener', res.nachgeladen + ' Ticker aus dem automatischen Screening nachgeladen');
+            await loadConfig();
+            if (typeof switchBasket === 'function' && baskets[currentBasket]) {
+                WEIGHTS = Object.assign({}, baskets[currentBasket].weights || {});
+                await switchBasket(currentBasket);
+            }
         }
         var gesperrt = (res && res.blacklisted) || [];
         if (gesperrt.length && typeof logIt === 'function') {

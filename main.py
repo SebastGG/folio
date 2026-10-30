@@ -1729,7 +1729,13 @@ async def clear_drawings(request: Request, view: str = "index:default"):
 async def get_config(request: Request):
     user = get_user(request)
     files = get_user_files(user)
-    return JSONResponse(content=load_config(files["config"]))
+    cfg = load_config(files["config"])
+    # Stand der automatischen Läufe, den dieser Browser kennt — kommt beim
+    # Speichern zurück (siehe _screener_auto_einmischen)
+    laeufe = _screener_auto_load(user)["laeufe"]
+    cfg["screenerAutoStand"] = max((float(l.get("ts") or 0) for l in laeufe), default=0)
+    cfg["screenerAutoLetzter"] = _screener_auto_letzter(user)
+    return JSONResponse(content=cfg)
 
 @app.post("/api/config")
 async def set_config(request: Request):
@@ -1743,7 +1749,18 @@ async def set_config(request: Request):
     user  = get_user(request)
     files = get_user_files(user)
     neu   = await request.json()
+    # Nur Begleitinformation, gehört nicht in die Datei. Fehlt der Stand (Tab von
+    # vor dem Update), gilt er als 0: dann wird alles Bekannte eingemischt.
+    try:
+        stand = float(neu.pop("screenerAutoStand", 0) or 0)
+    except (TypeError, ValueError):
+        stand = 0.0
+    neu.pop("screenerAutoLetzter", None)
+    with _config_lock:
+        return _config_speichern(request, user, files, neu, stand)
 
+
+def _config_speichern(request: Request, user: str, files: dict, neu: dict, stand: float):
     # Notbremse: einen vorhandenen Bestand an Portfolios nicht durch nichts
     # ersetzen. Am 2026-09-14 hat die Oberfläche beim Laden einer leer
     # angekommenen Config selbsttätig ein „Mein Portfolio" angelegt und
@@ -1771,6 +1788,13 @@ async def set_config(request: Request):
                                           f"Bitte die Seite neu laden."},
                                 status_code=409)
 
+    # Was automatische Läufe nach dem Laden dieses Browsers ergänzt haben, kennt er
+    # nicht — ohne Einmischen wäre es weg und stünde dazu auf der Blacklist
+    nachgeladen = 0
+    try:
+        nachgeladen = _screener_auto_einmischen(user, alt, neu, stand)
+    except Exception as e:
+        print(f"[Config] Einmischen der automatischen Läufe fehlgeschlagen: {e}")
     gesperrt = []
     if request.query_params.get("quelle") != "screener":
         try:
@@ -1778,7 +1802,7 @@ async def set_config(request: Request):
         except Exception as e:
             print(f"Blacklist-Protokoll fehlgeschlagen: {e}")   # Speichern geht trotzdem weiter
     save_config_data(files["config"], neu)
-    return JSONResponse(content={"ok": True, "blacklisted": gesperrt})
+    return JSONResponse(content={"ok": True, "blacklisted": gesperrt, "nachgeladen": nachgeladen})
 
 @app.get("/api/config/sicherungen")
 async def config_sicherungen(request: Request):
@@ -5435,6 +5459,8 @@ def _sanitize_screener_settings(body: dict) -> dict:
         out["maerkte"] = [m for m in (body.get("maerkte") or []) if m in universen.UNIVERSEN]
     if "junge" in body:
         out["junge"] = bool(body.get("junge"))
+    if "auto" in body:
+        out["auto"] = bool(body.get("auto"))
     return out
 
 
@@ -5448,15 +5474,26 @@ async def screener_settings_get(request: Request):
         return JSONResponse(content={})
     try:
         with open(path) as f:
-            return JSONResponse(content=_sanitize_screener_settings(json.load(f)))
+            daten = _sanitize_screener_settings(json.load(f))
     except Exception:
         return JSONResponse(content={})
+    # Nur zur Anzeige — wird beim Speichern nicht zurückgeschrieben (sanitize)
+    daten["auto_letzter"] = _screener_auto_letzter(user)
+    return JSONResponse(content=daten)
 
 
 @app.post("/api/screener/settings")
 async def screener_settings_set(request: Request):
     user = get_user(request)
     data = _sanitize_screener_settings(await request.json())
+    if data.get("auto"):
+        # Frisch eingeschaltet: der erste Lauf kommt nach der nächsten Tagesrunde,
+        # nicht sofort mit einem halb fertig eingestellten Formular
+        auto = _screener_auto_load(user)
+        if not auto["stand_runde"] and not auto["laeufe"]:
+            _markt_bereit()
+            auto["stand_runde"] = markt.tagesrunde_ende()
+            _screener_auto_save(user, auto)
     path = _screener_settings_path(user)
     tmp  = path + ".tmp"
     with open(tmp, "w") as f:
@@ -5757,6 +5794,249 @@ async def _screener_run_lokal(user: str, body: dict):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     _save_last_screener_job(user, job_id)
     return {"ok": True, "job_id": job_id, "blacklist": len(gesperrt)}
+
+
+# ── Automatisches Screening nach der Tagesrunde ────────────────────────────────
+# Wer es in den Screener-Einstellungen einschaltet (`auto`), bekommt nach jeder
+# vollständigen Tagesrunde des Sammlers (Mo–Fr ab 22:30) einen Lauf mit seinen
+# gespeicherten Einstellungen; neue Treffer werden wie mit „Baskets anlegen"
+# nachgetragen. Läuft der Sammler nicht durch, gibt es auch kein Screening — auf
+# halbfrischen Kursen zu rechnen, brächte Treffer von gestern.
+#
+# Merkzettel je Benutzer in screener_auto.json:
+#   stand_runde  Ende der Tagesrunde, die zuletzt gescreent wurde
+#   laeufe       die letzten Läufe mit dem, was sie nachgetragen haben
+# `laeufe` braucht POST /api/config: ein Browser-Tab, der vor dem Lauf geladen
+# wurde, schickt beim nächsten Speichern seine alten Baskets — ohne die Nacht-
+# Treffer. Die würden sonst still verschwinden und, weil sie aus einem Screener-
+# Basket „entfernt" wurden, sogar auf die Blacklist wandern.
+
+SCREENER_AUTO_LAEUFE = 30          # so viele Läufe bleiben auf dem Merkzettel
+_screener_auto_lock = threading.Lock()   # nie zwei Durchgänge gleichzeitig
+_config_lock        = threading.Lock()   # Lesen–Ändern–Schreiben der Config
+
+
+def _screener_auto_path(user: str) -> str:
+    return os.path.join(get_user_dir(user), "screener_auto.json")
+
+
+def _screener_auto_load(user: str) -> dict:
+    daten = {"stand_runde": 0.0, "laeufe": []}
+    try:
+        with open(_screener_auto_path(user)) as f:
+            roh = json.load(f)
+        daten["stand_runde"] = float(roh.get("stand_runde") or 0)
+        daten["laeufe"] = [l for l in (roh.get("laeufe") or []) if isinstance(l, dict)]
+    except (OSError, ValueError, TypeError):
+        pass
+    return daten
+
+
+def _screener_auto_save(user: str, daten: dict):
+    path = _screener_auto_path(user)
+    tmp  = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(daten, f, indent=2)
+    shutil.move(tmp, path)
+
+
+def _screener_settings_load(user: str) -> dict:
+    try:
+        with open(_screener_settings_path(user)) as f:
+            return _sanitize_screener_settings(json.load(f))
+    except (OSError, ValueError):
+        return {}
+
+
+def _screener_auto_benutzer() -> list[str]:
+    """Benutzer mit eingeschaltetem Automatik-Lauf. `_markt` & Co. sind keine Benutzer."""
+    raus = []
+    for name in sorted(os.listdir(BASE_DATA_DIR)):
+        if name.startswith((".", "_")) or not os.path.isdir(os.path.join(BASE_DATA_DIR, name)):
+            continue
+        if not os.path.exists(os.path.join(BASE_DATA_DIR, name, "screener_settings.json")):
+            continue
+        if _screener_settings_load(name).get("auto"):
+            raus.append(name)
+    return raus
+
+
+def _screener_nachtragen(cfg: dict, results: dict, datum: str):
+    """Treffer je Sektor in die festen Baskets „Screener {Sektor}" — wie
+    screenerToBaskets() in desktop.js: Vorhandenes bleibt, wie es ist, Neues kommt
+    mit Gewicht 1 und `neuSeit` dazu, fehlende Sektor-Baskets werden angelegt.
+    @returns ({basket_id: [ergänzte Ticker]}, [neu angelegte basket_ids])"""
+    baskets = cfg.setdefault("baskets", {})
+    nach_name = {b.get("name"): bid for bid, b in baskets.items() if isinstance(b, dict)}
+    grenze = time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400))
+    ergaenzt, angelegt = {}, []
+    for i, (sektor, tickers) in enumerate(sorted(results.items())):
+        if not tickers:
+            continue
+        name = SCREENER_BASKET_PREFIX + sektor
+        bid  = nach_name.get(name)
+        if bid:
+            b = baskets[bid]
+            w = b.get("weights") if isinstance(b.get("weights"), dict) else {}
+            # Wie _screenerNeuAufraeumen(): nur was noch drin und keine Woche alt ist
+            neu_seit = {t: d for t, d in (b.get("neuSeit") or {}).items()
+                        if w.get(t) is not None and str(d) >= grenze}
+            dazu = [t for t in tickers if w.get(t) is None]
+            for t in dazu:
+                w[t] = 1
+                neu_seit[t] = datum
+            b["weights"], b["neuSeit"] = w, neu_seit
+            if dazu:
+                ergaenzt[bid] = dazu
+        else:
+            bid = f"basket_{int(time.time() * 1000) + i}"
+            baskets[bid] = {
+                "name": name,
+                "weights": {t: 1 for t in tickers},
+                "period": 180, "tf": "1D", "perfSinceDate": "",
+                "indicators": {"ma50": False, "ma200": False, "reg": False},
+                "logScale": False,
+                "showIndex": False,   # wie im Frontend: Screener-Baskets nicht als Index
+                "neuSeit": {t: datum for t in tickers},
+            }
+            angelegt.append(bid)
+            ergaenzt[bid] = list(tickers)
+    return ergaenzt, angelegt
+
+
+def _screener_auto_lauf(user: str, st: dict) -> dict:
+    """Ein Screening mit den gespeicherten Einstellungen, Treffer in die Baskets.
+    Gibt den Eintrag für den Merkzettel zurück."""
+    jetzt = time.time()
+    lauf = {"ts": jetzt, "datum": markt.berlin_datum(jetzt), "treffer": 0, "neu": 0,
+            "ergaenzt": {}, "angelegt": []}
+    maerkte = st.get("maerkte") or []
+    if not maerkte:
+        lauf["fehler"] = "Kein Markt ausgewählt"
+        return lauf
+    mult = 1_000_000_000 if st.get("unit", "Mrd $") == "Mrd $" else 1_000_000
+    mn, mx = float(st.get("cap_min") or 0), float(st.get("cap_max") or 0)
+    filters = screener.sanitize_filters((st.get("filters") or []) + (st.get("custom") or []))
+    bl = _screener_blacklist_load(user)
+    gesperrt = set(_screener_aktive_sperren(bl)) if bl.get("active", True) else set()
+    try:
+        job_id = screening.start_job(maerkte, int(mn * mult) if mn > 0 else None,
+                                     int(mx * mult) if mx > 0 else None, st.get("unit", "Mrd $"),
+                                     filters, blacklist=gesperrt, junge=bool(st.get("junge")))
+    except ValueError as e:
+        lauf["fehler"] = str(e)
+        return lauf
+    frist = time.time() + 1800
+    s = screener.get_status(job_id)
+    while s and s.get("status") == "running" and time.time() < frist:
+        time.sleep(2)
+        s = screener.get_status(job_id)
+    if not s or s.get("status") != "done":
+        lauf["fehler"] = (s or {}).get("error") or "Screening nicht fertig geworden"
+        return lauf
+    results = s.get("results") or {}
+    lauf["treffer"] = sum(len(t) for t in results.values())
+    if s.get("warning"):
+        lauf["warnung"] = s["warning"]
+    files = get_user_files(user)
+    with _config_lock:
+        cfg = load_config(files["config"])
+        ergaenzt, angelegt = _screener_nachtragen(cfg, results, lauf["datum"])
+        if ergaenzt:
+            save_config_data(files["config"], cfg)
+    lauf["ergaenzt"], lauf["angelegt"] = ergaenzt, angelegt
+    lauf["neu"] = sum(len(t) for t in ergaenzt.values())
+    return lauf
+
+
+def _screener_auto_pruefen():
+    """Für jeden Benutzer mit Automatik: gibt es eine Tagesrunde, die er noch nicht
+    gescreent hat? Läuft nach der Tagesrunde und einmal nach dem Start (falls die
+    App dazwischen neu gestartet wurde)."""
+    if not _screener_auto_lock.acquire(blocking=False):
+        return
+    try:
+        ende = markt.tagesrunde_ende()
+        if not ende:
+            return
+        for user in _screener_auto_benutzer():
+            auto = _screener_auto_load(user)
+            if auto["stand_runde"] >= ende:
+                continue
+            try:
+                lauf = _screener_auto_lauf(user, _screener_settings_load(user))
+            except Exception as e:
+                lauf = {"ts": time.time(), "datum": markt.berlin_datum(time.time()),
+                        "treffer": 0, "neu": 0, "ergaenzt": {}, "angelegt": [],
+                        "fehler": f"Screening fehlgeschlagen: {e}"}
+            auto["stand_runde"] = ende
+            auto["laeufe"] = (auto["laeufe"] + [lauf])[-SCREENER_AUTO_LAEUFE:]
+            _screener_auto_save(user, auto)
+            markt.log(1 if lauf.get("fehler") else 4,
+                      f"Automatisches Screening ({user}): "
+                      + (lauf["fehler"] if lauf.get("fehler")
+                         else f"{lauf['neu']} neu von {lauf['treffer']} Treffern"))
+    finally:
+        _screener_auto_lock.release()
+
+
+def _screener_auto_anstossen():
+    threading.Thread(target=_screener_auto_pruefen, daemon=True, name="screener-auto").start()
+
+
+markt.nach_tagesrunde.append(_screener_auto_anstossen)
+
+
+async def _screener_auto_nach_start():
+    # Kurz warten, damit der Start nicht mit einem Screening beginnt
+    threading.Timer(90, _screener_auto_pruefen).start()
+
+if hasattr(app, "on_event"):
+    app.on_event("startup")(_screener_auto_nach_start)
+
+
+def _screener_auto_letzter(user: str):
+    """Der jüngste Lauf ohne die Ticker-Listen — für Oberfläche und „neu"-Marke."""
+    laeufe = _screener_auto_load(user)["laeufe"]
+    if not laeufe:
+        return None
+    l = laeufe[-1]
+    return {k: l.get(k) for k in ("ts", "datum", "treffer", "neu", "warnung", "fehler")
+            if l.get(k) is not None}
+
+
+def _screener_auto_einmischen(user: str, alt: dict, neu: dict, stand: float) -> int:
+    """Trägt in eine gesendete Config nach, was automatische Läufe nach `stand`
+    (dem Stand, den der Browser geladen hatte) ergänzt haben und der Browser
+    deshalb nicht kennen kann. Nur, was auf dem Server noch drinsteht — was der
+    Benutzer seitdem woanders entfernt hat, bleibt draußen.
+    @returns Anzahl wieder eingemischter Ticker"""
+    alt_b = alt.get("baskets") or {}
+    neu_b = neu.setdefault("baskets", {})
+    n = 0
+    for lauf in _screener_auto_load(user)["laeufe"]:
+        if float(lauf.get("ts") or 0) <= stand:
+            continue
+        for bid, tickers in (lauf.get("ergaenzt") or {}).items():
+            server = alt_b.get(bid)
+            if not isinstance(server, dict):
+                continue
+            if bid not in neu_b:
+                if bid in (lauf.get("angelegt") or []):   # in der Nacht angelegt
+                    neu_b[bid] = server
+                    n += len(server.get("weights") or {})
+                continue
+            b = neu_b[bid]
+            w = b.setdefault("weights", {})
+            sw = server.get("weights") or {}
+            for t in tickers:
+                if w.get(t) is None and sw.get(t) is not None:
+                    w[t] = sw[t]
+                    if not isinstance(b.get("neuSeit"), dict):
+                        b["neuSeit"] = {}
+                    b["neuSeit"][t] = lauf.get("datum")
+                    n += 1
+    return n
 
 
 @app.get("/api/screener/last")

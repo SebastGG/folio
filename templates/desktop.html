@@ -713,6 +713,16 @@
         </div>
       </div>
 
+      <div class="scr-row">
+        <span class="scr-label">Automatisch</span>
+        <div>
+          <label class="scr-junge" title="Startet, sobald der Sammler die Tageskurse vollständig geholt hat (Mo–Fr ab 22:30). Bricht der Sammler ab, wird nicht gescreent.">
+            <input type="checkbox" id="scr-auto"> nach jeder Tagesrunde des Sammlers mit diesen Einstellungen screenen und neue Treffer in die Baskets nachtragen
+          </label>
+          <span id="scr-auto-info" class="settings-hint"></span>
+        </div>
+      </div>
+
       <div class="settings-actions">
         <button id="scr-btn-run"     class="scr-btn scr-btn-run"     onclick="screenerStart()">▶ Screening starten</button>
         <button id="scr-btn-baskets" class="scr-btn scr-btn-baskets" onclick="screenerToBaskets()" disabled
@@ -1708,6 +1718,14 @@
               <span class="wl-neu">neu</span>. Aussortiertes kommt nicht zurück, solange die Sperrzeit
               läuft. Willst du wirklich bei null anfangen, nimm <b>Screener-Baskets löschen</b>.</li>
         </ol>
+        <p>
+          <b>Automatisch:</b> Mit dem Haken <b>Automatisch</b> screent Folio nach jeder vollständigen
+          Tagesrunde des Sammlers (Mo–Fr ab 22:30) mit den eingestellten Märkten und Filtern und trägt
+          neue Treffer in die Screener-Baskets nach — morgens liegen sie bereit und tragen die Marke
+          <span class="wl-neu">neu</span> bis zum nächsten automatischen Lauf. Kommt der Sammler nicht
+          durch, wird nicht gescreent. Ein Browser-Tab, der noch vom Vortag offen ist, verliert die
+          Nacht-Treffer beim Speichern nicht: der Server mischt sie wieder ein.
+        </p>
         <p>
           <b>Junge Werte:</b> Wer erst seit drei Monaten gehandelt wird, hat keinen SMA200 — ein Filter,
           für den die Historie fehlt, gilt als nicht erfüllt. Mit <b>junge Werte (IPOs) prüfen</b> wird er

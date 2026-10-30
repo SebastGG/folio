@@ -1268,10 +1268,14 @@ function renderWatchlist() {
     var ibkrVals = ibkrWatchlistValues();
     // × zum Entfernen — nicht in IBKR-Baskets, die baut der Sync ohnehin neu.
     var entfernbar = !basketIstVerwaltet(baskets[currentBasket]);
-    // Vom Screener heute ergänzte Ticker — „neu" gilt nur am ersten Tag
+    // Vom Screener ergänzte Ticker — „neu" gilt am Tag selbst und, wenn sie aus
+    // dem automatischen Lauf kommen, bis zum nächsten automatischen Lauf
     var heute = heuteLokal(), neuHeute = {};
+    var autoDatum = (screenerAutoLetzter && !screenerAutoLetzter.fehler && screenerAutoLetzter.datum) || '';
     var neuSeit = (baskets[currentBasket] || {}).neuSeit || {};
-    Object.keys(neuSeit).forEach(function(t) { if (neuSeit[t] === heute) neuHeute[t] = true; });
+    Object.keys(neuSeit).forEach(function(t) {
+        if (neuSeit[t] === heute || (autoDatum && neuSeit[t] >= autoDatum)) neuHeute[t] = true;
+    });
 
     // Ticker (alphabetisch) — dieselbe Reihenfolge nehmen die Pfeiltasten
     watchlistTicker().forEach(function(sym) {
@@ -6574,9 +6578,11 @@ function _scrCollectSettings() {
     var num = function (id) { return parseFloat((document.getElementById(id) || {}).value) || 0; };
     var unitEl = document.getElementById('scr-cap-unit');
     var jung = document.getElementById('scr-junge');
+    var auto = document.getElementById('scr-auto');
     return {
         maerkte: _scrSelectedMaerkte(),
         junge:   !!(jung && jung.checked),
+        auto:    !!(auto && auto.checked),
         indexes: _scrSelectedIndexes(),
         cap_min: num('scr-cap-min'),
         cap_max: num('scr-cap-max'),
@@ -6600,6 +6606,9 @@ function _scrApplySettings(st) {
     }
     var jung = document.getElementById('scr-junge');
     if (jung && st.junge != null) jung.checked = !!st.junge;
+    var auto = document.getElementById('scr-auto');
+    if (auto && st.auto != null) auto.checked = !!st.auto;
+    _scrAutoInfo(st.auto_letzter);
     if (Array.isArray(st.indexes)) {
         document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
             cb.checked = st.indexes.indexOf(cb.dataset.idx) >= 0;
@@ -6622,6 +6631,29 @@ function _scrApplySettings(st) {
 }
 
 var _scrSaveTimer = null;
+
+/* Zeile unter dem Automatik-Haken: was der letzte Lauf gebracht hat. */
+function _scrAutoInfo(letzter) {
+    _SCR.autoLetzter = letzter || null;
+    var el = document.getElementById('scr-auto-info');
+    var an = (document.getElementById('scr-auto') || {}).checked;
+    if (!el) return;
+    el.className = 'settings-hint';
+    if (!letzter) {
+        el.textContent = an ? '↳ Der erste Lauf startet nach der nächsten Tagesrunde des Sammlers.' : '';
+        return;
+    }
+    var wann = new Date(letzter.ts * 1000).toLocaleString('de-DE',
+        { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    if (letzter.fehler) {
+        el.textContent = '⚠ Letzter automatischer Lauf ' + wann + ' fehlgeschlagen: ' + letzter.fehler;
+        el.className = 'settings-hint scr-auto-fehler';
+        return;
+    }
+    el.textContent = '↳ Letzter automatischer Lauf ' + wann + ': ' + letzter.neu + ' neu von '
+        + letzter.treffer + ' Treffern' + (letzter.warnung ? ' — ⚠ ' + letzter.warnung : '')
+        + (an ? '' : ' (Automatik ist aus)');
+}
 
 /**
  * Speichert die Einstellungen kurz nach der letzten Änderung. Gesammelt, weil
@@ -6703,6 +6735,9 @@ async function screenerResetSettings() {
     });
     var jung = document.getElementById('scr-junge');
     if (jung) jung.checked = false;
+    var auto = document.getElementById('scr-auto');
+    if (auto) auto.checked = false;
+    _scrAutoInfo(null);
     document.querySelectorAll('#scr-indexes input[type="checkbox"]').forEach(function (cb) {
         cb.checked = _SCR.defaults.indexOf(cb.dataset.idx) >= 0;
     });
@@ -6730,10 +6765,12 @@ async function screenerResetSettings() {
 
 /** Hängt das automatische Speichern an alle Eingabefelder des Screeners. */
 function _scrWireSettingsAutosave() {
-    ['scr-maerkte', 'scr-indexes', 'scr-filters', 'scr-junge'].forEach(function (id) {
+    ['scr-maerkte', 'scr-indexes', 'scr-filters', 'scr-junge', 'scr-auto'].forEach(function (id) {
         var box = document.getElementById(id);
         if (box) box.addEventListener('change', _scrSettingsChanged);
     });
+    var autoBox = document.getElementById('scr-auto');
+    if (autoBox) autoBox.addEventListener('change', function () { _scrAutoInfo(_SCR.autoLetzter); });
     var cust = document.getElementById('scr-filters-custom');
     if (cust) cust.addEventListener('input', _scrSettingsChanged);
     ['scr-cap-min', 'scr-cap-max', 'scr-cap-unit'].forEach(function (id) {
