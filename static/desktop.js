@@ -6749,15 +6749,32 @@ async function _scrPoll() {
     }
 }
 
+/* Alle Ticker, die schon in einem Screener-Basket liegen (egal welcher Sektor). */
+function _scrBekannteTicker() {
+    var out = {};
+    Object.keys(baskets || {}).forEach(function (id) {
+        var b = baskets[id] || {};
+        if ((b.name || '').indexOf(SCREENER_BASKET_PREFIX) !== 0) return;
+        Object.keys(b.weights || {}).forEach(function (t) { out[t] = true; });
+    });
+    return out;
+}
+
+/* Zeigt nur die Treffer, die noch in keinem Screener-Basket liegen — sonst sähe
+   jeder Lauf nach viel aus, obwohl nur eine Handvoll dazugekommen ist.
+   _SCR.results bleibt vollständig: „Baskets anlegen" und der Export arbeiten
+   weiter mit allen Treffern. */
 function _scrRenderResults(results) {
     var card = document.getElementById('scr-results-card');
     var wrap = document.getElementById('scr-results');
     var badge = document.getElementById('scr-result-count');
     wrap.innerHTML = '';
+    var bekannt = _scrBekannteTicker();
     var sectors = Object.keys(results);
-    var total = 0;
+    var total = 0, treffer = 0;
     sectors.forEach(function (name) {
-        var tickers = results[name] || [];
+        treffer += (results[name] || []).length;
+        var tickers = (results[name] || []).filter(function (t) { return !bekannt[t]; });
         if (!tickers.length) return;
         total += tickers.length;
         var sec = document.createElement('div');
@@ -6793,8 +6810,18 @@ function _scrRenderResults(results) {
         sec.appendChild(list);
         wrap.appendChild(sec);
     });
-    badge.textContent = total + ' Ticker';
-    card.style.display = total ? '' : 'none';
+    badge.textContent = total + ' neu' + (treffer > total ? ' · ' + treffer + ' Treffer' : '');
+    badge.title = treffer > total
+        ? (treffer - total) + ' Treffer liegen schon in den Screener-Baskets und sind ausgeblendet'
+        : '';
+    if (!total && treffer) {
+        var leer = document.createElement('div');
+        leer.className = 'settings-msg';
+        leer.textContent = 'Keine neuen Ticker — alle ' + treffer
+            + ' Treffer liegen schon in den Screener-Baskets.';
+        wrap.appendChild(leer);
+    }
+    card.style.display = treffer ? '' : 'none';
 }
 
 function screenerExport() {
