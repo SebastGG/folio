@@ -4,12 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Folio</title>
-  <script>
-    // Automatisch zur Mobile-Version weiterleiten
-    if (window.innerWidth <= 900 || /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent)) {
-      window.location.replace('/mobile');
-    }
-  </script>
   <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/static/lib/lightweight-charts-drawing.umd.js"></script>
   <link rel="stylesheet" href="/static/desktop.css">
@@ -1110,6 +1104,18 @@
     </div>
 
     <div class="settings-card">
+      <h2 class="settings-h">Android-App</h2>
+      <p class="settings-hint">
+        Die App gibt es im eigenen F-Droid-Verzeichnis: in F-Droid unter
+        Einstellungen → Paketquellen <code>https://surfer.gtech01.de/fdroid/repo</code>
+        hinzufügen und „folio“ installieren. In der App auf „Mit folio verbinden“ tippen —
+        der Browser des Telefons fragt dann hier nach. Verbundene Geräte dürfen nur lesen
+        und Kurse holen; trennen nimmt ihnen den Zugang sofort.
+      </p>
+      <div id="set-app-geraete"><p class="settings-hint">Lade…</p></div>
+    </div>
+
+    <div class="settings-card">
       <h2 class="settings-h">Portfolios — Sicherungen</h2>
       <p class="settings-hint">
         Vor der ersten Änderung eines Tages legt folio eine Kopie deiner Portfolios an;
@@ -1802,6 +1808,28 @@
           im Browser steckt dann noch der leere Stand, und der würde die gute Fassung
           überschreiben. Nach dem Zurückspielen lädt die Seite von selbst neu, und der vorige
           Stand ist seinerseits gesichert — es lässt sich also umkehren.
+        </p>
+      </article>
+
+      <article class="help-card" id="help-app" data-t="Android-App">
+        <h2 class="help-h">📱 Android-App</h2>
+        <p>
+          Unterwegs gibt es folio als Android-App statt einer Mobilansicht im Browser. Sie zeigt
+          deine Baskets mit Kursliste und Chart, die Heatmap, das Depot und das Vermögen — und
+          holt auf Wunsch frische Kurse. <b>Ändern kann sie nichts</b>: Baskets, Gewichte und
+          Einstellungen pflegst du hier am Rechner. Der Server lässt einen App-Zugang auch gar
+          nicht an andere Stellen heran.
+        </p>
+        <p>
+          Installiert wird sie über F-Droid aus dem eigenen Verzeichnis
+          <code>https://surfer.gtech01.de/fdroid/repo</code>. Beim ersten Start auf
+          <b>Mit folio verbinden</b> tippen: Der Browser des Telefons öffnet die Anmeldung, du
+          bestätigst das Gerät, und die App ist verbunden.
+        </p>
+        <p class="help-tip">
+          Unter <b>Einstellungen → Android-App</b> steht jedes verbundene Gerät mit dem Zeitpunkt
+          seiner letzten Nutzung. <b>Trennen</b> nimmt ihm den Zugang sofort — etwa wenn ein
+          Telefon verloren gegangen ist.
         </p>
       </article>
 

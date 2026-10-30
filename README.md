@@ -65,8 +65,11 @@ Index und zeigt ihn als Chart — daneben jeden Einzelwert, dein Depot und dein
 - **Protokoll** — was die App gerade tut, in zehn Detailstufen; daneben der
   Verlauf, mit dem sich hinzugefügte und entfernte Ticker zurücknehmen lassen.
 
-Die Oberfläche ist deutsch. Es gibt eine Desktop- und eine Mobilansicht; eine
-ausführliche Hilfe steckt in der App selbst.
+Die Oberfläche ist deutsch; eine ausführliche Hilfe steckt in der App selbst.
+Für unterwegs gibt es eine Android-App (eigenes Repo `folio-android`), die nur
+liest: Sie meldet sich über den Browser des Telefons an und bekommt einen
+App-Schlüssel, mit dem der Server ausschließlich die Lese-Endpunkte freigibt
+(`_APP_ERLAUBT` in `main.py`).
 
 ## Bilder
 

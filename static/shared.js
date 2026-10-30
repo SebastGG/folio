@@ -1,6 +1,6 @@
 /**
- * shared.js — Gemeinsame Logik für Desktop und Mobile
- * =====================================================
+ * shared.js — Gemeinsame Logik der Oberfläche
+ * ===========================================
  * Enthält: State, Berechnungen, API-Calls, Datenhaltung
  * Enthält NICHT: Chart-Rendering, DOM-Manipulation, UI-Events
  *
@@ -10,13 +10,14 @@
  *
  * Wird geladen von:
  *   desktop.html → <script src="/static/shared.js"></script>
- *   mobile.html  → <script src="/static/shared.js"></script>
+ * Die frühere Mobilansicht ist der Android-App gewichen (Repo folio-android),
+ * die nur über die API spricht und nichts von hier lädt.
  */
 
 'use strict';
 
 // ╔══════════════════════════════════════════════════════════╗
-// ║  1. GLOBALER STATE — Eine Wahrheit für Desktop + Mobile  ║
+// ║  1. GLOBALER STATE — Eine Wahrheit für alle Seiten        ║
 // ╚══════════════════════════════════════════════════════════╝
 
 // Kursdaten
@@ -43,8 +44,8 @@ var screenerAutoLetzter = null;
 // Aussehen (pro Nutzer in der Config gespeichert). Defaults = bisheriges Aussehen.
 // chartBg (optional) = eigene Hintergrundfarbe des Charts, '' bedeutet „wie Theme".
 var appearance    = { theme: 'light', contrast: 'normal', fontSize: 'compact', accent: 'green' };
-// Fenstergrößen und geschlossene Fenster der Desktop-Oberfläche. Hier deklariert,
-// damit Mobile den Desktop-Stand beim Speichern durchreicht statt ihn zu löschen.
+// Fenstergrößen und geschlossene Fenster der Desktop-Oberfläche. Reist mit der
+// Config (/api/config) und wird beim Speichern unverändert zurückgeschickt.
 var _layout       = {};
 var currentView   = 'index'; // 'index' oder Ticker-Symbol z.B. 'AAPL'
 
@@ -594,7 +595,6 @@ function buildPerfData() {
 /**
  * Rendert die Performance-Tabelle.
  * Schreibt in #perfBody und #perfFoot.
- * Wird von Desktop direkt und von Mobile via Kopie genutzt.
  */
 function renderPerfTable() {
     var tbody = document.getElementById('perfBody');
@@ -741,9 +741,8 @@ function renderPerfTable() {
  *   2. Kerzen einfärben
  *   3. LogReg berechnen
  *   4. Desktop Chart rendern (via renderDesktopChart aus desktop.js)
- *   5. Mobile Chart rendern (via renderMobileChart aus mobile.js)
- *   6. Performance-Tabelle aktualisieren
- *   7. Stats-Zeile aktualisieren
+ *   5. Performance-Tabelle aktualisieren
+ *   6. Stats-Zeile aktualisieren
  */
 function applyPeriod() {
     if (!allCandles.length) {
@@ -798,12 +797,7 @@ function applyPeriod() {
         renderDesktopChart(colored, volAgg, agg, regResult);
     }
 
-    // 6. Mobile Chart rendern (mobile.js stellt renderMobileChart bereit)
-    if (typeof renderMobileChart === 'function') {
-        renderMobileChart(colored, volAgg, agg, regResult);
-    }
-
-    // 7. Stats + Performance
+    // 6. Stats + Performance
     computeStats(allCandles);
     renderPerfTable();
 }
@@ -838,7 +832,7 @@ async function setTF(tf) {
 
 /**
  * Tatsächlich gezeichneter Zeitrahmen. Stundenkerzen gibt es nur für Einzelwerte und
- * nur, wenn sie geladen sind — in der Index-Ansicht (und auf Mobile) bleibt 1H
+ * nur, wenn sie geladen sind — in der Index-Ansicht bleibt 1H
  * gewählt, gezeichnet werden aber Tageskerzen.
  */
 function chartTF() {
@@ -1040,8 +1034,8 @@ async function loadConfig() {
         // Aussehen wiederherstellen und anwenden
         appearance    = Object.assign(appearance, cfg.appearance || {});
         if (typeof applyAppearance === 'function') applyAppearance();
-        // Layout merken (auch auf Mobile — sonst ginge der Desktop-Stand beim
-        // nächsten Speichern verloren) und, wenn vorhanden, anwenden.
+        // Layout merken (sonst ginge der Stand beim nächsten Speichern
+        // verloren) und, wenn vorhanden, anwenden.
         if (cfg.layout) _layout = cfg.layout;
         if (typeof loadLayout === 'function') loadLayout();
 
@@ -1268,13 +1262,13 @@ async function updateAllPrices() {
  * verhindert Doppelklick und Race Conditions durch parallele loadData-Aufrufe.
  */
 async function doRefresh() {
-    var btn = document.getElementById('refreshBtn') || document.getElementById('m-refresh-btn');
+    var btn = document.getElementById('refreshBtn');
     if (btn && btn.disabled) return;
     var origText = btn ? btn.textContent : '';
     if (btn) {
         btn.disabled = true;
         btn.style.opacity = '0.55';
-        btn.textContent = btn.id === 'm-refresh-btn' ? '…' : '⟳ Laden…';
+        btn.textContent = '⟳ Laden…';
     }
     var done = logTimer(4, 'Refresh', 'Kurse aktualisieren + neu laden');
     try {
@@ -1543,7 +1537,7 @@ function switchView(view) {
  * Wird aufgerufen wenn WEIGHTS sich ändert.
  */
 function updateDerivedConfig() {
-    // Kann von Desktop/Mobile erweitert werden
+    // Kann von desktop.js erweitert werden
 }
 
 /**
@@ -1573,8 +1567,8 @@ function chartPrefsCollect() {
     c.indicators = Object.assign({}, indicators);
     var rpEl = document.getElementById('regPeriod');
     if (rpEl) c.regPeriod = parseInt(rpEl.value, 10) || 12;
-    // Nur auf dem Desktop vorhanden — auf Mobile bleiben die Werte unangetastet
-    // stehen, statt beim Speichern aus der Config zu fallen.
+    // Nur gesetzt, wenn desktop.js geladen ist — sonst bleiben die Werte
+    // unangetastet stehen, statt beim Speichern aus der Config zu fallen.
     if (typeof _showTradeMarkers !== 'undefined') c.tradeMarkers = !!_showTradeMarkers;
     if (typeof _showEarnings     !== 'undefined') c.earnings     = !!_showEarnings;
     if (typeof _showSectorEtf    !== 'undefined') c.sectorEtf    = !!_showSectorEtf;
@@ -1953,7 +1947,7 @@ function ibkrPositionsIbkr() {
  */
 function kontoWert(a) {
     if (a.kind !== 'depot') return a.value || 0;
-    // Live-Bewertung gibt es nur im Desktop-Code; mobil zählt der Server-Wert.
+    // Live-Bewertung steht in desktop.js; fehlt sie, zählt der Server-Wert.
     if (typeof ibkrLiveValue !== 'function' || typeof ibkrCcyFx !== 'function') return a.value || 0;
     var ccyFx = ibkrCcyFx();
     var live  = (ibkrPositions || []).reduce(function(s, p) {

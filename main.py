@@ -5,8 +5,8 @@ FastAPI + SQLite + Yahoo Finance + Cloudron proxyAuth
 
 Architektur:
   /                  → templates/desktop.html
-  /mobile            → templates/mobile.html
-  /static/*          → static/ (shared.js, desktop.js, mobile.js, *.css)
+  /app/anmelden      → Anmeldung der Android-App (Repo folio-android)
+  /static/*          → static/ (shared.js, desktop.js, *.css)
   /api/*             → REST API
 
 Multi-User:
@@ -36,6 +36,7 @@ from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 
 import screener
@@ -109,13 +110,7 @@ def _session_signer() -> URLSafeTimedSerializer:
 
 # ── App-Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
+# CORS und gzip werden erst nach der Auth-Middleware eingehängt, siehe dort.
 
 # Static files
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
@@ -140,7 +135,14 @@ def get_user(request: Request) -> str:
     Liefert den eingeloggten Benutzer aus dem signierten Session-Cookie (OIDC).
     Ohne OIDC (lokale Entwicklung) Fallback auf 'default'. Ist OIDC aktiv und kein
     gültiges Cookie vorhanden, wird "" zurückgegeben (→ Middleware leitet zum Login).
+
+    Trägt die Anfrage einen App-Schlüssel (Android-App), zählt nur der — auch
+    ohne OIDC. Ein ungültiger Schlüssel fällt bewusst NICHT auf das Cookie
+    oder 'default' zurück.
     """
+    if _app_bearer(request) is not None:
+        eintrag = _app_schluessel_pruefen(request)
+        return _sanitize_user(eintrag["user"]) if eintrag else ""
     cookie = request.cookies.get(_SESSION_COOKIE)
     if cookie:
         try:
@@ -370,26 +372,198 @@ def _tax_konvex_years(user: str, targets: list[str], fp: str) -> dict:
     return {"years": out, "computed": sorted(missing), "meta": meta}
 
 
+# ── Android-App: Anmeldung über den Browser + App-Schlüssel ─────────────────────
+# Die App (Repo folio-android) läuft in einer WebView unter https://localhost —
+# das Session-Cookie dieser Seite kommt dort nie an. Sie meldet sich so an:
+#   1. Sie öffnet /app/anmelden?challenge=…&state=…&geraet=… im Browser des
+#      Telefons. Wer dort noch nicht angemeldet ist, geht über den normalen
+#      OIDC-Login und landet danach wieder hier (next=).
+#   2. Die Seite fragt, ob das Gerät verbunden werden soll. Der Knopf schickt ein
+#      POST, die Antwort leitet auf de.gtech01.folio://anmeldung?code=…&state=… um.
+#   3. Die App tauscht den Einmalcode samt ihrem Geheimnis (PKCE, S256) unter
+#      POST /api/app/token gegen einen App-Schlüssel ein.
+# Fängt eine fremde App den Rücksprung ab, nützt ihr der Code nichts: ihr fehlt
+# das Geheimnis, dessen Hash in der challenge steckt.
+#
+# Ein App-Schlüssel öffnet NUR die Endpunkte in _APP_ERLAUBT. Die App zeigt an
+# und holt Kurse, sie ändert nichts — so kann sie auch keine Config beschädigen
+# (vgl. den Config-Verlust vom 2026-09-14). Braucht die App einen weiteren
+# Endpunkt, gehört er hier dazu, sonst antwortet der Server mit 403.
+#
+# Gespeichert wird nur der SHA-256 des Schlüssels, in einer Datei für alle
+# Benutzer: beim Prüfen ist der Benutzer ja noch unbekannt.
+
+_APP_SCHEMA       = "de.gtech01.folio://anmeldung"
+_APP_CODE_TTL     = 120            # Sekunden zwischen Bestätigen und Eintauschen
+_APP_ZULETZT_TAKT = 3600           # „zuletzt benutzt" höchstens stündlich schreiben
+_APP_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")       # base64url(SHA-256), ohne '='
+_APP_STATE_RE     = re.compile(r"[A-Za-z0-9_-]{16,128}")
+_APP_VERIFIER_RE  = re.compile(r"[A-Za-z0-9._~-]{43,128}")  # RFC 7636
+
+_APP_ERLAUBT = [(m, re.compile(p)) for m, p in (
+    ("GET",  r"/api/whoami"),
+    ("GET",  r"/api/config"),
+    ("GET",  r"/api/prices/currencies"),
+    ("GET",  r"/api/prices/ensure/[^/]+"),   # holt fehlende Tage bei Yahoo nach
+    ("GET",  r"/api/prices/[^/]+"),
+    ("POST", r"/api/prices/update"),         # Kurse holen: Marktdaten, keine Einstellungen
+    ("POST", r"/api/prices/last"),           # liest nur (POST wegen der Tickerliste)
+    ("GET",  r"/api/heatmap"),
+    ("GET",  r"/api/ticker/info/[^/]+"),
+    ("GET",  r"/api/ibkr/positions"),
+    ("GET",  r"/api/ibkr/cash"),
+    ("GET",  r"/api/ibkr/trades"),
+    ("GET",  r"/api/ibkr/isin-map"),
+    ("GET",  r"/api/konten"),
+    ("GET",  r"/api/vermoegen/verlauf"),
+    ("POST", r"/api/app/abmelden"),          # widerruft nur den eigenen Schlüssel
+)]
+
+_app_lock  = threading.Lock()
+_app_codes: dict[str, dict] = {}   # Einmalcode → {user, challenge, geraet, bis}
+_app_cache = {"mtime": None, "liste": []}
+
+def _app_datei() -> str:
+    return os.path.join(BASE_DATA_DIR, "app_schluessel.json")
+
+def _app_hash(schluessel: str) -> str:
+    return hashlib.sha256(schluessel.encode("utf-8")).hexdigest()
+
+def _app_laden() -> list:
+    """Alle App-Schlüssel (gehasht). Nur neu lesen, wenn sich die Datei geändert hat."""
+    pfad = _app_datei()
+    try:
+        mtime = os.path.getmtime(pfad)
+    except OSError:
+        return []
+    if _app_cache["mtime"] != mtime:
+        try:
+            with open(pfad, encoding="utf-8") as f:
+                _app_cache["liste"] = json.load(f).get("schluessel", [])
+        except Exception as e:
+            print(f"[App] {pfad} nicht lesbar: {e}")
+            return []
+        _app_cache["mtime"] = mtime
+    return _app_cache["liste"]
+
+def _app_speichern(liste: list):
+    pfad = _app_datei()
+    tmp  = pfad + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"schluessel": liste}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, pfad)
+    _app_cache["mtime"] = None
+
+def _app_bearer(request: Request) -> str | None:
+    """Der App-Schlüssel aus dem Authorization-Kopf, sonst None."""
+    kopf = request.headers.get("authorization", "")
+    if kopf[:7].lower() != "bearer ":
+        return None
+    return kopf[7:].strip()
+
+def _app_schluessel_pruefen(request: Request) -> dict | None:
+    """Eintrag zum App-Schlüssel der Anfrage, oder None (fehlt/ungültig/widerrufen)."""
+    schluessel = _app_bearer(request)
+    if not schluessel:
+        return None
+    h = _app_hash(schluessel)
+    with _app_lock:
+        liste   = _app_laden()
+        eintrag = next((e for e in liste if _secrets.compare_digest(e.get("hash", ""), h)), None)
+        if eintrag and time.time() - float(eintrag.get("zuletzt_ts") or 0) > _APP_ZULETZT_TAKT:
+            eintrag["zuletzt_ts"] = time.time()
+            eintrag["zuletzt"]    = time.strftime("%Y-%m-%d %H:%M")
+            try:
+                _app_speichern(liste)
+            except Exception as e:
+                print(f"[App] Zeitstempel nicht gespeichert: {e}")
+    return eintrag
+
+def _app_erlaubt(methode: str, pfad: str) -> bool:
+    return any(m == methode and p.fullmatch(pfad) for m, p in _APP_ERLAUBT)
+
+def _app_geraetename(text: str) -> str:
+    text = re.sub(r"[^\w .,()+\-]", "", text or "", flags=re.UNICODE).strip()
+    return text[:60] or "Android-Gerät"
+
+def _app_seite(titel: str, inhalt: str, status: int = 200) -> HTMLResponse:
+    """Schlichte Seite für den Browser des Telefons — ohne Desktop-CSS."""
+    import html as _html
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>folio · {_html.escape(titel)}</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f4f2ee; --fg:#1c1c1c; --muted:#6b6b6b; --line:#d9d5cc; --accent:#2d8a4e; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --bg:#16181d; --fg:#e8e6e1; --muted:#9a9a9a; --line:#2c3038; --accent:#3fae67; }} }}
+  body {{ margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }}
+  main {{ max-width:30rem; margin:0 auto; padding:2.5rem 1.25rem; }}
+  h1 {{ font-size:1.35rem; margin:0 0 1rem; }}
+  p {{ margin:0 0 1rem; }} .leise {{ color:var(--muted); font-size:.9rem; }}
+  .knoepfe {{ display:flex; flex-direction:column; gap:.75rem; margin-top:1.75rem; }}
+  button, a.knopf {{ font:inherit; padding:.85rem 1rem; border-radius:.5rem; text-align:center;
+    border:1px solid var(--line); background:transparent; color:var(--fg); text-decoration:none; }}
+  button.haupt {{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }}
+</style></head>
+<body><main><h1>{_html.escape(titel)}</h1>{inhalt}</main></body></html>""", status_code=status)
+
+
 # ── Auth-Middleware + OAuth-Routen ──────────────────────────────────────────────
-_AUTH_PUBLIC = ("/health", "/login", "/callback", "/logout", "/favicon.ico")
+_AUTH_PUBLIC = ("/health", "/login", "/callback", "/logout", "/favicon.ico", "/api/app/token")
 
 @app.middleware("http")
 async def _auth_gate(request: Request, call_next):
     path = request.url.path
+    # App-Schlüssel gelten unabhängig von OIDC — und nur für die freigegebenen Pfade
+    if _app_bearer(request) is not None:
+        if not _app_schluessel_pruefen(request):
+            return JSONResponse({"ok": False, "error": "App-Schlüssel ungültig oder widerrufen"},
+                                status_code=401)
+        if not _app_erlaubt(request.method, path):
+            return JSONResponse({"ok": False, "error": "Die App darf hier nur lesen"},
+                                status_code=403)
+        return await call_next(request)
     if not _oidc_enabled() or path in _AUTH_PUBLIC or path.startswith("/static/"):
         return await call_next(request)
     if get_user(request):
         return await call_next(request)
-    # Nicht eingeloggt: API → 401, Seiten → Redirect zum Login
+    # Nicht eingeloggt: API → 401, Seiten → Redirect zum Login. Seiten außer der
+    # Startseite merken sich ihr Ziel, damit /app/anmelden nach dem Login weiterläuft.
     if path.startswith("/api/"):
         return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
-    return RedirectResponse("/login")
+    if path != "/" and request.method == "GET":
+        ziel = path + ("?" + request.url.query if request.url.query else "")
+        return RedirectResponse("/login?" + urllib.parse.urlencode({"next": ziel}))
+    # 303 statt 307 bei POST (abgelaufene Sitzung beim Bestätigen): /login kennt nur GET
+    return RedirectResponse("/login", status_code=303 if request.method != "GET" else 307)
+
+# Erst NACH der Auth-Middleware einhängen: Starlette legt später Hinzugefügtes
+# außen herum. So beantwortet CORS die Vorabanfragen der App (die tragen keinen
+# Authorization-Kopf) und versieht auch die 401/403 der Auth-Middleware mit
+# Access-Control-Allow-Origin — sonst sähe die App statt „Schlüssel widerrufen"
+# nur einen Netzfehler. gzip spart der App beim Laden der Kursreihen das meiste.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+_NEXT_COOKIE = "folio_next"
+
+def _sicheres_ziel(ziel: str) -> str:
+    """Nur Pfade dieser Seite als Rücksprung — kein //fremd.de, kein Schema."""
+    ziel = (ziel or "").strip()
+    if not ziel.startswith("/") or ziel.startswith("//") or "\\" in ziel:
+        return ""
+    return ziel
 
 @app.get("/login")
-async def login(request: Request):
+async def login(request: Request, next: str = ""):
     c = _oidc_cfg()
     if not _oidc_enabled():
-        return RedirectResponse("/")
+        return RedirectResponse(_sicheres_ziel(next) or "/")
     state = _secrets.token_urlsafe(24)
     params = urllib.parse.urlencode({
         "response_type": "code",
@@ -401,6 +575,11 @@ async def login(request: Request):
     resp = RedirectResponse(c["auth"] + "?" + params)
     resp.set_cookie(_STATE_COOKIE, state, max_age=600, httponly=True,
                     secure=_cookie_secure(), samesite="lax")
+    if _sicheres_ziel(next):
+        resp.set_cookie(_NEXT_COOKIE, _sicheres_ziel(next), max_age=600, httponly=True,
+                        secure=_cookie_secure(), samesite="lax")
+    else:
+        resp.delete_cookie(_NEXT_COOKIE)
     return resp
 
 @app.get("/callback")
@@ -437,11 +616,12 @@ async def callback(request: Request, code: str = "", state: str = ""):
     if not _sanitize_user(user or ""):
         return HTMLResponse("Kein Benutzer im OIDC-Profil gefunden.", status_code=400)
 
-    resp = RedirectResponse("/")
+    resp = RedirectResponse(_sicheres_ziel(request.cookies.get(_NEXT_COOKIE, "")) or "/")
     resp.set_cookie(_SESSION_COOKIE, _session_signer().dumps({"user": user}),
                     max_age=_SESSION_MAX_AGE, httponly=True,
                     secure=_cookie_secure(), samesite="lax")
     resp.delete_cookie(_STATE_COOKIE)
+    resp.delete_cookie(_NEXT_COOKIE)
     return resp
 
 @app.get("/logout")
@@ -449,6 +629,130 @@ async def logout():
     resp = RedirectResponse("/")
     resp.delete_cookie(_SESSION_COOKIE)
     return resp
+
+# ── Android-App: Routen (Ablauf siehe oben bei _APP_ERLAUBT) ────────────────────
+
+@app.get("/app/anmelden", response_class=HTMLResponse)
+async def app_anmelden_seite(request: Request, challenge: str = "", state: str = "",
+                             geraet: str = ""):
+    """Schritt 1: Bestätigungsseite im Browser des Telefons (Login davor macht die Middleware)."""
+    import html as _html
+    if not _APP_CHALLENGE_RE.fullmatch(challenge) or not _APP_STATE_RE.fullmatch(state):
+        return _app_seite("Ungültiger Aufruf",
+                          "<p>Diese Seite öffnet die folio-App selbst, wenn du dort auf "
+                          "„Mit folio verbinden“ tippst.</p>", status=400)
+    user    = get_user(request)
+    name    = _app_geraetename(geraet)
+    abbruch = _APP_SCHEMA + "?" + urllib.parse.urlencode({"fehler": "abgebrochen", "state": state})
+    e = _html.escape
+    return _app_seite("folio-App verbinden", f"""
+<p>Das Gerät <b>{e(name)}</b> bekommt Lesezugriff auf dein folio-Konto <b>{e(user)}</b>.</p>
+<p class="leise">Die App zeigt Kurse, Heatmap, Depot und Vermögen an und kann Kurse
+aktualisieren. Ändern kann sie nichts. Trennen lässt sich das Gerät jederzeit am
+Rechner unter Einstellungen → Android-App.</p>
+<form method="post" action="/app/anmelden" class="knoepfe">
+  <input type="hidden" name="challenge" value="{e(challenge)}">
+  <input type="hidden" name="state" value="{e(state)}">
+  <input type="hidden" name="geraet" value="{e(name)}">
+  <button type="submit" class="haupt">Verbinden</button>
+  <a class="knopf" href="{e(abbruch)}">Abbrechen</a>
+</form>""")
+
+@app.post("/app/anmelden")
+async def app_anmelden(request: Request):
+    """Schritt 2: Einmalcode ausstellen und in die App zurückspringen."""
+    form      = await request.form()
+    challenge = str(form.get("challenge", ""))
+    state     = str(form.get("state", ""))
+    if not _APP_CHALLENGE_RE.fullmatch(challenge) or not _APP_STATE_RE.fullmatch(state):
+        return _app_seite("Ungültiger Aufruf", "<p>Bitte in der App neu starten.</p>", status=400)
+    # Gegen untergeschobene Formulare: das Cookie reist mit SameSite=Lax ohnehin
+    # nicht bei fremden POSTs mit — die Herkunft prüfen wir trotzdem.
+    herkunft = request.headers.get("origin")
+    eigene   = _oidc_cfg()["origin"]
+    if herkunft and eigene and herkunft.rstrip("/") != eigene:
+        return _app_seite("Abgelehnt", "<p>Fremde Herkunft.</p>", status=403)
+    user  = get_user(request)
+    code  = _secrets.token_urlsafe(32)
+    jetzt = time.time()
+    with _app_lock:
+        for k in [k for k, v in _app_codes.items() if v["bis"] < jetzt]:
+            del _app_codes[k]
+        _app_codes[code] = {"user": user, "challenge": challenge, "bis": jetzt + _APP_CODE_TTL,
+                            "geraet": _app_geraetename(str(form.get("geraet", "")))}
+    ziel = _APP_SCHEMA + "?" + urllib.parse.urlencode({"code": code, "state": state})
+    return RedirectResponse(ziel, status_code=303)
+
+@app.post("/api/app/token")
+async def app_token(request: Request):
+    """Schritt 3: Einmalcode + Geheimnis gegen einen App-Schlüssel tauschen."""
+    import base64
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    code     = str(body.get("code", ""))
+    verifier = str(body.get("verifier", ""))
+    with _app_lock:
+        eintrag = _app_codes.pop(code, None)    # einmalig, auch bei falschem Geheimnis
+    if not eintrag or eintrag["bis"] < time.time():
+        return JSONResponse({"ok": False, "error": "Code unbekannt oder abgelaufen — bitte neu verbinden"},
+                            status_code=400)
+    erwartet = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii", "ignore")).digest())
+    if not _APP_VERIFIER_RE.fullmatch(verifier) or             not _secrets.compare_digest(erwartet.decode().rstrip("="), eintrag["challenge"]):
+        return JSONResponse({"ok": False, "error": "Geheimnis passt nicht zum Code"}, status_code=400)
+
+    schluessel = "folio_" + _secrets.token_urlsafe(32)
+    neu = {
+        "id":         _secrets.token_hex(6),
+        "hash":       _app_hash(schluessel),
+        "user":       eintrag["user"],
+        "geraet":     eintrag["geraet"],
+        "erstellt":   time.strftime("%Y-%m-%d %H:%M"),
+        "zuletzt":    time.strftime("%Y-%m-%d %H:%M"),
+        "zuletzt_ts": time.time(),
+    }
+    with _app_lock:
+        liste = list(_app_laden())
+        liste.append(neu)
+        _app_speichern(liste)
+    print(f"[App] {eintrag['user']}: Gerät „{neu['geraet']}“ verbunden ({neu['id']})")
+    return JSONResponse({"ok": True, "schluessel": schluessel, "user": eintrag["user"],
+                         "id": neu["id"], "geraet": neu["geraet"]})
+
+@app.get("/api/app/schluessel")
+async def app_schluessel_liste(request: Request):
+    """Verbundene Geräte des Benutzers, für die Einstellungen am Rechner."""
+    user = get_user(request)
+    with _app_lock:
+        liste = [e for e in _app_laden() if _sanitize_user(e.get("user", "")) == user]
+    return JSONResponse({"geraete": [{k: e.get(k) for k in ("id", "geraet", "erstellt", "zuletzt")}
+                                     for e in liste]})
+
+@app.delete("/api/app/schluessel/{schluessel_id}")
+async def app_schluessel_loeschen(schluessel_id: str, request: Request):
+    """Gerät trennen: sein Schlüssel gilt ab sofort nicht mehr."""
+    user = get_user(request)
+    with _app_lock:
+        liste = list(_app_laden())
+        rest  = [e for e in liste
+                 if not (e.get("id") == schluessel_id and _sanitize_user(e.get("user", "")) == user)]
+        if len(rest) == len(liste):
+            return JSONResponse({"ok": False, "error": "Gerät nicht gefunden"}, status_code=404)
+        _app_speichern(rest)
+    return JSONResponse({"ok": True})
+
+@app.post("/api/app/abmelden")
+async def app_abmelden(request: Request):
+    """Die App meldet sich ab und nimmt ihren Schlüssel mit."""
+    eintrag = _app_schluessel_pruefen(request)
+    if not eintrag:
+        return JSONResponse({"ok": False, "error": "Nur mit App-Schlüssel"}, status_code=400)
+    with _app_lock:
+        _app_speichern([e for e in _app_laden() if e.get("id") != eintrag.get("id")])
+    return JSONResponse({"ok": True})
 
 # ── SQLite ─────────────────────────────────────────────────────────────────────
 def get_db(db_file: str) -> sqlite3.Connection:
@@ -914,12 +1218,10 @@ async def desktop(request: Request):
     """Desktop App."""
     return _render(os.path.join(TEMPLATES_DIR, "desktop.html"))
 
-@app.get("/mobile", response_class=HTMLResponse)
-async def mobile(request: Request):
-    """Mobile App."""
-    mobile_file = os.path.join(TEMPLATES_DIR, "mobile.html")
-    template = mobile_file if os.path.exists(mobile_file) else os.path.join(TEMPLATES_DIR, "desktop.html")
-    return _render(template)
+@app.get("/mobile")
+async def mobile():
+    """Die Mobilansicht ist der Android-App gewichen — alte Lesezeichen landen auf der Startseite."""
+    return RedirectResponse("/")
 
 @app.post("/api/prices/update")
 async def update_prices(request: Request):

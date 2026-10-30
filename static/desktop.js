@@ -2981,7 +2981,7 @@ function toggleDrawFlyout(id, event) {
 //   { rightColW: 300, panes: { 'r-perf': { h: 200, hidden: false }, … } }
 // Frühere Konfigurationen kannten nur feste Schlüssel (rPerfH, stammH, …) —
 // die werden beim ersten Laden einmalig übersetzt.
-// Die Variable _layout selbst steht in shared.js (Mobile reicht sie durch).
+// Die Variable _layout selbst steht in shared.js.
 
 /* Alle schließ- und größenveränderbaren Fenster der Chart-Seite, in DOM-Reihenfolge
    je Spalte. #r-watch trägt keine feste Höhe, es füllt seine Spalte aus. */
@@ -5046,6 +5046,52 @@ async function settingsLoad() {
         var xf = document.getElementById('set-query-id-tax');
         if (xf) xf.value = s.query_id_tax || '';
     } catch (e) { /* ignore */ }
+
+    appGeraeteLaden();
+}
+
+// ── Android-App: verbundene Geräte ───────────────────────────────────────────
+// Jedes Gerät hat einen eigenen App-Schlüssel (main.py, /api/app/*). Trennen
+// widerruft ihn — die App meldet beim nächsten Abruf, dass sie neu verbinden muss.
+
+async function appGeraeteLaden() {
+    var el = document.getElementById('set-app-geraete');
+    if (!el) return;
+    try {
+        var r = await fetch('/api/app/schluessel');
+        var d = await r.json();
+        var liste = d.geraete || [];
+        if (!liste.length) {
+            el.innerHTML = '<p class="settings-hint">Noch kein Gerät verbunden.</p>';
+            return;
+        }
+        var h = '<table class="konten-tab"><thead><tr><th>Gerät</th><th>Verbunden seit</th>'
+              + '<th>Zuletzt benutzt</th><th></th></tr></thead><tbody>';
+        liste.forEach(function(g) {
+            h += '<tr><td>' + escHtml(g.geraet || '—') + '</td>'
+               + '<td>' + escHtml(g.erstellt || '—') + '</td>'
+               + '<td>' + escHtml(g.zuletzt || '—') + '</td>'
+               + '<td style="text-align:right"><button class="btn" onclick="appGeraetTrennen(\''
+               + escHtml(g.id) + '\', this)">Trennen</button></td></tr>';
+        });
+        el.innerHTML = h + '</tbody></table>';
+    } catch (e) {
+        el.innerHTML = '<p class="settings-hint">Geräte nicht abrufbar: ' + escHtml(e.message) + '</p>';
+    }
+}
+
+async function appGeraetTrennen(id, btn) {
+    if (!confirm('Dieses Gerät trennen? Die App muss sich danach neu verbinden.')) return;
+    if (btn) btn.disabled = true;
+    try {
+        var r = await fetch('/api/app/schluessel/' + encodeURIComponent(id), { method: 'DELETE' });
+        var d = await r.json();
+        if (!d.ok) logIt(1, 'App', 'Trennen fehlgeschlagen: ' + (d.error || r.status));
+        else logIt(3, 'App', 'Gerät getrennt');
+    } catch (e) {
+        logIt(1, 'App', 'Trennen fehlgeschlagen: ' + e.message);
+    }
+    appGeraeteLaden();
 }
 
 // ── Sicherungen der Portfolios ───────────────────────────────────────────────
