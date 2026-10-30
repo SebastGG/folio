@@ -2931,6 +2931,7 @@ function setDrawTool(type) {
     var current = drawingManager.getActiveTool ? drawingManager.getActiveTool() : _activeToolType;
     if (current === type) type = null;
     _activeToolType = type;
+    if (type) _merkeLetztesWerkzeug(type);
     _pendingAnchors = [];
     if (_crosshairCb) { chart.unsubscribeCrosshairMove(_crosshairCb); _crosshairCb = null; }
     if (_previewDrawing) { drawingManager.removeDrawing(_previewDrawing.id); _previewDrawing = null; }
@@ -3310,6 +3311,135 @@ function renderHiddenPaneInfo() {
 // ║  9. KEYBOARD NAVIGATION                                   ║
 // ╚══════════════════════════════════════════════════════════╝
 
+// ── Eigene Tastenkürzel ─────────────────────────────────────────────────────
+// Belegung steht pro Benutzer in appearance.shortcuts ({Aktion: 'Alt+W'}); fehlt
+// eine Aktion dort, gilt ihre Vorgabe, '' heißt „aus". Weitere Aktionen kommen
+// einfach in diese Liste.
+var SHORTCUT_AKTIONEN = [
+    { id: 'drawRepeat', name: 'Letztes Zeichenwerkzeug erneut', vorgabe: 'W',
+      tun: function() { return zeichenwerkzeugWiederholen(); } },
+];
+
+// Fest belegt (Keyboard-Handler unten) — als eigenes Kürzel nicht erlaubt.
+var SHORTCUT_RESERVIERT = ['Escape', 'Delete', 'Backspace', 'ArrowUp', 'ArrowDown',
+                           'Strg+Z', 'Strg+Y', 'Strg+Umschalt+Z', 'Strg+C', 'Strg+V', 'Strg+A'];
+
+var _letztesWerkzeug = null;
+try { _letztesWerkzeug = localStorage.getItem('folio.letztesWerkzeug'); } catch (e) { /* privat */ }
+
+function _merkeLetztesWerkzeug(type) {
+    _letztesWerkzeug = type;
+    try { localStorage.setItem('folio.letztesWerkzeug', type); } catch (e) { /* privat */ }
+}
+
+/* Nimmt das zuletzt gewählte Zeichenwerkzeug wieder auf — ohne erneut in den
+   Werkzeugkasten zu klicken. Ist es noch aktiv, bleibt es aktiv (setDrawTool
+   würde es sonst ausschalten). */
+function zeichenwerkzeugWiederholen() {
+    if (!_letztesWerkzeug || !drawingManager) return false;
+    if (_activeToolType !== _letztesWerkzeug) setDrawTool(_letztesWerkzeug);
+    return true;
+}
+
+/* Tastendruck → 'Strg+Alt+Umschalt+W'. Reine Modifikatortasten ergeben ''. */
+function shortcutAusEvent(e) {
+    if (['Control', 'Alt', 'Shift', 'Meta', 'AltGraph'].indexOf(e.key) >= 0) return '';
+    var t = [];
+    if (e.ctrlKey || e.metaKey) t.push('Strg');
+    if (e.altKey)               t.push('Alt');
+    if (e.shiftKey && e.key.length > 1) t.push('Umschalt');   // Buchstaben tragen Umschalt schon
+    t.push(e.key === ' ' ? 'Leertaste' : (e.key.length === 1 ? e.key.toUpperCase() : e.key));
+    return t.join('+');
+}
+
+function shortcutVon(id) {
+    var s = (appearance && appearance.shortcuts) || {};
+    if (s[id] != null) return s[id];
+    var a = SHORTCUT_AKTIONEN.find(function(x) { return x.id === id; });
+    return a ? a.vorgabe : '';
+}
+
+var _shortcutAufnahme = null;   // Aktion, deren Taste gerade aufgenommen wird
+
+function shortcutAufnehmen(id) {
+    _shortcutAufnahme = id;
+    renderShortcuts('Taste drücken … (Esc bricht ab)');
+}
+
+function shortcutSetzen(id, taste) {
+    if (!appearance) appearance = {};
+    appearance.shortcuts = Object.assign({}, appearance.shortcuts || {});
+    var a = SHORTCUT_AKTIONEN.find(function(x) { return x.id === id; });
+    if (a && taste === a.vorgabe) delete appearance.shortcuts[id];
+    else appearance.shortcuts[id] = taste;
+    renderShortcuts();
+    saveAppearanceToServer();
+}
+
+/* Während der Aufnahme fängt dieser Handler (Capture-Phase) den Tastendruck ab,
+   bevor er irgendwo anders etwas auslöst. */
+document.addEventListener('keydown', function(e) {
+    if (!_shortcutAufnahme) return;
+    // Seite verlassen, ohne eine Taste zu drücken → Aufnahme verfällt
+    var vs = document.getElementById('view-settings');
+    if (vs && !vs.classList.contains('active')) { _shortcutAufnahme = null; return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.key === 'Escape') { _shortcutAufnahme = null; renderShortcuts(); return; }
+    var taste = shortcutAusEvent(e);
+    if (!taste) return;   // nur Strg/Alt/Umschalt gedrückt — auf die eigentliche Taste warten
+    if (SHORTCUT_RESERVIERT.indexOf(taste) >= 0) {
+        renderShortcuts(taste + ' ist schon fest belegt — bitte eine andere Taste');
+        return;
+    }
+    var id = _shortcutAufnahme;
+    var doppelt = SHORTCUT_AKTIONEN.find(function(x) { return x.id !== id && shortcutVon(x.id) === taste; });
+    if (doppelt) {
+        renderShortcuts(taste + ' gehört schon zu „' + doppelt.name + '"');
+        return;
+    }
+    _shortcutAufnahme = null;
+    shortcutSetzen(id, taste);
+}, true);
+
+function renderShortcuts(meldung) {
+    var wrap = document.getElementById('set-shortcuts');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    SHORTCUT_AKTIONEN.forEach(function(a) {
+        var taste = shortcutVon(a.id);
+        var row = document.createElement('div');
+        row.className = 'settings-row';
+        var lab = document.createElement('span');
+        lab.className = 'settings-label';
+        lab.textContent = a.name;
+        var rechts = document.createElement('span');
+        rechts.className = 'kz-rechts';
+        var kbd = document.createElement('kbd');
+        kbd.className = 'kz-taste' + (_shortcutAufnahme === a.id ? ' aufnahme' : '');
+        kbd.textContent = _shortcutAufnahme === a.id ? '…' : (taste || 'aus');
+        var knopf = function(text, title, fn) {
+            var b = document.createElement('button');
+            b.className = 'btn';
+            b.textContent = text;
+            b.title = title;
+            b.onclick = fn;
+            return b;
+        };
+        rechts.appendChild(kbd);
+        rechts.appendChild(knopf('Taste festlegen', 'Danach die gewünschte Taste drücken',
+                                 function() { shortcutAufnehmen(a.id); }));
+        rechts.appendChild(knopf('Aus', 'Kürzel abschalten', function() { shortcutSetzen(a.id, ''); }));
+        rechts.appendChild(knopf('Vorgabe', 'Zurück auf ' + a.vorgabe,
+                                 function() { shortcutSetzen(a.id, a.vorgabe); }));
+        row.appendChild(lab);
+        row.appendChild(rechts);
+        wrap.appendChild(row);
+    });
+    var msg = document.getElementById('set-shortcuts-msg');
+    if (msg) msg.textContent = meldung || '';
+}
+
 document.addEventListener('keydown', function(e) {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement && document.activeElement.tagName)) return;
     // Strg+Z / Strg+Y (bzw. Strg+Umschalt+Z): Ticker-Verlauf. In Eingabefeldern
@@ -3324,6 +3454,12 @@ document.addEventListener('keydown', function(e) {
     // im Hintergrund den Chart.
     var vc = document.getElementById('view-charts');
     var chartsAktiv = !vc || vc.classList.contains('active');
+    // Eigene Kürzel (Einstellungen → Tastenkürzel)
+    if (chartsAktiv && !e.repeat) {
+        var taste = shortcutAusEvent(e);
+        var akt = taste && SHORTCUT_AKTIONEN.find(function(a) { return shortcutVon(a.id) === taste; });
+        if (akt && akt.tun()) { e.preventDefault(); return; }
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && chartsAktiv) {
         // Strg+C / Strg+V: Zeichnungen kopieren, auch in einen anderen Ticker.
         // Strg+A: alle Zeichnungen der Ansicht. Ohne Auswahl, ohne Ablage bzw. ohne
@@ -4882,6 +5018,8 @@ async function setAppearance(key, value) {
 /** Lädt eingeloggten User + IBKR-Konfigurationsstatus in die Settings-Seite. */
 async function settingsLoad() {
     renderAppearanceControls();
+    _shortcutAufnahme = null;
+    renderShortcuts();
     renderHiddenPaneInfo();
     try {
         var w = await fetch('/api/whoami').then(function(r) { return r.json(); });

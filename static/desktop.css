@@ -1298,3 +1298,12 @@ footer {
 .hm-tab .hm-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .hm-tab tbody tr { cursor: pointer; }
 .hm-tab tbody tr:hover td { background: var(--bg); }
+
+/* ── Tastenkürzel (Einstellungen) ──────────────────────────────────────────── */
+.kz-rechts { display: flex; align-items: center; gap: 8px; }
+.kz-taste {
+  font-family: inherit; font-size: 11px; color: var(--text); min-width: 48px; text-align: center;
+  background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 3px; padding: 2px 8px; white-space: nowrap;
+}
+.kz-taste.aufnahme { border-color: var(--accent); color: var(--accent); }
