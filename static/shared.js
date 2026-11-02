@@ -1962,13 +1962,28 @@ function kontoWert(a) {
 // damit US-Ticker ohne manuelles Mapping weiter matchen.
 function ibkrTradeYahoo(t) {
     if (t.isin && ibkrIsinMap[t.isin]) return ibkrIsinMap[t.isin];
+    // Trade ohne ISIN (ältere Rows, Confirmations): über die Position gehen — und
+    // zwar MIT deren ISIN-Mapping, sonst greift „Mappen" für solche Trades nie.
     var p = (ibkrPositions || []).find(function(x) { return x.symbol === t.symbol; });
-    if (p) return p.yahoo_symbol || p.symbol;
+    if (p) return ibkrPosYahoo(p);
     return t.symbol;
 }
 function ibkrPosYahoo(p) {
     if (p.isin && ibkrIsinMap[p.isin]) return ibkrIsinMap[p.isin];
     return p.yahoo_symbol || p.symbol;
+}
+
+// Kleinwährungen bei Yahoo (Pence usw.) — IBKR rechnet in der Hauptwährung.
+var _EX_KLEIN = { GBp: 'GBP', GBX: 'GBP', ZAc: 'ZAR', ILA: 'ILS' };
+
+/**
+ * Faktor von einem IBKR-Kurs auf die Notierung des Charts. IBKR meldet Londoner
+ * Werte in Pfund (HLMA 26.60 GBP), Yahoo notiert HLMA.L in Pence (2660 GBp) —
+ * ohne Faktor 100 lagen Trade-Pfeile und Einstandslinie weit unter dem Chart.
+ */
+function ibkrChartFaktor(sym, ibkrCcy) {
+    var yc = tickerCurrencies[sym];
+    return yc && _EX_KLEIN[yc] && _EX_KLEIN[yc] === String(ibkrCcy || '').toUpperCase() ? 100 : 1;
 }
 
 /**

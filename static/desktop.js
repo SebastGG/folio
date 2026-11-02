@@ -497,7 +497,8 @@ function refreshIbkrCostLine(colored) {
         var pos = ibkrPositions.find(function(p) {
             return ibkrPosYahoo(p) === currentView || p.symbol === currentView;
         });
-        if (pos && pos.cost_basis_price > 0) cbPrice = pos.cost_basis_price;
+        if (pos && pos.cost_basis_price > 0)
+            cbPrice = pos.cost_basis_price * ibkrChartFaktor(currentView, pos.currency);
     } else {
         var totalCost = 0, totalValue = 0;
         ibkrPositions.forEach(function(p) {
@@ -564,7 +565,7 @@ function _tradeMarkerGroups() {
             if (!agg[key]) agg[key] = { date: t.trade_date, isBuy: isBuy, qty: 0, notional: 0 };
             var q = Math.abs(t.adj_quantity || 0);
             agg[key].qty      += q;
-            agg[key].notional += q * (t.adj_price || 0);
+            agg[key].notional += q * (t.adj_price || 0) * ibkrChartFaktor(currentView, t.currency);
         });
         Object.keys(agg).forEach(function(k) {
             var g = agg[k];
@@ -1536,6 +1537,10 @@ function renderTickerTrades(sym) {
     });
     var cur  = tickerCurrencies[sym] || '';
     var curS = tickerCurSymbol(sym);
+    // Die Kurse hier sind IBKR-Kurse: bei Pence-Notierung (HLMA.L) stehen sie in
+    // Pfund, also auch so beschriften — sonst hieße 26,60 £ „p26,60".
+    var tCcy = (mine[0].currency || '').toUpperCase();
+    if (ibkrChartFaktor(sym, tCcy) !== 1) { cur = tCcy; curS = _CUR_SYMBOLS[tCcy] || tCcy; }
     var f2   = function(v) { return Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
     var fq   = function(v) { return v === Math.floor(v) ? String(v) : f2(v); };
 
@@ -4612,9 +4617,6 @@ function ibkrRenderTrades() {
 // „Über letztem Verkauf" (heatmap.js).
 
 var _ibkrEx = { kurse: {}, geladen: 0, laeuft: false, bereit: false };   // bereit: Bestand + Trades geladen
-
-// Kleinwährungen bei Yahoo (Pence usw.) — IBKR rechnet in der Hauptwährung.
-var _EX_KLEIN = { GBp: 'GBP', GBX: 'GBP', ZAc: 'ZAR', ILA: 'ILS' };
 
 /** Yahoo-Symbole aller Aktien mit mindestens einem Verkauf. */
 function ibkrVerkaufteSymbole() {
