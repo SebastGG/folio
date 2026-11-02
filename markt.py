@@ -117,11 +117,82 @@ class Gedrosselt(Exception):
 
 
 # ── Protokoll ───────────────────────────────────────────────────────────────────
+# Das Protokoll wird zusätzlich in {VERZ}/protokoll.jsonl mitgeschrieben und beim
+# Start wieder eingelesen — sonst löscht jeder Deploy, was in der Nacht passiert ist
+# (z. B. ob das automatische Screening lief). Die Datei wird gekürzt, sobald sie
+# PROTOKOLL_DATEI_MAX Zeilen hat.
+PROTOKOLL_DATEI_MAX = 2000
+_log_lock   = threading.Lock()
+_log_zeilen = 0                # Zeilen in der Datei (ungefähr, nur fürs Kürzen)
+
+
+def _pfad_protokoll() -> str:
+    return os.path.join(VERZ, "protokoll.jsonl")
+
+
 def log(stufe: int, text: str):
     """stufe wie im Laufprotokoll der Oberfläche: 1 Fehler, 2 Warnung, 4 Ablauf, 7 Detail."""
-    _log.append((time.time(), stufe, text))
+    global _log_zeilen
+    eintrag = (time.time(), stufe, text)
+    _log.append(eintrag)
     if stufe <= 2:
         print(f"markt: {text}")
+    if VERZ is None:
+        return
+    try:
+        with _log_lock:
+            with open(_pfad_protokoll(), "a", encoding="utf-8") as f:
+                f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
+            _log_zeilen += 1
+            if _log_zeilen > PROTOKOLL_DATEI_MAX:
+                _protokoll_kuerzen()
+    except OSError:
+        pass                   # Protokoll darf den Sammler nie aufhalten
+
+
+def _protokoll_lesen() -> list:
+    eintraege = []
+    try:
+        with open(_pfad_protokoll(), encoding="utf-8") as f:
+            for zeile in f:
+                try:
+                    t, s, m = json.loads(zeile)
+                    eintraege.append((float(t), int(s), str(m)))
+                except (ValueError, TypeError):
+                    continue   # halb geschriebene Zeile nach einem Absturz
+    except OSError:
+        pass
+    return eintraege
+
+
+def _protokoll_kuerzen():
+    """Nur die letzten _log.maxlen Einträge behalten. Aufruf unter _log_lock."""
+    global _log_zeilen
+    rest = _protokoll_lesen()[-_log.maxlen:]
+    tmp = _pfad_protokoll() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for e in rest:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    os.replace(tmp, _pfad_protokoll())
+    _log_zeilen = len(rest)
+
+
+def _protokoll_laden():
+    """Beim Start: gespeicherte Einträge vor die (schon im Speicher stehenden) setzen."""
+    global _log_zeilen
+    with _log_lock:
+        alt = _protokoll_lesen()
+        _log_zeilen = len(alt)
+        schon = set(_log)
+        neu = [e for e in alt if e not in schon] + list(_log)
+        neu.sort(key=lambda e: e[0])
+        _log.clear()
+        _log.extend(neu[-_log.maxlen:])
+        if _log_zeilen > PROTOKOLL_DATEI_MAX:
+            try:
+                _protokoll_kuerzen()
+            except OSError:
+                pass
 
 
 # ── Ablage ──────────────────────────────────────────────────────────────────────
@@ -144,6 +215,7 @@ def markt_db() -> str:
 
 def _einrichten():
     os.makedirs(os.path.join(VERZ, "stunden"), exist_ok=True)
+    _protokoll_laden()
     if _init_db:
         _init_db(_pfad_markt())
     conn = _db(_pfad_markt())
@@ -1395,6 +1467,16 @@ def tagesrunde_ende() -> float:
         return _meta_zahl(mc, "tagesrunde_ende")
     finally:
         mc.close()
+
+def naechste_tagesrunde() -> float:
+    """Termin der nächsten planmäßigen Tagesrunde (Mo–Fr TAGES_UM Berlin)."""
+    return _tagestermin(time.time(), +1)
+
+def berlin_zeit(ts: float, wochentag: bool = False) -> str:
+    """„30.10. 23:41" in Berliner Zeit, mit `wochentag` „Fr 30.10. 23:41"."""
+    lokal = _berlin(ts)
+    text = lokal.strftime("%d.%m. %H:%M")
+    return ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")[lokal.weekday()] + " " + text if wochentag else text
 
 def berlin_datum(ts: float) -> str:
     """„YYYY-MM-DD" in Berliner Zeit."""
