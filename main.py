@@ -6251,19 +6251,32 @@ def _screener_auto_lauf(user: str, st: dict) -> dict:
     return lauf
 
 
-def _screener_auto_pruefen():
+def _screener_auto_pruefen(nach_start: bool = False):
     """Für jeden Benutzer mit Automatik: gibt es eine Tagesrunde, die er noch nicht
     gescreent hat? Läuft nach der Tagesrunde und einmal nach dem Start (falls die
-    App dazwischen neu gestartet wurde)."""
+    App dazwischen neu gestartet wurde). Nach dem Start meldet sie auch, wenn es
+    nichts zu tun gibt — sonst sieht das Protokoll aus, als wäre nichts passiert."""
     if not _screener_auto_lock.acquire(blocking=False):
         return
     try:
+        naechste = "nächste nach der Tagesrunde ab " + markt.berlin_zeit(markt.naechste_tagesrunde(), wochentag=True)
         ende = markt.tagesrunde_ende()
+        benutzer = _screener_auto_benutzer()
+        if nach_start and not benutzer:
+            markt.log(4, "Automatisches Screening: in keinen Screener-Einstellungen eingeschaltet")
         if not ende:
+            if nach_start and benutzer:
+                markt.log(4, f"Automatisches Screening: noch keine vollständige Tagesrunde — {naechste}")
             return
-        for user in _screener_auto_benutzer():
+        for user in benutzer:
             auto = _screener_auto_load(user)
             if auto["stand_runde"] >= ende:
+                if nach_start:
+                    letzter = (auto["laeufe"] or [{}])[-1]
+                    erg = (f"Fehler: {letzter['fehler']}" if letzter.get("fehler")
+                           else f"{letzter.get('neu', 0)} neu von {letzter.get('treffer', 0)} Treffern")
+                    markt.log(4, f"Automatisches Screening ({user}): Tagesrunde vom "
+                                 f"{markt.berlin_zeit(ende)} schon gescreent ({erg}) — {naechste}")
                 continue
             try:
                 lauf = _screener_auto_lauf(user, _screener_settings_load(user))
@@ -6291,7 +6304,7 @@ markt.nach_tagesrunde.append(_screener_auto_anstossen)
 
 async def _screener_auto_nach_start():
     # Kurz warten, damit der Start nicht mit einem Screening beginnt
-    threading.Timer(90, _screener_auto_pruefen).start()
+    threading.Timer(90, _screener_auto_pruefen, kwargs={"nach_start": True}).start()
 
 if hasattr(app, "on_event"):
     app.on_event("startup")(_screener_auto_nach_start)
