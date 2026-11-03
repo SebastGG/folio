@@ -120,6 +120,10 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 import threading
 _last_update: dict[str, float] = {}
 _last_update_lock = threading.Lock()
+# Stand des letzten Kurse-Holens pro User (gehört zu _last_update_lock). Die App
+# kann nicht minutenlang auf eine Antwort warten — sie lässt im Hintergrund holen
+# und fragt hier nach.
+_kursholen: dict[str, dict] = {}
 
 # ── User-Verwaltung ────────────────────────────────────────────────────────────
 def _sanitize_user(user: str) -> str:
@@ -407,7 +411,8 @@ _APP_ERLAUBT = [(m, re.compile(p)) for m, p in (
     ("GET",  r"/api/prices/ensure/[^/]+"),   # holt fehlende Tage bei Yahoo nach
     ("GET",  r"/api/prices/[^/]+"),
     ("POST", r"/api/prices/update"),         # Kurse holen: Marktdaten, keine Einstellungen
-    ("POST", r"/api/prices/last"),           # liest nur (POST wegen der Tickerliste)
+    ("GET",  r"/api/prices/update/stand"),   # Fortschritt des Kurse-Holens
+    ("POST", r"/api/prices/last"),          # liest nur (POST wegen der Tickerliste)
     ("GET",  r"/api/heatmap"),
     ("GET",  r"/api/ticker/info/[^/]+"),
     ("GET",  r"/api/ibkr/positions"),
@@ -1227,26 +1232,47 @@ async def mobile():
 async def update_prices(request: Request):
     """
     Delta-Update Yahoo Finance für alle Ticker eines Baskets.
-    Rate Limit: 1x pro Minute pro User.
+    Rate Limit: 1x pro Minute pro User, und nie zwei Läufe gleichzeitig.
+
+    Mit {"hintergrund": true} kommt die Antwort sofort (202) und der Lauf geht im
+    Hintergrund weiter; den Fortschritt liefert GET /api/prices/update/stand. Für
+    die App: ~300 Ticker brauchen länger, als ein Telefon auf eine Antwort wartet.
     """
     user = get_user(request)
+    body = await request.json()
+    tickers = body.get("tickers", [])
+    hintergrund = bool(body.get("hintergrund"))
     now = time.time()
     with _last_update_lock:
+        laufend = _kursholen.get(user)
+        laufend = laufend if laufend and laufend["laeuft"] else None
         wait = 60 - (now - _last_update.get(user, 0))
-        if wait > 0:
-            return JSONResponse(
-                content={"ok": False, "error": "Rate limit: 1x pro Minute",
-                         "retry_after": int(wait) + 1},
-                status_code=429
-            )
-        _last_update[user] = now
+        if not laufend and wait <= 0:
+            _last_update[user] = now
+    if laufend and hintergrund:
+        # z.B. am Rechner gestartet: mitverfolgen statt ein zweites Mal holen
+        return JSONResponse(content=_kursholen_antwort(laufend), status_code=202)
+    if laufend:
+        return JSONResponse(
+            content={"ok": False, "error": "Kurse werden gerade geholt", "retry_after": 30},
+            status_code=429
+        )
+    if wait > 0:
+        return JSONResponse(
+            content={"ok": False, "error": "Rate limit: 1x pro Minute",
+                     "retry_after": int(wait) + 1},
+            status_code=429
+        )
 
     files = get_user_files(user)
     init_db(files["db"])
-    body = await request.json()
-    tickers = body.get("tickers", [])
     if not tickers:
         return JSONResponse(content={"ok": True, "updated": 0, "failed": {}})
+
+    stand = {"laeuft": True, "gesamt": len(tickers), "fertig": 0, "failed": {},
+             "start": now, "ende": None}
+    with _last_update_lock:
+        _kursholen[user] = stand
 
     def update_one(ticker):
         conn = None
@@ -1266,23 +1292,38 @@ async def update_prices(request: Request):
                     conn.close()
                 except Exception:
                     pass
+            with _last_update_lock:
+                stand["fertig"] += 1
 
     def run_all():
-        # Weniger Worker als früher (8): Yahoo drosselt parallele Bursts, und jeder
-        # Worker schreibt in dieselbe SQLite — beides erzeugte stille Ausfälle.
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            return dict(ex.map(update_one, tickers))
+        results = {}
+        try:
+            # Weniger Worker als früher (8): Yahoo drosselt parallele Bursts, und jeder
+            # Worker schreibt in dieselbe SQLite — beides erzeugte stille Ausfälle.
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                results = dict(ex.map(update_one, tickers))
+        finally:
+            failed = {t: r["error"] for t, r in results.items() if not r["ok"]}
+            failed.update({t: "nicht geholt" for t in tickers if t not in results})
+            with _last_update_lock:
+                stand.update(laeuft=False, failed=failed, ende=time.time())
+                if len(failed) == len(tickers):
+                    # Komplett fehlgeschlagen (Yahoo weg, kein Netz) — Sperre wieder
+                    # freigeben, sonst wartet der Benutzer eine Minute auf einen
+                    # Versuch, der nichts tat.
+                    _last_update.pop(user, None)
+            print(f"[Kurse] {user}: {len(tickers)} Ticker in {stand['ende'] - stand['start']:.0f} s"
+                  + (f", {len(failed)} fehlgeschlagen" if failed else ""))
+        return results
+
+    if hintergrund:
+        threading.Thread(target=run_all, name="kurse-holen", daemon=True).start()
+        return JSONResponse(content=_kursholen_antwort(stand), status_code=202)
 
     # Der Pool blockiert; in einer async-Route würde er den Event-Loop anhalten und
     # alle parallelen /api/prices/-Abrufe der Oberfläche mit ausbremsen.
-    results = await run_in_threadpool(run_all)
-
-    failed = {t: r["error"] for t, r in results.items() if not r["ok"]}
-    if failed and len(failed) == len(tickers):
-        # Komplett fehlgeschlagen (Yahoo weg, kein Netz) — Sperre wieder freigeben,
-        # sonst wartet der Benutzer eine Minute auf einen Versuch, der nichts tat.
-        with _last_update_lock:
-            _last_update.pop(user, None)
+    await run_in_threadpool(run_all)
+    failed = stand["failed"]
 
     return JSONResponse(content={
         "ok": not failed,
@@ -1290,6 +1331,19 @@ async def update_prices(request: Request):
         "updated": len(tickers) - len(failed),
         "failed": failed,
     })
+
+def _kursholen_antwort(stand: dict | None) -> dict:
+    if not stand:
+        return {"laeuft": False, "gesamt": 0, "fertig": 0, "failed": {}}
+    with _last_update_lock:
+        return {"laeuft": stand["laeuft"], "gesamt": stand["gesamt"],
+                "fertig": stand["fertig"], "failed": dict(stand["failed"]),
+                "dauer": round((stand["ende"] or time.time()) - stand["start"], 1)}
+
+@app.get("/api/prices/update/stand")
+async def update_prices_stand(request: Request):
+    """Fortschritt des laufenden (oder Ergebnis des letzten) Kurse-Holens."""
+    return JSONResponse(content=_kursholen_antwort(_kursholen.get(get_user(request))))
 
 @app.post("/api/prices/repair/{ticker}")
 async def repair_ticker(ticker: str, request: Request):
