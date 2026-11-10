@@ -614,6 +614,21 @@ header {
 }
 .wl-index { border-bottom: 2px solid var(--border); }
 
+/* Überschrift einer Sektor-Gruppe (IBKR-Basket, Haken „Nach Sektor gruppieren"):
+   links Farbpunkt + Name, rechts der Anteil des Sektors am Depot. */
+.wl-sektor {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 9px 4px 4px; border-bottom: 1px solid var(--border);
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em; user-select: none;
+}
+.wl-sektor-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-sektor-name i {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px;
+}
+.wl-sektor-anteil { flex-shrink: 0; white-space: nowrap; color: var(--text); letter-spacing: 0; }
+.wl-sektor-anteil .wl-size { font-weight: 400; color: var(--muted); }
+
 /* ── Basket-Verwaltung (Sidebar) ───────────────────────────────────────────── */
 .manage-item {
   display: flex; align-items: center; gap: 6px;

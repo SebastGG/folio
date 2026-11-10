@@ -1305,8 +1305,15 @@ function renderWatchlist() {
         if (neuSeit[t] === heute || (autoDatum && neuSeit[t] >= autoDatum)) neuHeute[t] = true;
     });
 
-    // Ticker (alphabetisch) — dieselbe Reihenfolge nehmen die Pfeiltasten
-    watchlistTicker().forEach(function(sym) {
+    // Ticker (alphabetisch, im IBKR-Basket auf Wunsch je Sektor) — dieselbe
+    // Reihenfolge nehmen die Pfeiltasten (watchlistTicker)
+    var gruppen = watchlistGruppen() || [{ sector: null, syms: watchlistTicker(), ohneKopf: true }];
+    gruppen.forEach(function(g) {
+        if (!g.ohneKopf) el.appendChild(_wlSektorKopf(g, ibkrVals));
+        g.syms.forEach(zeile);
+    });
+
+    function zeile(sym) {
         var p      = perfData[sym];
         var active = currentView === sym;
         var div    = document.createElement('div');
@@ -1349,7 +1356,39 @@ function renderWatchlist() {
         div.onclick = (function(s) { return function() { switchView(s); }; })(sym);
         if (active) div.scrollIntoView({ block: 'nearest' });
         el.appendChild(div);
+    }
+}
+
+/**
+ * Überschrift einer Sektor-Gruppe in der Kursliste. Rechts steht der Anteil des
+ * Sektors am Depot — die Summe der Einzelanteile darunter, also mit derselben
+ * Bezugsgröße (Depot samt Cash) wie die Zeile je Ticker.
+ */
+function _wlSektorKopf(g, ibkrVals) {
+    var summe = 0, bewertet = false;
+    if (ibkrVals) g.syms.forEach(function(sym) {
+        if (ibkrVals.value[sym] === undefined) return;
+        summe += ibkrVals.value[sym];
+        bewertet = true;
     });
+    var anteil = (bewertet && ibkrVals.depot) ? summe / ibkrVals.depot * 100 : null;
+    var kopf = document.createElement('div');
+    kopf.className = 'wl-sektor';
+    kopf.innerHTML = '<span class="wl-sektor-name">'
+        + '<i style="background:' + (g.sector ? ibkrSectorColor(g.sector) : 'var(--muted)') + '"></i>'
+        + escHtml(g.sector || 'Ohne Sektor') + '</span>'
+        + '<span class="wl-sektor-anteil">'
+        + (anteil !== null
+            ? anteil.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '&nbsp;%'
+            : '')
+        + (bewertet
+            ? '<span class="wl-size"> · ' + Math.round(summe).toLocaleString('de-DE') + '&nbsp;€</span>'
+            : '')
+        + '</span>';
+    kopf.title = (g.sector || 'Ohne Sektor (ETFs, Futures)') + ' — ' + g.syms.length
+        + (g.syms.length === 1 ? ' Wert' : ' Werte')
+        + (anteil !== null ? ', Anteil am Depot' : '');
+    return kopf;
 }
 
 function renderBasketSelect() {
@@ -1678,6 +1717,24 @@ function renderManageList() {
         if (!this.checked && currentView === 'index') switchView(Object.keys(WEIGHTS)[0] || 'index');
         renderWatchlist();
     };
+    // Sektor-Gruppierung der Kursliste — vorerst nur im IBKR-Basket, weil nur
+    // dort Sektoren und Depotanteile vorliegen (siehe watchlistGruppen).
+    if ((baskets[currentBasket] || {}).ibkrManaged) {
+        var grp = document.createElement('label');
+        grp.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;margin-top:6px;';
+        grp.title = 'Kursliste nach Sektor gruppieren; in der Überschrift steht der Anteil des Sektors am Depot';
+        grp.innerHTML = '<input type="checkbox" id="chk-group-sector"'
+            + (baskets[currentBasket].groupBySector ? ' checked' : '') + '>'
+            + 'Nach Sektor gruppieren';
+        grp.querySelector('input').onchange = function() {
+            baskets[currentBasket].groupBySector = this.checked;
+            markUnsaved();
+            renderWatchlist();
+            // Sektoren fehlen noch (z. B. direkt nach dem Start) → holen und nachziehen
+            if (this.checked) ibkrLoadSectors().then(function() { renderWatchlist(); });
+        };
+        header.appendChild(grp);
+    }
     el.appendChild(header);
     var syms = Object.keys(WEIGHTS);
     if (syms.length === 0) {
@@ -3579,7 +3636,7 @@ updateClock();
         ibkrLoadIsinMap().then(function() {
             var posGeladen = ibkrLoadPositions().then(function() { return ibkrLoadCash(); }).then(function() {
                 ibkrRenderTable(); refreshIbkrCostLine(_lastCandles); renderPerfTable();
-                ibkrLoadSectors().then(function() { ibkrRenderTable(); });
+                ibkrLoadSectors().then(_ibkrSektorenDa);
             });
             // Trades treffen erst NACH loadData() ein — Stammdaten-Fenster und
             // Chart-Marker deshalb hier noch einmal nachziehen.
@@ -4186,6 +4243,13 @@ function ibkrRenderSectorAllocation() {
         + '</div>';
 }
 
+/** Sektoren sind eingetroffen: Positionstabelle und — wenn sie nach Sektor
+    gruppiert ist — auch die Kursliste neu zeichnen. */
+function _ibkrSektorenDa() {
+    ibkrRenderTable();
+    if (basketGroupBySector()) renderWatchlist();
+}
+
 async function ibkrSync() {
     var btn = document.getElementById('ibkrSyncBtn');
     if (btn) { btn.textContent = '...'; btn.disabled = true; }
@@ -4227,7 +4291,7 @@ async function ibkrSync() {
                 refreshTradeMarkers();
                 updateChartMeta();   // Trade-Fenster unter dem Chart nachziehen
             }
-            ibkrLoadSectors().then(function() { ibkrRenderTable(); });
+            ibkrLoadSectors().then(_ibkrSektorenDa);
             _ibkrEx.bereit = true;
             ibkrExLaden(true);   // Verkäufe können sich geändert haben
         } else {

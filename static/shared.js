@@ -1886,7 +1886,40 @@ function markUnsaved() {
  * Ticker und immer mit Index-Zeile, und sprangen deshalb scheinbar willkürlich.
  */
 function watchlistTicker() {
-    return Object.keys(WEIGHTS).sort();
+    var gruppen = watchlistGruppen();
+    if (!gruppen) return Object.keys(WEIGHTS).sort();
+    return gruppen.reduce(function(alle, g) { return alle.concat(g.syms); }, []);
+}
+
+/** Haken „Nach Sektor gruppieren" in der Verwaltung — vorerst nur im IBKR-Basket. */
+function basketGroupBySector() {
+    var b = baskets[currentBasket];
+    return !!(b && b.ibkrManaged && b.groupBySector);
+}
+
+/**
+ * Kursliste nach Sektor gruppiert: [{ sector, syms }], Sektoren A→Z, darin die
+ * Ticker A→Z. Werte ohne Sektor (ETFs, Futures) bilden die letzte Gruppe mit
+ * sector = null. Liefert null, wenn nicht gruppiert wird — auch solange noch
+ * kein einziger Sektor bekannt ist (die Sektoren treffen nach dem Start erst
+ * nach den Positionen ein): eine Liste mit der einzigen Überschrift
+ * „Ohne Sektor" wäre bloß irreführend.
+ */
+function watchlistGruppen() {
+    if (!basketGroupBySector()) return null;
+    var nach = {}, ohne = [];
+    Object.keys(WEIGHTS).sort().forEach(function(sym) {
+        var sec = ibkrSectors[sym];
+        if (sec) (nach[sec] = nach[sec] || []).push(sym);
+        else     ohne.push(sym);
+    });
+    var namen = Object.keys(nach).sort(function(a, b) {
+        return a.localeCompare(b, undefined, { sensitivity: 'base' });
+    });
+    if (!namen.length) return null;
+    var gruppen = namen.map(function(sec) { return { sector: sec, syms: nach[sec] }; });
+    if (ohne.length) gruppen.push({ sector: null, syms: ohne });
+    return gruppen;
 }
 
 function navigateWatchlist(dir) {
