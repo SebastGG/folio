@@ -974,6 +974,19 @@
         <button class="btn" id="gd-plus" onclick="gdHinzufuegen()">+ Durchschnitt</button>
         <button class="btn" onclick="gdZuruecksetzen()" title="Zurück auf MA50 und MA200 (SMA, Tageskerzen)">Zurücksetzen</button>
       </div>
+      <h3 class="gd-unter">Volumen</h3>
+      <p class="settings-hint">
+        Linie mit dem Durchschnittsvolumen über den Volumenbalken unten im Chart; ein- und ausschalten
+        mit dem Schalter <b>Vol MA20</b> in der Werkzeugleiste. Sie zählt immer die <b>Kerzen der
+        eingestellten Zeitebene</b> (20 Tage, 20 Wochen, 20 Stunden …) — eine Wochenkerze trägt das
+        Volumen der ganzen Woche, ein Schnitt aus Tagesvolumen läge dort bei einem Fünftel der Balken.
+        Auch <b>Vol∅</b> in der Kerzenanzeige oben links kommt aus dieser Rechnung.
+      </p>
+      <div id="volma-zeile" class="gd-liste"></div>
+      <div class="settings-row ap-row">
+        <span style="margin-right:auto"></span>
+        <button class="btn" onclick="volMaZuruecksetzen()" title="Zurück auf SMA über 20 Kerzen">Zurücksetzen</button>
+      </div>
     </div>
 
     <div class="settings-card">
@@ -1339,6 +1352,11 @@
               der Wert am letzten Handelstag der Kerze, bei Stundenkerzen der Wert des jeweiligen Tages
               (die Linie springt einmal am Tag). Ein Schalter mit <b>·K</b> rechnet stattdessen über die
               Kerzen der gewählten Zeitebene. Gerechnet wird immer über die ganze Kursgeschichte.</dd>
+          <dt>Vol MA20</dt>
+          <dd>Linie mit dem Durchschnittsvolumen über den Volumenbalken — Vorgabe: einfacher Schnitt
+              über 20 <b>Kerzen der gewählten Zeitebene</b>, bei Wochenkerzen also über 20 Wochen.
+              Länge, Regel, Farbe und Stärke stehen ebenfalls unter <b>Einstellungen → Gleitende
+              Durchschnitte</b>.</dd>
           <dt>LogReg</dt>
           <dd>Logarithmische Regression; das Zahlenfeld daneben gibt die <b>Anzahl Kerzen</b> an, über
               die gerechnet wird.</dd>
@@ -1369,7 +1387,8 @@
         </p>
         <p class="help-tip">
           Oben links im Chart stehen beim Fahren mit der Maus <b>OHLC</b>, Volumen und das
-          Durchschnittsvolumen der jeweiligen Kerze — bei Stundenkerzen mit Uhrzeit und Sitzung.
+          Durchschnittsvolumen der jeweiligen Kerze (<b>Vol∅</b>, wie die Linie <b>Vol MA20</b>
+          eingestellt) — bei Stundenkerzen mit Uhrzeit und Sitzung.
           Hinter dem Schlusskurs steht, wie viel die Kerze <b>gegenüber dem Schluss der vorigen</b>
           gemacht hat, absolut und in Prozent; auf der jüngsten Kerze ist das die laufende
           Veränderung.

@@ -53,7 +53,7 @@ var currentView   = 'index'; // 'index' oder Ticker-Symbol z.B. 'AAPL'
 var currentPeriod = 180;  // Tage (0 = All)
 var currentTF     = '1D'; // '1H', '1D', '1W', '1M' — gewählt; gezeichnet wird chartTF()
 var logScale      = false;
-var indicators    = { ma50: false, ma200: false, reg: false };
+var indicators    = { ma50: false, ma200: false, reg: false, volma: true };   // volma: Volumen-Durchschnitt
 
 // Performance
 var perfData = {}; // { AAPL: { price, d1, d5, d22, d66, ytd, since } }
@@ -198,23 +198,25 @@ function calcMA(candles, period) {
  * Ein Wert entsteht erst ab der n-ten Kerze – davor gibt es keinen.
  * Weil über die ganze Kursgeschichte gerechnet wird, ist der Startwert der EMA
  * im sichtbaren Bereich längst ausgeklungen.
+ * Mit `feld` = 'volume' wird statt der Schlusskurse das Volumen gemittelt (fehlt es, zählt 0).
  */
-function calcGD(candles, period, art) {
+function calcGD(candles, period, art, feld) {
     var n = Math.floor(period), out = [], i, j, s;
     if (!candles || !(n >= 1) || candles.length < n) return out;
+    var w = feld ? function(c) { return c[feld] || 0; } : function(c) { return c.close; };
     if (art === 'ema') {
-        for (s = 0, i = 0; i < n; i++) s += candles[i].close;
+        for (s = 0, i = 0; i < n; i++) s += w(candles[i]);
         var ema = s / n, a = 2 / (n + 1);
         out.push({ time: candles[n - 1].time, value: ema });
         for (i = n; i < candles.length; i++) {
-            ema = a * candles[i].close + (1 - a) * ema;
+            ema = a * w(candles[i]) + (1 - a) * ema;
             out.push({ time: candles[i].time, value: ema });
         }
         return out;
     }
     var gewichtet = art === 'wma', nenner = gewichtet ? n * (n + 1) / 2 : n;
     for (i = n - 1; i < candles.length; i++) {
-        for (s = 0, j = 0; j < n; j++) s += candles[i - j].close * (gewichtet ? n - j : 1);
+        for (s = 0, j = 0; j < n; j++) s += w(candles[i - j]) * (gewichtet ? n - j : 1);
         out.push({ time: candles[i].time, value: s / nenner });
     }
     return out;
@@ -319,6 +321,55 @@ function gdFuerAnsicht(agg, tf, tage, ma, kerzenAlle) {
         if (i >= 0) out.push({ time: c.time, value: werte[i].value });
     });
     return out;
+}
+
+// ── Volumen-Durchschnitt ──────────────────────────────────────────────────────
+// Eine Linie über den Volumenbalken unten im Chart; Länge, Regel, Farbe und Stärke in
+// appearance.chart.volMa (Einstellungen → Gleitende Durchschnitte), an/aus wie bei den
+// Kurs-Durchschnitten in indicators.volma (Schalter in der Werkzeugleiste).
+// Anders als dort zählt sie immer die Kerzen der gezeigten Zeitebene: Eine Wochenkerze
+// trägt das Volumen der ganzen Woche – ein Schnitt aus Tagesvolumen läge bei einem
+// Fünftel der Balken. Den Wert „Vol∅" in der Kerzenanzeige liefert dieselbe Rechnung.
+var VOLMA_VORGABE = { laenge: 20, art: 'sma', farbe: '#2962ff', breite: 1.5 };
+
+/** Gespeicherte Einstellung prüfen; Unbrauchbares wird auf die Vorgabe des Felds gesetzt. */
+function volMaNormalisieren(v) {
+    v = v && typeof v === 'object' ? v : {};
+    var laenge = Math.floor(Number(v.laenge));
+    return {
+        laenge: laenge >= 1 && laenge <= GD_LAENGE_MAX ? laenge : VOLMA_VORGABE.laenge,
+        art:    GD_ARTEN[v.art] ? v.art : VOLMA_VORGABE.art,
+        farbe:  /^#[0-9a-f]{6}$/i.test(String(v.farbe || '')) ? v.farbe : VOLMA_VORGABE.farbe,
+        breite: GD_BREITEN.indexOf(Number(v.breite)) >= 0 ? Number(v.breite) : VOLMA_VORGABE.breite,
+    };
+}
+
+/** Die eingestellte Volumen-Linie (geprüft; Vorgabe SMA über 20 Kerzen). */
+function volMaEinstellung() {
+    return volMaNormalisieren(appearance && appearance.chart && appearance.chart.volMa);
+}
+
+/** Kurzname für Knopf und Einstellungen: „Vol MA20", „Vol EMA30". */
+function volMaName(vm) {
+    return 'Vol ' + (GD_KURZ[vm.art] || 'MA') + vm.laenge;
+}
+
+function volMaBeschreibung(vm) {
+    return 'Durchschnittsvolumen: ' + GD_ARTEN[vm.art] + ' über ' + vm.laenge + ' Kerzen der eingestellten Zeitebene';
+}
+
+/**
+ * Durchschnittsvolumen je gezeigter Kerze. Gerechnet über die ganze Geschichte der
+ * Zeitebene, nicht nur über den gewählten Zeitraum – sonst läge der Anlauf von n
+ * Kerzen im Bild, und die ersten Werte wären Schnitte über weniger Kerzen.
+ *
+ * @param {Array}  kerzenAlle - Kerzen der Zeitebene über die ganze Geschichte (mit volume)
+ * @param {*}      ab         - Zeit der ersten gezeigten Kerze
+ * @param {Object} vm         - volMaEinstellung()
+ * @returns {Array} [{time, value}] in Stück (unnormiert)
+ */
+function volMaFuerAnsicht(kerzenAlle, ab, vm) {
+    return calcGD(kerzenAlle || [], vm.laenge, vm.art, 'volume').filter(function(p) { return p.time >= ab; });
 }
 
 /**
@@ -1688,6 +1739,7 @@ function chartPrefsCollect() {
     c.logScale   = logScale;
     c.indicators = Object.assign({}, indicators);
     c.mas        = gdListe();
+    c.volMa      = volMaEinstellung();
     var rpEl = document.getElementById('regPeriod');
     if (rpEl) c.regPeriod = parseInt(rpEl.value, 10) || 12;
     // Nur gesetzt, wenn desktop.js geladen ist — sonst bleiben die Werte

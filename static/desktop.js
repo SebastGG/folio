@@ -26,6 +26,8 @@
 // Lightweight Charts Instanzen
 var chart, csSeries, volSeries, regS, regUS, regLS, ghostSeries, etfSeries;
 var gdSerien = {};   // Kennung → Linie je gleitendem Durchschnitt (gdSerienAbgleichen)
+var volMaSerie;      // Durchschnittsvolumen über den Volumenbalken (volMaEinstellung)
+var _volMaWerte = {}; // Kerzenzeit → Durchschnittsvolumen in Stück, für „Vol∅" in der Kerzenanzeige
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // Chart-Primitive für die Trade-Pfeile
 var _tradeMarkerData   = [];     // [{date, isBuy, qty, price, label}] — je Tag+Richtung
@@ -405,6 +407,11 @@ function initChart() {
         scaleMargins: { top: 0.85, bottom: 0 },
         borderVisible: false,
     });
+    // Durchschnittsvolumen: auf derselben Skala wie die Balken, Farbe/Stärke in renderDesktopChart
+    volMaSerie = chart.addSeries(LightweightCharts.LineSeries, {
+        priceScaleId: 'vol', visible: false,
+        lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+    });
 
     // Kerzen
     csSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
@@ -494,15 +501,10 @@ function initChart() {
         var actualVol = idx >= 0 ? (_lastCandles[idx].volume || 0) : 0;
         setEl('ovol', fmtVol(actualVol));
 
-        // Volume averaged (20-Tage gleitender Schnitt) — ebenfalls aus _lastCandles
-        if (idx >= 0) {
-            var n = Math.min(20, idx + 1);
-            var sum = 0;
-            for (var i = idx - n + 1; i <= idx; i++) {
-                sum += _lastCandles[i].volume || 0;
-            }
-            setEl('ovola', fmtVol(sum / n));
-        }
+        // Durchschnittsvolumen wie die Linie über den Balken (Einstellungen → Gleitende
+        // Durchschnitte), über die ganze Geschichte gerechnet; auch wenn die Linie aus ist
+        var vola = _volMaWerte[param.time];
+        setEl('ovola', vola != null ? fmtVol(vola) : '-');
     });
 
     applyChartTheme();   // Chart-Farben ans gespeicherte Theme angleichen
@@ -934,6 +936,8 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Leerer Basket — alle Serien leeren und sofort zurück
     if (!colored || !colored.length) {
         if (volSeries) try { volSeries.setData([]); } catch(e) {}
+        hideSeries(volMaSerie);
+        _volMaWerte = {};
         Object.keys(gdSerien).forEach(function(id) { hideSeries(gdSerien[id]); });
         hideSeries(regS);
         hideSeries(regUS);
@@ -967,44 +971,57 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     refreshEarnings();
 
     // Volumen
+    // Index-View: normiert (Durchschnitt=100), da Volumen dort eine gewichtete Hilfsgröße ist.
+    // Ticker-View: echtes Volumen in Stückzahl (wie TradingView). Derselbe Faktor gilt für
+    // die Linie des Volumen-Durchschnitts, sonst stünde sie neben den Balken.
+    var volFaktor = 1;
+    if (currentView === 'index' && volAgg.length) {
+        var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
+        volFaktor = 100 / (volSum / volAgg.length || 1);
+    }
     if (volSeries && volAgg.length) {
         var cmap = {};
         colored.forEach(function(c) { cmap[c.time] = c.up; });
-        // Index-View: normiert (Durchschnitt=100), da Volumen dort eine gewichtete Hilfsgröße ist.
-        // Ticker-View: echtes Volumen in Stückzahl (wie TradingView).
         var volUp   = chartColor('volUp',   'volAlpha');
         var volDown = chartColor('volDown', 'volAlpha');
-        var volColor = function(t) { return cmap[t] ? volUp : volDown; };
-        var volData;
-        if (currentView === 'index') {
-            var volSum = volAgg.reduce(function(s, v) { return s + (v.volume || 0); }, 0);
-            var volAvg = volSum / volAgg.length || 1;
-            volData = volAgg.map(function(v) {
-                return {
-                    time:  v.time,
-                    value: (v.volume || 0) / volAvg * 100,
-                    color: volColor(v.time),
-                };
-            });
-        } else {
-            volData = volAgg.map(function(v) {
-                return {
-                    time:  v.time,
-                    value: v.volume || 0,
-                    color: volColor(v.time),
-                };
-            });
-        }
+        var volData = volAgg.map(function(v) {
+            return {
+                time:  v.time,
+                value: (v.volume || 0) * volFaktor,
+                color: cmap[v.time] ? volUp : volDown,
+            };
+        });
         try { volSeries.setData(volData); } catch(e) {}
+    }
+
+    // Kerzen der Zeitebene über die ganze Geschichte – für den Volumen-Durchschnitt
+    // und die Durchschnitte mit Basis „Kerzen der Zeitebene"; erst bei Bedarf gebaut
+    var kerzenAlle = null;
+    var kerzenTF = function() { return kerzenAlle || (kerzenAlle = aggregateCandles(chartBasis(), tf)); };
+
+    // Volumen-Durchschnitt: immer gerechnet (für „Vol∅" in der Kerzenanzeige), gezeigt
+    // nach Schalter. In der Index-Ansicht wie die Balken normiert (Durchschnitt = 100).
+    _volMaWerte = {};
+    if (volMaSerie) {
+        var vm = volMaEinstellung();
+        var vmWerte = volMaFuerAnsicht(kerzenTF(), agg[0].time, vm);
+        vmWerte.forEach(function(p) { _volMaWerte[p.time] = p.value; });
+        if (!indicators.volma || !volAgg.length) {
+            hideSeries(volMaSerie);
+        } else {
+            volMaSerie.applyOptions({ visible: true, color: vm.farbe, lineWidth: vm.breite });
+            try {
+                volMaSerie.setData(vmWerte.map(function(p) { return { time: p.time, value: p.value * volFaktor }; }));
+            } catch(e) {}
+        }
     }
 
     // Gleitende Durchschnitte – Anzahl, Länge, Regel und Basis aus den Einstellungen,
     // gerechnet über die ganze Kursgeschichte (gdFuerAnsicht)
-    var kerzenAlle = null;
     gdSerienAbgleichen().forEach(function(ma) {
         var s = gdSerien[ma.id];
         if (!indicators[ma.id]) { hideSeries(s); return; }
-        if (ma.basis === 'kerze' && !kerzenAlle) kerzenAlle = aggregateCandles(chartBasis(), tf);
+        if (ma.basis === 'kerze') kerzenTF();
         s.applyOptions({ visible: true });
         s.setData(gdFuerAnsicht(agg, tf, allCandles, ma, kerzenAlle));
     });
@@ -1267,15 +1284,22 @@ function gdSerienAbgleichen() {
     return liste;
 }
 
-/** Werkzeugleiste: je gleitendem Durchschnitt ein Schalter, unterstrichen in seiner Farbe. */
+/**
+ * Werkzeugleiste: je gleitendem Durchschnitt ein Schalter, unterstrichen in seiner Farbe,
+ * dahinter der Schalter für den Volumen-Durchschnitt (Kennung volma).
+ */
 function gdKnoepfeZeichnen() {
     var box = document.getElementById('gd-knoepfe');
     if (!box) return;
+    var knopf = function(id, farbe, name, titel) {
+        return '<button class="btn gd-knopf" data-gd="' + id + '" style="--gd-farbe:' + farbe + '"'
+            + ' title="' + escHtml(titel) + ' — einstellbar unter Einstellungen"'
+            + ' onclick="togInd(\'' + id + '\')">' + escHtml(name) + '</button>';
+    };
+    var vm = volMaEinstellung();
     box.innerHTML = gdListe().map(function(ma) {
-        return '<button class="btn gd-knopf" data-gd="' + ma.id + '" style="--gd-farbe:' + ma.farbe + '"'
-            + ' title="' + escHtml(gdBeschreibung(ma)) + ' — einstellbar unter Einstellungen"'
-            + ' onclick="togInd(\'' + ma.id + '\')">' + escHtml(gdName(ma)) + '</button>';
-    }).join('');
+        return knopf(ma.id, ma.farbe, gdName(ma), gdBeschreibung(ma));
+    }).join('') + knopf('volma', vm.farbe, volMaName(vm), volMaBeschreibung(vm) + ', als Linie über den Volumenbalken');
     syncIndikatorKnoepfe();
 }
 
@@ -5155,6 +5179,7 @@ function renderAppearanceControls() {
         if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
     });
     renderGdControls();
+    renderVolMaControls();
     renderAutoLineControls();
 }
 
@@ -5253,6 +5278,76 @@ function renderGdControls() {
         plus.disabled = liste.length >= GD_MAX;
         plus.title = liste.length >= GD_MAX ? 'Höchstens ' + GD_MAX + ' Durchschnitte' : 'Weiteren Durchschnitt anlegen';
     }
+}
+
+// ── Volumen-Durchschnitt (Einstellungen) ─────────────────────────────────────
+// Eine Zeile wie bei den gleitenden Durchschnitten, aber ohne Wahl der Basis: gemittelt
+// werden immer die Kerzen der Zeitebene (volMaEinstellung() in shared.js). An/aus über
+// den Schalter in der Werkzeugleiste (indicators.volma).
+
+/** Einstellung schreiben, Schalter und Linie nachziehen, speichern. */
+function _volMaSpeichern(vm, neuZeichnen) {
+    if (!appearance) appearance = {};
+    appearance.chart = appearance.chart || {};
+    appearance.chart.volMa = volMaNormalisieren(vm);
+    gdKnoepfeZeichnen();
+    if (neuZeichnen !== false) renderVolMaControls();
+    if (typeof applyPeriod === 'function') applyPeriod();
+    chartPrefsChanged();
+}
+
+/**
+ * Ein Feld ändern. Länge wie bei den Durchschnitten: nur ganze Zahlen 1–1000; eine
+ * ungültige Eingabe wird rot markiert und nicht übernommen, die Linie bleibt.
+ */
+function volMaSetzen(feld, wert, el) {
+    var vm = volMaEinstellung();
+    if (feld === 'laenge') {
+        var n = Number(String(wert).replace(',', '.'));
+        var gut = Number.isInteger(n) && n >= 1 && n <= GD_LAENGE_MAX;
+        if (el) {
+            el.classList.toggle('gd-fehler', !gut);
+            el.title = gut ? '' : 'Ganze Zahl von 1 bis ' + GD_LAENGE_MAX;
+        }
+        if (!gut) return;
+        wert = n;
+    }
+    if (feld === 'breite') wert = Number(wert);
+    vm[feld] = wert;
+    // Beim Tippen/Farbziehen nicht die Zeile neu bauen, sonst springt der Fokus weg
+    _volMaSpeichern(vm, feld !== 'laenge' && feld !== 'farbe');
+}
+
+/** Zurück auf SMA über 20 Kerzen in der Vorgabefarbe. Der An/aus-Zustand bleibt. */
+function volMaZuruecksetzen() {
+    _volMaSpeichern(null);
+}
+
+function renderVolMaControls() {
+    var box = document.getElementById('volma-zeile');
+    if (!box) return;
+    var vm = volMaEinstellung();
+    var auswahl = function(feld, optionen, cur) {
+        return '<select onchange="volMaSetzen(\'' + feld + '\',this.value)">'
+            + Object.keys(optionen).map(function(k) {
+                return '<option value="' + k + '"' + (String(k) === String(cur) ? ' selected' : '') + '>'
+                    + escHtml(optionen[k]) + '</option>';
+            }).join('') + '</select>';
+    };
+    var breiten = {};
+    GD_BREITEN.forEach(function(b) { breiten[b] = String(b).replace('.', ',') + ' px'; });
+    box.innerHTML = '<div class="gd-zeile">'
+        + '<span class="gd-name" style="--gd-farbe:' + vm.farbe + '">' + escHtml(volMaName(vm)) + '</span>'
+        + auswahl('art', GD_ARTEN, vm.art)
+        + '<label class="gd-laenge"><input type="number" min="1" max="' + GD_LAENGE_MAX + '" step="1"'
+        +   ' value="' + vm.laenge + '" oninput="volMaSetzen(\'laenge\',this.value,this)"'
+        +   ' onchange="renderVolMaControls()"><span>Kerzen</span></label>'
+        + '<span class="gd-fest">aus Kerzen der Zeitebene</span>'
+        + '<label class="ap-color"><input type="color" value="' + vm.farbe + '"'
+        +   ' oninput="volMaSetzen(\'farbe\',this.value)" onchange="renderVolMaControls()"></label>'
+        + auswahl('breite', breiten, vm.breite)
+        + '<span></span>'
+        + '</div>';
 }
 
 /**

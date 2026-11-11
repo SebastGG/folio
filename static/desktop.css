@@ -130,6 +130,9 @@
 .gd-weg { border: none; background: none; color: var(--muted); font-size: 16px; line-height: 1;
   cursor: pointer; border-radius: 50%; width: 22px; height: 22px; }
 .gd-weg:hover { color: #fff; background: var(--red); }
+/* Volumen-Durchschnitt: eigene Zeile unter den Kurs-Durchschnitten, Basis fest */
+.gd-unter { font-size: 11px; font-weight: 600; margin: 16px 0 4px; }
+.gd-fest { font-size: 11px; color: var(--muted); }
 .btn:disabled { opacity: .45; cursor: default; }
 .ap-range b { color: var(--text); font-weight: 600; }
 
