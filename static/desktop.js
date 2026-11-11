@@ -170,6 +170,14 @@ function _vrvpKerzen(from, to) {
     return base.filter(function(c) { return c.time >= from && c.time <= to; });
 }
 
+/**
+ * Breite, die das Volumenprofil am rechten Rand der Zeichenfläche belegt – so lang
+ * ist die längste Zeile (POC). Eine Stelle für Zeichnen und Fit.
+ */
+function _vrvpBreite(W) {
+    return Math.min(W * 0.15, 120);
+}
+
 function _drawVRVP(target) {
     if (!_vrvpEnabled || !csSeries || !chart || !_lastCandles || !_lastCandles.length) return;
     var visRange = chart.timeScale().getVisibleRange();
@@ -220,7 +228,7 @@ function _drawVRVP(target) {
         var bucketSize = profile.bucketSize;
         priceMin = profile.priceMin; priceMax = profile.priceMax;
 
-        var maxBarW = Math.min(W * 0.15, 120);
+        var maxBarW = _vrvpBreite(W);
         var barRight = W;   // rechter Rand der Zeichenfläche = linker Rand der Preisachse
         var barColor = chartColor('vrvpBar', 'vrvpAlpha');
         var pocColor = hexToRgba(chartColorValue('vrvpPoc'),
@@ -1127,7 +1135,22 @@ function _showRangePadded(fromTime, toTime, extraRight) {
     var i0 = ts.timeToIndex(fromTime, true), i1 = ts.timeToIndex(toTime, true);
     if (i0 == null || i1 == null || i1 < i0) { ts.fitContent(); return null; }
     var pad = Math.max(1, (i1 - i0) * 0.03);
-    ts.setVisibleLogicalRange({ from: i0 - pad, to: i1 + (extraRight || 0) + pad });
+    var von = i0 - pad, bis = i1 + (extraRight || 0) + pad;
+    // VRVP an: Das Profil liegt am rechten Rand über dem Chart. Rechts so viel Platz
+    // lassen, dass die letzte Kerze links neben dem Profil steht, statt darunter.
+    // Gesucht ist das kleinste `bis`, bei dem rechts von der letzten Kerze mindestens
+    // der Anteil f der Breite frei bleibt:  (bis − L) ≥ f·(bis − von)  ⇒
+    // bis ≥ L + f·(L − von)/(1 − f),  L = rechte Kante der letzten Kerze.
+    // Liegt rechts ohnehin genug Platz (Zukunftsachse), bleibt es, wie es ist.
+    if (_vrvpEnabled && _lastCandles && _lastCandles.length) {
+        var W = ts.width();
+        if (W > 0) {
+            var f = Math.min(0.5, (_vrvpBreite(W) + 8) / W);       // 8 px Abstand
+            var L = (_lastCandles.length - 1) + 0.5;
+            bis = Math.max(bis, L + f * (L - von) / (1 - f));
+        }
+    }
+    ts.setVisibleLogicalRange({ from: von, to: bis });
     // Indizes der Zeitachse = Indizes in _lastCandles: andere Serien haben dieselben
     // Zeitpunkte, nur die Zukunftsachse (Ghost) hängt hinten weitere an.
     return { i0: i0, i1: i1 };
@@ -3726,6 +3749,9 @@ updateClock();
             var vbtn = document.getElementById('bvrvp');
             if (vbtn) vbtn.classList.add('ind-active');
             _initVRVP();
+            // Der erste Fit lief schon ohne VRVP – einmal neu einpassen, damit die
+            // letzten Kerzen nicht unter dem Profil liegen (_showRangePadded).
+            if (_lastCandles && _lastCandles.length) requestAnimationFrame(function() { if (chart) fitView(); });
         }
         var tbtn = document.getElementById('btn-trades-toggle');
         if (tbtn) tbtn.classList.toggle('active', _showTradeMarkers);
