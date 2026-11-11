@@ -201,6 +201,25 @@ function calcMA(candles, period) {
 }
 
 /**
+ * Gleitender Durchschnitt für den gezeigten Ausschnitt.
+ *
+ * Gerechnet wird über die GANZE Kursgeschichte der aktuellen Kerzengröße und erst
+ * danach auf den Ausschnitt gekürzt. Vorher lief calcMA nur über die Kerzen des
+ * gewählten Zeitraums: der MA200 brauchte 200 Kerzen Anlauf innerhalb des Bildes —
+ * bei 6 Monaten Tageskerzen (~126) fehlte er ganz, bei Wochenkerzen erst recht, und
+ * auch wo er erschien, begann er mitten im Bild statt am linken Rand.
+ *
+ * @param {Array} agg    - die gezeigten (aggregierten) Kerzen
+ * @param {Array} alle   - dieselbe Kerzengröße über die ganze Kursgeschichte
+ * @param {number} period
+ */
+function calcMAAusschnitt(agg, alle, period) {
+    if (!agg || !agg.length) return [];
+    var ab = agg[0].time;
+    return calcMA(alle, period).filter(function(p) { return p.time >= ab; });
+}
+
+/**
  * Berechnet logarithmische Regression mit Konfidenzband.
  * @param {Array} candles - Array von {time, close}
  * @param {number} stdDev - Anzahl Standardabweichungen für Band
