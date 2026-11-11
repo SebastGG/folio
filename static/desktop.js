@@ -1303,7 +1303,14 @@ function syncUIState() {
 function renderWatchlist() {
     var el = document.getElementById('watchlist');
     if (!el) return;
+    // Bildlauf merken: Solange die Liste beim Neuaufbau kurz leer ist, setzt der
+    // Browser ihn auf 0 – die Liste sprang so bei jedem Neuzeichnen nach oben.
+    var scroller = el.closest('.sidebar-content') || el;
+    var bildlauf = scroller.scrollTop;
+    var aktivZeile = null;
     el.innerHTML = '';
+    // Gruppiert nach Sektor, aber Sektoren fehlen noch → holen, danach neu zeichnen
+    if (basketGroupBySector()) _wlSektorenNachladen();
 
     // Index-Zeile: nur wenn für diesen Basket aktiviert
     if (basketShowIndex()) {
@@ -1323,6 +1330,7 @@ function renderWatchlist() {
         + '</div>';
     idxDiv.onclick = function() { switchView('index'); };
     el.appendChild(idxDiv);
+    if (idxActive) aktivZeile = idxDiv;
     } // end basketShowIndex
 
     // Im IBKR-Basket zusätzlich Depotanteil und Positionsgröße je Ticker
@@ -1338,13 +1346,20 @@ function renderWatchlist() {
         if (neuSeit[t] === heute || (autoDatum && neuSeit[t] >= autoDatum)) neuHeute[t] = true;
     });
 
-    // Ticker (alphabetisch, im IBKR-Basket auf Wunsch je Sektor) — dieselbe
-    // Reihenfolge nehmen die Pfeiltasten (watchlistTicker)
+    // Ticker (alphabetisch, auf Wunsch je Sektor) — dieselbe Reihenfolge nehmen
+    // die Pfeiltasten (watchlistTicker)
     var gruppen = watchlistGruppen() || [{ sector: null, syms: watchlistTicker(), ohneKopf: true }];
     gruppen.forEach(function(g) {
         if (!g.ohneKopf) el.appendChild(_wlSektorKopf(g, ibkrVals));
         g.syms.forEach(zeile);
     });
+
+    // Bildlauf zurück; beim Blättern mit den Pfeiltasten die gewählte Zeile ins Bild
+    // holen. Erst jetzt – vorher hing sie noch nicht im Dokument, und scrollIntoView
+    // wirkte nicht.
+    scroller.scrollTop = bildlauf;
+    if (_wlZurAktivenZeile && aktivZeile) aktivZeile.scrollIntoView({ block: 'nearest' });
+    _wlZurAktivenZeile = false;
 
     function zeile(sym) {
         var p      = perfData[sym];
@@ -1387,15 +1402,30 @@ function renderWatchlist() {
                   + ' title="' + sym + ' aus dem Basket entfernen (Strg+Z nimmt es zurück)">×</button>'
                 : '');
         div.onclick = (function(s) { return function() { switchView(s); }; })(sym);
-        if (active) div.scrollIntoView({ block: 'nearest' });
         el.appendChild(div);
+        if (active) aktivZeile = div;
     }
 }
 
+/** Sektoren der Basket-Ticker, die noch fehlen, holen und die Liste danach neu zeichnen. */
+var _wlSektorenLaeuft = false;
+function _wlSektorenNachladen() {
+    if (_wlSektorenLaeuft) return;
+    var fehlen = Object.keys(WEIGHTS).filter(function(sym) { return !(sym in ibkrSectors); });
+    if (!fehlen.length) return;
+    _wlSektorenLaeuft = true;
+    logIt(5, 'Kursliste', 'Sektoren für ' + fehlen.length + ' Werte laden');
+    sektorenLaden(fehlen).then(function() {
+        _wlSektorenLaeuft = false;
+        renderWatchlist();
+    }, function() { _wlSektorenLaeuft = false; });
+}
+
 /**
- * Überschrift einer Sektor-Gruppe in der Kursliste. Rechts steht der Anteil des
- * Sektors am Depot — die Summe der Einzelanteile darunter, also mit derselben
- * Bezugsgröße (Depot samt Cash) wie die Zeile je Ticker.
+ * Überschrift einer Sektor-Gruppe in der Kursliste. Im IBKR-Basket steht rechts
+ * der Anteil des Sektors am Depot — die Summe der Einzelanteile darunter, also mit
+ * derselben Bezugsgröße (Depot samt Cash) wie die Zeile je Ticker. In den übrigen
+ * Baskets gibt es keine Depotanteile; dort steht die Zahl der Werte.
  */
 function _wlSektorKopf(g, ibkrVals) {
     var summe = 0, bewertet = false;
@@ -1416,9 +1446,9 @@ function _wlSektorKopf(g, ibkrVals) {
             : '')
         + (bewertet
             ? '<span class="wl-size"> · ' + Math.round(summe).toLocaleString('de-DE') + '&nbsp;€</span>'
-            : '')
+            : '<span class="wl-size">' + g.syms.length + (g.syms.length === 1 ? ' Wert' : ' Werte') + '</span>')
         + '</span>';
-    kopf.title = (g.sector || 'Ohne Sektor (ETFs, Futures)') + ' — ' + g.syms.length
+    kopf.title = (g.sector || 'Ohne Sektor (ETFs, Indizes, Futures …)') + ' — ' + g.syms.length
         + (g.syms.length === 1 ? ' Wert' : ' Werte')
         + (anteil !== null ? ', Anteil am Depot' : '');
     return kopf;
@@ -1750,12 +1780,14 @@ function renderManageList() {
         if (!this.checked && currentView === 'index') switchView(Object.keys(WEIGHTS)[0] || 'index');
         renderWatchlist();
     };
-    // Sektor-Gruppierung der Kursliste — vorerst nur im IBKR-Basket, weil nur
-    // dort Sektoren und Depotanteile vorliegen (siehe watchlistGruppen).
-    if ((baskets[currentBasket] || {}).ibkrManaged) {
+    // Sektor-Gruppierung der Kursliste — in jedem Basket. Fehlende Sektoren holt
+    // renderWatchlist() selbst nach (_wlSektorenNachladen).
+    if (baskets[currentBasket]) {
         var grp = document.createElement('label');
         grp.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:10px;cursor:pointer;margin-top:6px;';
-        grp.title = 'Kursliste nach Sektor gruppieren; in der Überschrift steht der Anteil des Sektors am Depot';
+        grp.title = baskets[currentBasket].ibkrManaged
+            ? 'Kursliste nach Sektor gruppieren; in der Überschrift steht der Anteil des Sektors am Depot'
+            : 'Kursliste nach Sektor gruppieren; in der Überschrift steht die Zahl der Werte';
         grp.innerHTML = '<input type="checkbox" id="chk-group-sector"'
             + (baskets[currentBasket].groupBySector ? ' checked' : '') + '>'
             + 'Nach Sektor gruppieren';
@@ -1763,8 +1795,6 @@ function renderManageList() {
             baskets[currentBasket].groupBySector = this.checked;
             markUnsaved();
             renderWatchlist();
-            // Sektoren fehlen noch (z. B. direkt nach dem Start) → holen und nachziehen
-            if (this.checked) ibkrLoadSectors().then(function() { renderWatchlist(); });
         };
         header.appendChild(grp);
     }

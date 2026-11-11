@@ -2014,10 +2014,10 @@ function watchlistTicker() {
     return gruppen.reduce(function(alle, g) { return alle.concat(g.syms); }, []);
 }
 
-/** Haken „Nach Sektor gruppieren" in der Verwaltung — vorerst nur im IBKR-Basket. */
+/** Haken „Nach Sektor gruppieren" in der Verwaltung — in jedem Basket möglich. */
 function basketGroupBySector() {
     var b = baskets[currentBasket];
-    return !!(b && b.ibkrManaged && b.groupBySector);
+    return !!(b && b.groupBySector);
 }
 
 /**
@@ -2056,8 +2056,15 @@ function navigateWatchlist(dir) {
     switchView(next);
     // Markierung sofort umsetzen; nach dem Laden zeichnet switchView die Liste ohnehin
     // neu. Sonst hinkt sie bei schnellem Tippen den Kursabrufen hinterher.
+    // Die gewählte Zeile in den sichtbaren Bereich holen – nur hier, beim Blättern,
+    // nicht bei jedem Neuzeichnen (sonst zöge ein Kurs-Update die Liste weg, während
+    // man selbst scrollt).
+    _wlZurAktivenZeile = true;
     if (typeof renderWatchlist === 'function') renderWatchlist();
 }
+
+/** Beim nächsten renderWatchlist() die aktive Zeile in den sichtbaren Bereich holen. */
+var _wlZurAktivenZeile = false;
 
 // ╔══════════════════════════════════════════════════════════╗
 // ║ 14. IBKR FLEX QUERY                                       ║
@@ -2256,9 +2263,20 @@ async function ibkrLoadSectors() {
         if ((p.asset_class || '').toUpperCase() !== 'STK') return;
         if ((p.quantity || 0) <= 0) return;
         var sym = ibkrPosYahoo(p);
-        if (sym && !(sym in ibkrSectors)) syms[sym] = true;
+        if (sym) syms[sym] = true;
     });
-    var todo = Object.keys(syms);
+    return sektorenLaden(Object.keys(syms));
+}
+
+/**
+ * Sektor und Subsektor beliebiger Ticker in ibkrSectors/ibkrIndustries laden (der
+ * Name stammt aus der Zeit, als nur das Depot gruppiert wurde – die Tabellen gelten
+ * für jeden Ticker). Schon bekannte werden übersprungen; ein Ticker ohne Sektor
+ * (ETF, Index, Future) oder ein Fehlschlag wird als null vermerkt und nicht erneut
+ * gefragt.
+ */
+async function sektorenLaden(liste) {
+    var todo = (liste || []).filter(function(sym) { return sym && !(sym in ibkrSectors); });
     if (!todo.length) return ibkrSectors;
 
     var idx = 0;
