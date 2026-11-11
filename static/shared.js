@@ -183,51 +183,130 @@ function tickerCurSymbol(sym) {
 // ╚══════════════════════════════════════════════════════════╝
 
 /**
- * Berechnet Moving Average.
- * @param {Array} candles - Array von {time, close}
- * @param {number} period - MA-Periode (50 oder 200)
- * @returns {Array} [{time, value}]
+ * Einfacher gleitender Durchschnitt (SMA) der Schlusskurse.
+ * @returns {Array} [{time, value}] ab der period-ten Kerze
  */
 function calcMA(candles, period) {
-    var result = [];
-    for (var i = period - 1; i < candles.length; i++) {
-        var sum = 0;
-        for (var j = 0; j < period; j++) {
-            sum += candles[i - j].close;
-        }
-        result.push({ time: candles[i].time, value: sum / period });
-    }
-    return result;
+    return calcGD(candles, period, 'sma');
 }
 
 /**
- * Gleitender Durchschnitt auf Tagesbasis, gezeigt auf der gewählten Kerzengröße.
+ * Gleitender Durchschnitt der Schlusskurse nach Berechnungsregel `art`:
+ *   sma  einfach: Mittel der letzten n Schlusskurse
+ *   ema  exponentiell: α = 2/(n+1), Startwert = SMA der ersten n Kerzen
+ *   wma  linear gewichtet: jüngste Kerze Gewicht n, die älteste im Fenster 1
+ * Ein Wert entsteht erst ab der n-ten Kerze – davor gibt es keinen.
+ * Weil über die ganze Kursgeschichte gerechnet wird, ist der Startwert der EMA
+ * im sichtbaren Bereich längst ausgeklungen.
+ */
+function calcGD(candles, period, art) {
+    var n = Math.floor(period), out = [], i, j, s;
+    if (!candles || !(n >= 1) || candles.length < n) return out;
+    if (art === 'ema') {
+        for (s = 0, i = 0; i < n; i++) s += candles[i].close;
+        var ema = s / n, a = 2 / (n + 1);
+        out.push({ time: candles[n - 1].time, value: ema });
+        for (i = n; i < candles.length; i++) {
+            ema = a * candles[i].close + (1 - a) * ema;
+            out.push({ time: candles[i].time, value: ema });
+        }
+        return out;
+    }
+    var gewichtet = art === 'wma', nenner = gewichtet ? n * (n + 1) / 2 : n;
+    for (i = n - 1; i < candles.length; i++) {
+        for (s = 0, j = 0; j < n; j++) s += candles[i - j].close * (gewichtet ? n - j : 1);
+        out.push({ time: candles[i].time, value: s / nenner });
+    }
+    return out;
+}
+
+// ── Gleitende Durchschnitte: Einstellungen ────────────────────────────────────
+// Anzahl, Länge, Berechnungsregel, Basis und Farbe stehen pro Benutzer in
+// appearance.chart.mas (Einstellungen → Gleitende Durchschnitte); an/aus je
+// Linie in indicators[id] (Knöpfe in der Werkzeugleiste). Die Vorgabe sind die
+// bisherigen MA50/MA200 mit denselben Kennungen – die Android-App liest
+// indicators.ma50/ma200 weiter als Startwert.
+var GD_ARTEN  = { sma: 'SMA – einfach', ema: 'EMA – exponentiell', wma: 'WMA – linear gewichtet' };
+var GD_KURZ   = { sma: 'MA', ema: 'EMA', wma: 'WMA' };
+var GD_BASEN  = { tag: 'Tageskerzen', kerze: 'Kerzen der Zeitebene' };
+var GD_BREITEN = [1, 1.5, 2, 3];
+var GD_FARBEN = ['#2962ff', '#f5a623', '#26a69a', '#e91e63', '#8e44ad', '#795548', '#00acc1', '#9e9d24'];
+var GD_MAX = 8, GD_LAENGE_MAX = 1000;
+var GD_VORGABE = [
+    { id: 'ma50',  laenge: 50,  art: 'sma', basis: 'tag', farbe: '#2962ff', breite: 1.5 },
+    { id: 'ma200', laenge: 200, art: 'sma', basis: 'tag', farbe: '#f5a623', breite: 1.5 },
+];
+
+/** Gespeicherte Liste prüfen; Unbrauchbares wird auf die Vorgabe des Felds gesetzt. */
+function gdNormalisieren(liste) {
+    if (!Array.isArray(liste)) return GD_VORGABE.map(function(m) { return Object.assign({}, m); });
+    var ids = {};
+    return liste.filter(function(m) {
+        return m && /^[a-z0-9_]{1,24}$/.test(String(m.id || '')) && !ids[m.id] && (ids[m.id] = true);
+    }).slice(0, GD_MAX).map(function(m, i) {
+        var laenge = Math.floor(Number(m.laenge));
+        return {
+            id:     m.id,
+            laenge: laenge >= 1 && laenge <= GD_LAENGE_MAX ? laenge : 50,
+            art:    GD_ARTEN[m.art] ? m.art : 'sma',
+            basis:  GD_BASEN[m.basis] ? m.basis : 'tag',
+            farbe:  /^#[0-9a-f]{6}$/i.test(String(m.farbe || '')) ? m.farbe : GD_FARBEN[i % GD_FARBEN.length],
+            breite: GD_BREITEN.indexOf(Number(m.breite)) >= 0 ? Number(m.breite) : 1.5,
+        };
+    });
+}
+
+/** Die eingestellten gleitenden Durchschnitte (geprüft; Vorgabe, wenn nie eingestellt). */
+function gdListe() {
+    return gdNormalisieren(appearance && appearance.chart && appearance.chart.mas);
+}
+
+/** Kurzname für Knopf und Liste: „MA50", „EMA21", bei Basis Zeitebene mit „·K". */
+function gdName(ma) {
+    return (GD_KURZ[ma.art] || 'MA') + ma.laenge + (ma.basis === 'kerze' ? '·K' : '');
+}
+
+/** Ausführliche Beschreibung für den Tooltip. */
+function gdBeschreibung(ma) {
+    return GD_ARTEN[ma.art] + ' über ' + ma.laenge
+        + (ma.basis === 'kerze' ? ' Kerzen der eingestellten Zeitebene'
+                                : ' Handelstage – aus Tageskerzen, auf jeder Zeitebene dieselbe Linie');
+}
+
+/**
+ * Werte eines gleitenden Durchschnitts für die gezeigten Kerzen.
  *
- * MA50/MA200 sind IMMER der 50-/200-Tage-Durchschnitt der Tagesschlusskurse, auf
- * jeder Zeitebene dieselbe Linie (Wunsch des Nutzers 11/2026). Gerechnet wird über
- * die ganze Tagesgeschichte, nicht nur über den gewählten Zeitraum – sonst lag der
- * Anlauf von 200 Kerzen im Bild selbst, und bei 6 Monaten fehlte der MA200 ganz.
+ * Gerechnet wird immer über die ganze Kursgeschichte, nicht nur über den gewählten
+ * Zeitraum – sonst läge der Anlauf von n Kerzen im Bild selbst (bis v1.26.0 fehlte
+ * so der MA200 bei 6 Monaten ganz). Je gezeigter Kerze steht höchstens ein Wert,
+ * damit die Linie keine eigenen Zeitpunkte auf die Achse bringt (LightweightCharts
+ * baut die Zeitachse aus allen Serien).
  *
- * Je gezeigter Kerze steht ein Wert, damit die Linie keine eigenen Zeitpunkte auf
- * die Achse bringt (LightweightCharts baut die Zeitachse aus allen Serien):
+ * Basis 'tag' (Vorgabe): aus den Tageskerzen, auf jeder Zeitebene dieselbe Linie
  *   1D      der Tageswert
  *   1W, 1M  der Wert am letzten Handelstag der Periode – wie der Schlusskurs der Kerze
- *   1H      der Wert des Handelstags, zu dem die Stunde gehört (Linie in Tagesstufen);
- *           fehlt der Tag in den Tageskursen, gilt der letzte Tag davor
+ *   1H      der Wert des Handelstags der Stunde (Linie in Tagesstufen, auch in Vor-
+ *           und Nachbörse); fehlt der Tag in den Tageskursen, gilt der letzte davor
+ * Basis 'kerze': aus den Kerzen der eingestellten Zeitebene (50 Wochen, 50 Stunden …)
  *
- * @param {Array}  agg    - die gezeigten Kerzen der gewählten Kerzengröße
- * @param {string} tf     - '1H', '1D', '1W', '1M'
- * @param {Array}  tage   - Tageskerzen der ganzen Kursgeschichte (allCandles)
- * @param {number} period - Anzahl Handelstage
+ * @param {Array}  agg        - die gezeigten Kerzen der gewählten Kerzengröße
+ * @param {string} tf         - '1H', '1D', '1W', '1M'
+ * @param {Array}  tage       - Tageskerzen der ganzen Kursgeschichte (allCandles)
+ * @param {Object} ma         - Eintrag aus gdListe()
+ * @param {Array}  kerzenAlle - Kerzen der Zeitebene über die ganze Geschichte (nur für 'kerze')
  */
-function calcMATagesbasis(agg, tf, tage, period) {
+function gdFuerAnsicht(agg, tf, tage, ma, kerzenAlle) {
     if (!agg || !agg.length) return [];
-    var ma = calcMA(tage || [], period);          // [{time: 'YYYY-MM-DD', value}]
-    if (!ma.length) return [];
+    if (ma.basis === 'kerze') {
+        var ab = agg[0].time;
+        return calcGD(kerzenAlle || [], ma.laenge, ma.art).filter(function(p) { return p.time >= ab; });
+    }
+    var werte = calcGD(tage || [], ma.laenge, ma.art);     // [{time: 'YYYY-MM-DD', value}]
+    if (!werte.length) return [];
 
     if (tf === '1W' || tf === '1M') {
-        var jePeriode = {};                        // Periodenbeginn → Wert am letzten Tag
-        ma.forEach(function(p) { jePeriode[periodStartFor(p.time, tf)] = p.value; });
+        var jePeriode = {};                                  // Periodenbeginn → Wert am letzten Tag
+        werte.forEach(function(p) { jePeriode[periodStartFor(p.time, tf)] = p.value; });
         return agg.filter(function(c) { return jePeriode[c.time] !== undefined; })
                   .map(function(c) { return { time: c.time, value: jePeriode[c.time] }; });
     }
@@ -236,8 +315,8 @@ function calcMATagesbasis(agg, tf, tage, period) {
     var out = [], i = -1;
     agg.forEach(function(c) {
         var tag = tf === '1H' ? chartTimeToStr(c.time) : c.time;
-        while (i + 1 < ma.length && ma[i + 1].time <= tag) i++;
-        if (i >= 0) out.push({ time: c.time, value: ma[i].value });
+        while (i + 1 < werte.length && werte[i + 1].time <= tag) i++;
+        if (i >= 0) out.push({ time: c.time, value: werte[i].value });
     });
     return out;
 }
@@ -1048,6 +1127,7 @@ function chartTimeToStr(t) {
 
 function togInd(name) {
     indicators[name] = !indicators[name];
+    if (typeof syncIndikatorKnoepfe === 'function') syncIndikatorKnoepfe();
     applyPeriod();
     chartPrefsChanged();
 }
@@ -1607,6 +1687,7 @@ function chartPrefsCollect() {
     c.tf         = currentTF;
     c.logScale   = logScale;
     c.indicators = Object.assign({}, indicators);
+    c.mas        = gdListe();
     var rpEl = document.getElementById('regPeriod');
     if (rpEl) c.regPeriod = parseInt(rpEl.value, 10) || 12;
     // Nur gesetzt, wenn desktop.js geladen ist — sonst bleiben die Werte

@@ -64,8 +64,8 @@
       </div>
       <div class="sep"></div>
       <div class="btn-group">
-        <button class="btn" id="bma50"  onclick="togInd('ma50')">MA50</button>
-        <button class="btn" id="bma200" onclick="togInd('ma200')">MA200</button>
+        <!-- je gleitendem Durchschnitt ein Schalter, aus den Einstellungen (gdKnoepfeZeichnen) -->
+        <span id="gd-knoepfe" class="gd-knoepfe"></span>
         <button class="btn" id="breg"   onclick="togInd('reg')">LogReg</button>
         <input type="number" id="regPeriod" value="12" min="5" max="200"
           title="LogReg Zeitrahmen (Anzahl Kerzen) — gilt wie die übrigen Chart-Einstellungen für alle Charts"
@@ -956,6 +956,27 @@
     </div>
 
     <div class="settings-card">
+      <h2 class="settings-h">Gleitende Durchschnitte</h2>
+      <p class="settings-hint">
+        Jede Zeile ist ein Schalter in der Werkzeugleiste über dem Chart. Gerechnet wird immer über
+        die ganze Kursgeschichte, nicht nur über den gezeigten Zeitraum. <b>Aus Tageskerzen</b> heißt:
+        die Länge zählt Handelstage, und auf jeder Zeitebene steht dieselbe Linie — bei Wochen- und
+        Monatskerzen der Wert am letzten Handelstag, bei Stundenkerzen der Wert des Tages.
+        <b>Aus Kerzen der Zeitebene</b> zählt die gezeigten Kerzen (50 Wochen, 50 Stunden …);
+        der Schalter trägt dann ein <b>·K</b>.
+      </p>
+      <div class="gd-kopf">
+        <span></span><span>Regel</span><span>Länge</span><span>Basis</span><span>Farbe</span><span>Stärke</span><span></span>
+      </div>
+      <div id="gd-liste" class="gd-liste"></div>
+      <div class="settings-row ap-row">
+        <span class="settings-hint" style="margin-right:auto">SMA einfach · EMA exponentiell (α = 2/(n+1)) · WMA linear gewichtet</span>
+        <button class="btn" id="gd-plus" onclick="gdHinzufuegen()">+ Durchschnitt</button>
+        <button class="btn" onclick="gdZuruecksetzen()" title="Zurück auf MA50 und MA200 (SMA, Tageskerzen)">Zurücksetzen</button>
+      </div>
+    </div>
+
+    <div class="settings-card">
       <h2 class="settings-h">Auto-Linien</h2>
       <p class="settings-hint">
         Unterstützungen, Widerstände und Trendlinien, die der Schalter <b>📐 Auto-Linien</b> über dem
@@ -1308,11 +1329,14 @@
               Einzelwerte, bis zu zwei Jahre zurück, mit Vor- und Nachbörse als <b>blasse</b> Kerzen;
               die Uhrzeiten sind Börsenzeit (bei US-Werten New York). In der Index-Ansicht bleibt 1h
               gewählt, der Knopf wird blass und es gibt Tageskerzen.</dd>
-          <dt>MA50 / MA200</dt>
-          <dd>Gleitende Durchschnitte über 50 bzw. 200 <b>Handelstage</b>, aus den Tagesschlusskursen
-              der ganzen Kursgeschichte – auf jeder Kerzengröße dieselbe Linie. Bei Wochen- und
-              Monatskerzen steht an jeder Kerze der Wert ihres letzten Handelstags, bei Stundenkerzen
-              der Wert des jeweiligen Tages (die Linie springt einmal am Tag).</dd>
+          <dt>MA50 / MA200 …</dt>
+          <dd>Gleitende Durchschnitte, je einer ein Schalter. Welche es gibt, legst du unter
+              <b>Einstellungen → Gleitende Durchschnitte</b> fest: Anzahl, Länge, Regel (SMA, EMA, WMA),
+              Basis und Farbe. Vorgabe sind MA50 und MA200 über 50 bzw. 200 <b>Handelstage</b> aus den
+              Tagesschlusskursen – auf jeder Kerzengröße dieselbe Linie: bei Wochen- und Monatskerzen
+              der Wert am letzten Handelstag der Kerze, bei Stundenkerzen der Wert des jeweiligen Tages
+              (die Linie springt einmal am Tag). Ein Schalter mit <b>·K</b> rechnet stattdessen über die
+              Kerzen der gewählten Zeitebene. Gerechnet wird immer über die ganze Kursgeschichte.</dd>
           <dt>LogReg</dt>
           <dd>Logarithmische Regression; das Zahlenfeld daneben gibt die <b>Anzahl Kerzen</b> an, über
               die gerechnet wird.</dd>
@@ -1806,7 +1830,9 @@
         <p>
           Theme, Kontrast, Schriftgröße und Akzentfarbe gelten pro Benutzer auf allen Geräten. Für den
           Chart lassen sich Hintergrund, Volumenfarben und die Farben des Volumenprofils getrennt
-          einstellen — <b>Zurücksetzen</b> stellt die Vorgaben wieder her. Darunter stehen die
+          einstellen — <b>Zurücksetzen</b> stellt die Vorgaben wieder her. Unter <b>Gleitende
+          Durchschnitte</b> legst du fest, welche Durchschnitte es gibt (bis zu acht) und wie sie
+          gerechnet werden; die Schalter über dem Chart folgen der Liste. Darunter stehen die
           Fenster-Verwaltung, dein Konto und die IBKR-Zugangsdaten.
         </p>
         <p class="help-tip">

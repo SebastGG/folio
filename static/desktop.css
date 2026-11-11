@@ -105,6 +105,32 @@
   font-size: 11px; color: var(--muted);
 }
 .ap-range input[type="range"] { width: 90px; cursor: pointer; }
+
+/* Gleitende Durchschnitte: Schalter in der Werkzeugleiste (Farbe als Unterstrich)
+   und die Liste in den Einstellungen */
+.gd-knoepfe { display: contents; }
+.btn.gd-knopf { box-shadow: inset 0 -2px 0 var(--gd-farbe, transparent); }
+.gd-kopf, .gd-zeile {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: 74px minmax(150px, 1.3fr) 110px minmax(150px, 1.2fr) 40px 76px 24px;
+}
+.gd-kopf { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.gd-zeile { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.gd-name { font-weight: 600; font-variant-numeric: tabular-nums;
+  border-left: 3px solid var(--gd-farbe, var(--border)); padding-left: 7px; }
+.gd-zeile select, .gd-zeile input[type="number"] {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  padding: 3px 6px; font-family: inherit; font-size: 11px; border-radius: 4px; min-width: 0;
+}
+.gd-laenge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.gd-laenge input { width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
+.gd-zeile input.gd-fehler { border-color: var(--red); color: var(--red); }
+.gd-zeile .ap-color { margin-left: 0; }
+.gd-weg { border: none; background: none; color: var(--muted); font-size: 16px; line-height: 1;
+  cursor: pointer; border-radius: 50%; width: 22px; height: 22px; }
+.gd-weg:hover { color: #fff; background: var(--red); }
+.btn:disabled { opacity: .45; cursor: default; }
 .ap-range b { color: var(--text); font-weight: 600; }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */

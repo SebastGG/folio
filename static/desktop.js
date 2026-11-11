@@ -24,7 +24,8 @@
 // ╚══════════════════════════════════════════════════════════╝
 
 // Lightweight Charts Instanzen
-var chart, csSeries, volSeries, ma50S, ma200S, regS, regUS, regLS, ghostSeries, etfSeries;
+var chart, csSeries, volSeries, regS, regUS, regLS, ghostSeries, etfSeries;
+var gdSerien = {};   // Kennung → Linie je gleitendem Durchschnitt (gdSerienAbgleichen)
 var _ibkrCostLine      = null;   // Einstandskurs-Preislinie (wird pro Ticker neu gesetzt)
 var _markersPlugin     = null;   // Chart-Primitive für die Trade-Pfeile
 var _tradeMarkerData   = [];     // [{date, isBuy, qty, price, label}] — je Tag+Richtung
@@ -424,10 +425,8 @@ function initChart() {
     // Linke Achse: autoskaliert + maus-skalierbar; nur sichtbar wenn das Overlay aktiv ist.
     chart.priceScale('left').applyOptions({ visible: false, autoScale: true, borderVisible: false });
 
-    // Indikatoren
-    ma50S  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#2962ff',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
-    ma200S = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#f5a623',  lineWidth: 1.5, visible: false, priceLineVisible: false, lastValueVisible: false });
-    regS   = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 2,   visible: false, priceLineVisible: false, lastValueVisible: false });
+    // Indikatoren (die Linien der gleitenden Durchschnitte legt gdSerienAbgleichen() an)
+    regS  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 2,   visible: false, priceLineVisible: false, lastValueVisible: false });
     regUS  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
     regLS  = chart.addSeries(LightweightCharts.LineSeries, { autoscaleInfoProvider: _keineAutoskala, color: '#9b59b6',  lineWidth: 1,   visible: false, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
 
@@ -927,8 +926,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     // Leerer Basket — alle Serien leeren und sofort zurück
     if (!colored || !colored.length) {
         if (volSeries) try { volSeries.setData([]); } catch(e) {}
-        hideSeries(ma50S);
-        hideSeries(ma200S);
+        Object.keys(gdSerien).forEach(function(id) { hideSeries(gdSerien[id]); });
         hideSeries(regS);
         hideSeries(regUS);
         hideSeries(regLS);
@@ -992,28 +990,16 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         try { volSeries.setData(volData); } catch(e) {}
     }
 
-    // MA50 / MA200: immer 50/200 Handelstage aus den Tageskursen der ganzen Geschichte,
-    // auf jeder Kerzengröße dieselbe Linie (calcMATagesbasis)
-
-    // MA50
-    if (ma50S) {
-        if (indicators.ma50) {
-            ma50S.applyOptions({ visible: true });
-            ma50S.setData(calcMATagesbasis(agg, tf, allCandles, 50));
-        } else {
-            hideSeries(ma50S);
-        }
-    }
-
-    // MA200
-    if (ma200S) {
-        if (indicators.ma200) {
-            ma200S.applyOptions({ visible: true });
-            ma200S.setData(calcMATagesbasis(agg, tf, allCandles, 200));
-        } else {
-            hideSeries(ma200S);
-        }
-    }
+    // Gleitende Durchschnitte – Anzahl, Länge, Regel und Basis aus den Einstellungen,
+    // gerechnet über die ganze Kursgeschichte (gdFuerAnsicht)
+    var kerzenAlle = null;
+    gdSerienAbgleichen().forEach(function(ma) {
+        var s = gdSerien[ma.id];
+        if (!indicators[ma.id]) { hideSeries(s); return; }
+        if (ma.basis === 'kerze' && !kerzenAlle) kerzenAlle = aggregateCandles(chartBasis(), tf);
+        s.applyOptions({ visible: true });
+        s.setData(gdFuerAnsicht(agg, tf, allCandles, ma, kerzenAlle));
+    });
 
     // Log-Skala
     chart.applyOptions({ rightPriceScale: { mode: logScale ? 1 : 0 } });
@@ -1233,6 +1219,52 @@ function _tfKnopfZustand() {
             : 'Für diesen Wert gibt es keine Stundenkerzen — es werden Tageskerzen gezeigt';
 }
 
+/**
+ * Je eingestelltem gleitendem Durchschnitt eine Linie im Chart: neue anlegen,
+ * Farbe/Stärke nachziehen, gelöschte entfernen. Liefert die Liste (gdListe()).
+ */
+function gdSerienAbgleichen() {
+    var liste = gdListe();
+    if (!chart) return liste;
+    var da = {};
+    liste.forEach(function(ma) {
+        da[ma.id] = true;
+        var opt = { color: ma.farbe, lineWidth: ma.breite };
+        if (gdSerien[ma.id]) { gdSerien[ma.id].applyOptions(opt); return; }
+        gdSerien[ma.id] = chart.addSeries(LightweightCharts.LineSeries, Object.assign({
+            autoscaleInfoProvider: _keineAutoskala, visible: false,
+            priceLineVisible: false, lastValueVisible: false,
+        }, opt));
+    });
+    Object.keys(gdSerien).forEach(function(id) {
+        if (da[id]) return;
+        try { chart.removeSeries(gdSerien[id]); } catch(e) {}
+        delete gdSerien[id];
+    });
+    return liste;
+}
+
+/** Werkzeugleiste: je gleitendem Durchschnitt ein Schalter, unterstrichen in seiner Farbe. */
+function gdKnoepfeZeichnen() {
+    var box = document.getElementById('gd-knoepfe');
+    if (!box) return;
+    box.innerHTML = gdListe().map(function(ma) {
+        return '<button class="btn gd-knopf" data-gd="' + ma.id + '" style="--gd-farbe:' + ma.farbe + '"'
+            + ' title="' + escHtml(gdBeschreibung(ma)) + ' — einstellbar unter Einstellungen"'
+            + ' onclick="togInd(\'' + ma.id + '\')">' + escHtml(gdName(ma)) + '</button>';
+    }).join('');
+    syncIndikatorKnoepfe();
+}
+
+/** An/aus-Zustand der Indikator-Schalter (gleitende Durchschnitte, LogReg) zeigen. */
+function syncIndikatorKnoepfe() {
+    document.querySelectorAll('#gd-knoepfe [data-gd]').forEach(function(b) {
+        b.classList.toggle('ind-active', !!indicators[b.getAttribute('data-gd')]);
+    });
+    var breg = document.getElementById('breg');
+    if (breg) breg.classList.toggle('ind-active', !!indicators.reg);
+}
+
 function syncUIState() {
     var periodLabels = { 30: '1M', 90: '3M', 180: '6M', 365: '1J', 0: 'All' };
     var grp = document.getElementById('period-btns');
@@ -1244,10 +1276,8 @@ function syncUIState() {
         if (b) b.classList.toggle('active', t === currentTF);
     });
     _tfKnopfZustand();
-    ['ma50', 'ma200', 'reg'].forEach(function(n) {
-        var b = document.getElementById('b' + n);
-        if (b) b.classList.toggle('ind-active', !!indicators[n]);
-    });
+    gdKnoepfeZeichnen();
+    syncIndikatorKnoepfe();
     var blog = document.getElementById('blog');
     if (blog) blog.classList.toggle('ind-active', !!logScale);
 
@@ -5068,7 +5098,105 @@ function renderAppearanceControls() {
         var lab = document.getElementById('ap-' + key + '-val');
         if (lab) lab.textContent = Math.round(chartColorValue(key) * 100) + ' %';
     });
+    renderGdControls();
     renderAutoLineControls();
+}
+
+// ── Gleitende Durchschnitte (Einstellungen) ──────────────────────────────────
+// Die Liste steht in appearance.chart.mas (gdListe() in shared.js), an/aus je Linie
+// in indicators[id]. Jede Änderung wirkt sofort auf Chart und Werkzeugleiste und
+// wird wie die übrigen Chart-Einstellungen kurz danach gespeichert.
+
+/** Liste schreiben, Chart und Knöpfe nachziehen, speichern. */
+function _gdSpeichern(liste, neuZeichnen) {
+    if (!appearance) appearance = {};
+    appearance.chart = appearance.chart || {};
+    appearance.chart.mas = gdNormalisieren(liste);
+    gdKnoepfeZeichnen();
+    if (neuZeichnen !== false) renderGdControls();
+    if (typeof applyPeriod === 'function') applyPeriod();
+    chartPrefsChanged();
+}
+
+/**
+ * Ein Feld eines Durchschnitts ändern. Länge: nur ganze Zahlen 1–1000; eine
+ * ungültige Eingabe wird rot markiert und nicht übernommen, die Linie bleibt.
+ */
+function gdSetzen(id, feld, wert, el) {
+    var liste = gdListe(), ma = liste.find(function(m) { return m.id === id; });
+    if (!ma) return;
+    if (feld === 'laenge') {
+        var n = Number(String(wert).replace(',', '.'));
+        var gut = Number.isInteger(n) && n >= 1 && n <= GD_LAENGE_MAX;
+        if (el) {
+            el.classList.toggle('gd-fehler', !gut);
+            el.title = gut ? '' : 'Ganze Zahl von 1 bis ' + GD_LAENGE_MAX;
+        }
+        if (!gut) return;
+        wert = n;
+    }
+    if (feld === 'breite') wert = Number(wert);
+    ma[feld] = wert;
+    // Beim Tippen/Farbziehen nicht die Tabelle neu bauen, sonst springt der Fokus weg
+    _gdSpeichern(liste, feld !== 'laenge' && feld !== 'farbe');
+}
+
+function gdHinzufuegen() {
+    var liste = gdListe();
+    if (liste.length >= GD_MAX) return;
+    var nr = 1;
+    while (liste.some(function(m) { return m.id === 'gd' + nr; })) nr++;
+    var benutzt = liste.map(function(m) { return m.farbe.toLowerCase(); });
+    var farbe = GD_FARBEN.find(function(f) { return benutzt.indexOf(f) < 0; }) || GD_FARBEN[0];
+    liste.push({ id: 'gd' + nr, laenge: 20, art: 'ema', basis: 'tag', farbe: farbe, breite: 1.5 });
+    indicators['gd' + nr] = true;   // wer einen Durchschnitt anlegt, will ihn sehen
+    _gdSpeichern(liste);
+}
+
+function gdEntfernen(id) {
+    delete indicators[id];
+    _gdSpeichern(gdListe().filter(function(m) { return m.id !== id; }));
+}
+
+/** Zurück auf MA50 und MA200 (SMA, Tageskerzen). Der An/aus-Zustand der beiden bleibt. */
+function gdZuruecksetzen() {
+    gdListe().forEach(function(m) { if (!GD_VORGABE.some(function(v) { return v.id === m.id; })) delete indicators[m.id]; });
+    _gdSpeichern(GD_VORGABE.map(function(m) { return Object.assign({}, m); }));
+}
+
+function renderGdControls() {
+    var box = document.getElementById('gd-liste');
+    if (!box) return;
+    var liste = gdListe();
+    var auswahl = function(id, feld, optionen, cur) {
+        return '<select onchange="gdSetzen(\'' + id + '\',\'' + feld + '\',this.value)">'
+            + Object.keys(optionen).map(function(k) {
+                return '<option value="' + k + '"' + (String(k) === String(cur) ? ' selected' : '') + '>'
+                    + escHtml(optionen[k]) + '</option>';
+            }).join('') + '</select>';
+    };
+    var breiten = {};
+    GD_BREITEN.forEach(function(b) { breiten[b] = String(b).replace('.', ',') + ' px'; });
+    box.innerHTML = liste.length ? liste.map(function(ma) {
+        return '<div class="gd-zeile">'
+            + '<span class="gd-name" style="--gd-farbe:' + ma.farbe + '">' + escHtml(gdName(ma)) + '</span>'
+            + auswahl(ma.id, 'art', GD_ARTEN, ma.art)
+            + '<label class="gd-laenge"><input type="number" min="1" max="' + GD_LAENGE_MAX + '" step="1"'
+            +   ' value="' + ma.laenge + '" oninput="gdSetzen(\'' + ma.id + '\',\'laenge\',this.value,this)"'
+            +   ' onchange="renderGdControls()"><span>'
+            +   (ma.basis === 'kerze' ? 'Kerzen' : 'Tage') + '</span></label>'
+            + auswahl(ma.id, 'basis', { tag: 'aus Tageskerzen', kerze: 'aus Kerzen der Zeitebene' }, ma.basis)
+            + '<label class="ap-color"><input type="color" value="' + ma.farbe + '"'
+            +   ' oninput="gdSetzen(\'' + ma.id + '\',\'farbe\',this.value)" onchange="renderGdControls()"></label>'
+            + auswahl(ma.id, 'breite', breiten, ma.breite)
+            + '<button class="gd-weg" title="Durchschnitt entfernen" onclick="gdEntfernen(\'' + ma.id + '\')">×</button>'
+            + '</div>';
+    }).join('') : '<div class="settings-hint">Keine gleitenden Durchschnitte – in der Werkzeugleiste steht dann auch keiner.</div>';
+    var plus = document.getElementById('gd-plus');
+    if (plus) {
+        plus.disabled = liste.length >= GD_MAX;
+        plus.title = liste.length >= GD_MAX ? 'Höchstens ' + GD_MAX + ' Durchschnitte' : 'Weiteren Durchschnitt anlegen';
+    }
 }
 
 /**
