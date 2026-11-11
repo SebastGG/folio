@@ -201,22 +201,45 @@ function calcMA(candles, period) {
 }
 
 /**
- * Gleitender Durchschnitt für den gezeigten Ausschnitt.
+ * Gleitender Durchschnitt auf Tagesbasis, gezeigt auf der gewählten Kerzengröße.
  *
- * Gerechnet wird über die GANZE Kursgeschichte der aktuellen Kerzengröße und erst
- * danach auf den Ausschnitt gekürzt. Vorher lief calcMA nur über die Kerzen des
- * gewählten Zeitraums: der MA200 brauchte 200 Kerzen Anlauf innerhalb des Bildes —
- * bei 6 Monaten Tageskerzen (~126) fehlte er ganz, bei Wochenkerzen erst recht, und
- * auch wo er erschien, begann er mitten im Bild statt am linken Rand.
+ * MA50/MA200 sind IMMER der 50-/200-Tage-Durchschnitt der Tagesschlusskurse, auf
+ * jeder Zeitebene dieselbe Linie (Wunsch des Nutzers 11/2026). Gerechnet wird über
+ * die ganze Tagesgeschichte, nicht nur über den gewählten Zeitraum – sonst lag der
+ * Anlauf von 200 Kerzen im Bild selbst, und bei 6 Monaten fehlte der MA200 ganz.
  *
- * @param {Array} agg    - die gezeigten (aggregierten) Kerzen
- * @param {Array} alle   - dieselbe Kerzengröße über die ganze Kursgeschichte
- * @param {number} period
+ * Je gezeigter Kerze steht ein Wert, damit die Linie keine eigenen Zeitpunkte auf
+ * die Achse bringt (LightweightCharts baut die Zeitachse aus allen Serien):
+ *   1D      der Tageswert
+ *   1W, 1M  der Wert am letzten Handelstag der Periode – wie der Schlusskurs der Kerze
+ *   1H      der Wert des Handelstags, zu dem die Stunde gehört (Linie in Tagesstufen);
+ *           fehlt der Tag in den Tageskursen, gilt der letzte Tag davor
+ *
+ * @param {Array}  agg    - die gezeigten Kerzen der gewählten Kerzengröße
+ * @param {string} tf     - '1H', '1D', '1W', '1M'
+ * @param {Array}  tage   - Tageskerzen der ganzen Kursgeschichte (allCandles)
+ * @param {number} period - Anzahl Handelstage
  */
-function calcMAAusschnitt(agg, alle, period) {
+function calcMATagesbasis(agg, tf, tage, period) {
     if (!agg || !agg.length) return [];
-    var ab = agg[0].time;
-    return calcMA(alle, period).filter(function(p) { return p.time >= ab; });
+    var ma = calcMA(tage || [], period);          // [{time: 'YYYY-MM-DD', value}]
+    if (!ma.length) return [];
+
+    if (tf === '1W' || tf === '1M') {
+        var jePeriode = {};                        // Periodenbeginn → Wert am letzten Tag
+        ma.forEach(function(p) { jePeriode[periodStartFor(p.time, tf)] = p.value; });
+        return agg.filter(function(c) { return jePeriode[c.time] !== undefined; })
+                  .map(function(c) { return { time: c.time, value: jePeriode[c.time] }; });
+    }
+
+    // 1D und 1H: Wert des Tages, sonst der letzte Tag davor (beide Folgen aufsteigend)
+    var out = [], i = -1;
+    agg.forEach(function(c) {
+        var tag = tf === '1H' ? chartTimeToStr(c.time) : c.time;
+        while (i + 1 < ma.length && ma[i + 1].time <= tag) i++;
+        if (i >= 0) out.push({ time: c.time, value: ma[i].value });
+    });
+    return out;
 }
 
 /**

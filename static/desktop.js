@@ -992,16 +992,14 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
         try { volSeries.setData(volData); } catch(e) {}
     }
 
-    // MA50 / MA200 über die ganze Kursgeschichte dieser Kerzengröße, gekürzt auf den
-    // Ausschnitt (calcMAAusschnitt) – sonst fehlte der Anlauf vor dem gewählten Zeitraum
-    var maAlle = (indicators.ma50 || indicators.ma200)
-        ? aggregateCandles(chartBasis(), tf) : null;
+    // MA50 / MA200: immer 50/200 Handelstage aus den Tageskursen der ganzen Geschichte,
+    // auf jeder Kerzengröße dieselbe Linie (calcMATagesbasis)
 
     // MA50
     if (ma50S) {
         if (indicators.ma50) {
             ma50S.applyOptions({ visible: true });
-            ma50S.setData(calcMAAusschnitt(agg, maAlle, 50));
+            ma50S.setData(calcMATagesbasis(agg, tf, allCandles, 50));
         } else {
             hideSeries(ma50S);
         }
@@ -1011,7 +1009,7 @@ function renderDesktopChart(colored, volAgg, agg, regResult) {
     if (ma200S) {
         if (indicators.ma200) {
             ma200S.applyOptions({ visible: true });
-            ma200S.setData(calcMAAusschnitt(agg, maAlle, 200));
+            ma200S.setData(calcMATagesbasis(agg, tf, allCandles, 200));
         } else {
             hideSeries(ma200S);
         }
