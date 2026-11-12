@@ -20,7 +20,8 @@
     // Ausreißer alle anderen Kacheln grau, und gleiche Farbe hieße an jedem Tag etwas anderes.
     // Durch 3 teilbar, damit die Legende (Drittel-Stufen) glatte Zahlen zeigt.
     // vk: Abstand zum letzten Verkaufskurs (Quelle „Über letztem Verkauf")
-    var SKALA = { d1: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45, vk: 50 };
+    // ext: Vor-/Nachbörse gegen den letzten regulären Kurs
+    var SKALA = { d1: 3, ext: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45, vk: 50 };
 
     // Divergierende Skala: neutrales Grau in der Mitte, Grün/Rot an den Enden wie
     // überall in der App. Je Theme eigene Stufen — hell werden die Enden dunkler,
@@ -211,7 +212,54 @@ var _HM = {
     sortAuf:    false,
     info:       { lauf: false, fertig: 0, gesamt: 0, fehler: 0, versucht: {} },
     beobachter: null,
+    ext:        { kurse: {}, geholt: 0, schluessel: '', laeuft: false },   // Vor-/Nachbörse
 };
+
+// ── Vor- und Nachbörse (Zeitraum „VB/NB“) ─────────────────────────────────────
+// Nur geholt, solange VB/NB gewählt ist: bei einem ganzen Index sind das Hunderte
+// Werte, und Yahoo bekommt 20 je Anfrage. Der Server hält jeden Wert zwei Minuten.
+var HM_EXT_FRISCH = 2 * 60 * 1000;
+
+/** Den Datenzeilen e.ext (Änderung in %) aus den geholten Kursen anhängen. */
+function _hmExtAnwenden() {
+    var K = _HM.ext.kurse;
+    _HM.daten.forEach(function(e) {
+        var x = K[e.t];
+        e.ext = x ? x.aenderung : null;
+        e.extInfo = x || null;
+    });
+}
+
+function _hmExtPruefen() {
+    var X = _HM.ext;
+    if (X.laeuft || !_HM.prefs || _HM.prefs.zeitraum !== 'ext' || !_HM.geladen) return;
+    var syms = _hmAuswahl().eintraege.map(function(e) { return e.t; }).sort();
+    var schluessel = syms.join(',');
+    if (!syms.length) return;
+    if (schluessel === X.schluessel && Date.now() - X.geholt < HM_EXT_FRISCH) return;
+    X.laeuft = true;
+    _hmStatus();
+    fetch('/api/prices/extended', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickers: syms })
+    }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(d) {
+        X.kurse = Object.assign({}, X.kurse, d || {});
+        syms.forEach(function(s) { if (!(d || {})[s]) delete X.kurse[s]; });
+        logIt(7, 'Heatmap', 'Vor-/Nachbörse: ' + Object.keys(d || {}).length + ' von ' + syms.length + ' Werten');
+    }).catch(function(e) {
+        logIt(2, 'Heatmap', 'Vor-/Nachbörse nicht abrufbar: ' + e.message);
+    }).then(function() {
+        X.laeuft = false;
+        X.geholt = Date.now();
+        X.schluessel = schluessel;
+        _hmExtAnwenden();
+        if (_hmSichtbar()) heatmapRender();
+    });
+}
+setInterval(function() { if (_hmSichtbar() && !document.hidden) _hmExtPruefen(); }, 60 * 1000);
 
 /** Index-ID der gewählten Quelle ('sp500' …) oder '' für die eigenen Baskets/Kursdatenbank. */
 function _hmIndex() {
@@ -267,7 +315,7 @@ function heatmapSetze(schluessel, wert) {
     appearance.heatmap = Object.assign({}, _HM.prefs);
     if (typeof saveAppearanceSoon === 'function') saveAppearanceSoon();
     // Nach einer Zeitraum-Spalte sortiert → die Liste folgt dem neuen Zeitraum
-    if (schluessel === 'zeitraum' && HM_ZEITRAEUME.some(function(z) { return z.k === _HM.sort; })) _HM.sort = null;
+    if (schluessel === 'zeitraum' && (_HM.sort === 'ext' || HM_ZEITRAEUME.some(function(z) { return z.k === _HM.sort; }))) _HM.sort = null;
     heatmapRender();
     if (schluessel === 'quelle') _hmInfosNachladen();
 }
@@ -476,6 +524,7 @@ async function _hmLaden() {
                 _HM.daten   = Array.isArray(d.tickers) ? d.tickers : [];
                 _HM.markt   = d.markt || null;
                 _HM.geladen = true;
+                _hmExtAnwenden();
                 logIt(7, 'Heatmap', _HM.daten.length + ' Ticker mit Kennzahlen geladen' + (idx ? ' (' + _hmIndexName(idx) + ')' : ''));
             } catch (e) {
                 _HM.daten = []; _HM.markt = null;   // nicht die Daten der vorigen Quelle stehen lassen
@@ -651,6 +700,7 @@ function heatmapRender() {
     if (map) map.style.display = liste ? 'none' : '';
     if (tab) tab.style.display = liste ? '' : 'none';
     if (liste) _hmListeZeichnen(); else _hmKachelnZeichnen();
+    _hmExtPruefen();
 }
 
 /** Jüngster Kurstag der Auswahl — Maßstab für „veraltet". */
@@ -694,6 +744,13 @@ function _hmStatus() {
     if (aus.ohneKurse.length) {
         teile.push('<span class="hm-warn" title="' + escHtml(aus.ohneKurse.join(', ')) + '">'
             + aus.ohneKurse.length + ' ohne Kursdaten</span>');
+    }
+    if (k === 'ext') {
+        var X = _HM.ext;
+        teile.push(X.laeuft ? '<span class="hm-warn">Vor-/Nachbörse wird geholt …</span>'
+            : '<span title="Die übrigen haben keinen Kurs außerhalb der regulären Sitzung — Yahoo liefert ihn fast nur für US-Werte, und während der Sitzung gibt es keinen">'
+              + werte.length + ' von ' + E.length + ' mit Vor-/Nachbörse</span>'
+              + (X.geholt ? ' · Stand ' + new Date(X.geholt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : ''));
     }
     var I = _HM.info;
     if (I.lauf) teile.push('Stammdaten ' + I.fertig + '/' + I.gesamt + ' …');
@@ -800,12 +857,17 @@ var HM_SPALTEN = [
 
 /** Spalten der Liste — bei der Verkaufs-Quelle mit Abstand und Verkaufstag. */
 function _hmSpalten() {
-    if (_HM.prefs.quelle !== 'verkauft') return HM_SPALTEN;
-    var i = HM_SPALTEN.findIndex(function(s) { return s.k === 'price'; }) + 1;
-    return HM_SPALTEN.slice(0, i).concat([
+    var basis = HM_SPALTEN;
+    if (_HM.prefs.zeitraum === 'ext') {
+        var j = basis.findIndex(function(s) { return s.k === 'd1'; });
+        basis = basis.slice(0, j).concat([{ k: 'ext', l: 'VB/NB', pct: true }], basis.slice(j));
+    }
+    if (_HM.prefs.quelle !== 'verkauft') return basis;
+    var i = basis.findIndex(function(s) { return s.k === 'price'; }) + 1;
+    return basis.slice(0, i).concat([
         { k: 'vk',      l: 'Seit Verkauf', pct: true },
         { k: 'vkDatum', l: 'Verkauft',     txt: true },
-    ], HM_SPALTEN.slice(i));
+    ], basis.slice(i));
 }
 
 function heatmapSortiere(k) {
@@ -873,6 +935,12 @@ function _hmTooltip(e, veraltet, ev) {
         + '<div>Kurs <b>' + _hmKurs(e) + '</b> · ' + _hmDatum(e.last)
         + (veraltet ? ' <span class="hm-warn">⚠ veraltet</span>' : '') + '</div>'
         + '<div>Marktkap. ' + _hmKap(e.cap, e.ccy) + '</div>'
+        + (e.extInfo ? '<div>' + (e.extInfo.sitzung === 'vor' ? 'Vorbörse' : 'Nachbörse') + ' '
+              + new Date(e.extInfo.zeit * 1000).toLocaleString('de-DE', { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+              + ': <b>' + e.extInfo.preis.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              + '</b> <span class="' + (e.ext > 0 ? 'hm-auf' : e.ext < 0 ? 'hm-ab' : '') + '">' + _hmPct(e.ext) + '</span>'
+              + ' gegen ' + e.extInfo.basis.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              + '</div>' : '')
         + (e.vkDatum ? '<div>Zuletzt verkauft ' + _hmDatum(e.vkDatum) + ' zu <b>'
               + e.vkKurs.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
               + ' ' + escHtml(e.vkCcy || '') + '</b> · seit Verkauf <span class="hm-auf">' + _hmPct(e.vk) + '</span>'
