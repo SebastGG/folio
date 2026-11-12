@@ -421,6 +421,7 @@
     <div class="sep"></div>
     <div class="btn-group" id="hm-zeitraum" title="Zeitraum der Veränderung (in Handelstagen wie in der Performance-Tabelle)">
       <button class="btn" data-v="d1"   onclick="heatmapSetze('zeitraum','d1')">1T</button>
+      <button class="btn" data-v="ext"  onclick="heatmapSetze('zeitraum','ext')" title="Vor- bzw. Nachbörse: jüngster Kurs außerhalb der regulären Sitzung gegen den letzten regulären Kurs (fast nur US-Werte)">VB/NB</button>
       <button class="btn" data-v="d5"   onclick="heatmapSetze('zeitraum','d5')">1W</button>
       <button class="btn" data-v="d22"  onclick="heatmapSetze('zeitraum','d22')">1M</button>
       <button class="btn" data-v="d66"  onclick="heatmapSetze('zeitraum','d66')">3M</button>
@@ -1500,6 +1501,15 @@
           sagt, ab welchem Ausschlag die Farbe voll ist — sie hängt am Zeitraum und nicht am
           größten Wert, damit gleiche Farbe an jedem Tag dasselbe heißt. Die Veränderung steht
           zusätzlich als Zahl in jeder Kachel, die groß genug ist.
+        </p>
+        <p>
+          <b>VB/NB</b> färbt nach dem Kurs vor bzw. nach der Börse gegen den letzten regulären Kurs,
+          wie die VB/NB-Zeile in der Kursliste. Den Kurs mit Uhrzeit zeigt der Tooltip, in der Liste
+          steht eine eigene Spalte. Werte ohne Kurs außerhalb der regulären Sitzung bleiben grau.
+          Das betrifft fast alle Nicht-US-Werte, Futures und alles während der laufenden Sitzung. Die
+          Statuszeile nennt, wie viele Werte einen solchen Kurs haben. Geholt wird nur, solange VB/NB
+          gewählt ist, und jede Minute aufgefrischt. Bei einem ganzen Index dauert der erste Abruf
+          gut zehn Sekunden.
         </p>
         <p>
           Oben links wählst du, welche Ticker: <b>Alle Baskets</b> (jeder Wert, der in irgendeinem

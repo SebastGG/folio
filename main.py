@@ -1545,7 +1545,7 @@ async def extended_prices(request: Request):
     jüngeren Kurs als den regulären hat — in der Praxis US-Werte."""
     get_user(request)
     body = await request.json()
-    tickers = [str(t) for t in (body.get("tickers") or [])][:500]
+    tickers = [str(t) for t in (body.get("tickers") or [])][:4000]   # Heatmap: ganzer Russell 2000
     if not tickers:
         return JSONResponse(content={})
     return JSONResponse(content=await run_in_threadpool(markt.erweiterte_kurse, tickers))

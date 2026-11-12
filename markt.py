@@ -1724,19 +1724,24 @@ def erweiterte_kurse(syms) -> dict:
     jetzt = time.time()
     with _erweitert_lock:
         fehlen = [s for s in syms if jetzt - _erweitert.get(s, (0, None))[0] >= ERWEITERT_FRISCH]
-    for i in range(0, len(fehlen), 20):
-        teil = fehlen[i:i + 20]
+    gedrosselt = threading.Event()
+
+    def abfragen(teil):
+        if gedrosselt.is_set():
+            return
         url = ("https://query1.finance.yahoo.com/v7/finance/spark?symbols=" +
                ",".join(urllib.parse.quote(s) for s in teil) +
                "&range=1d&interval=5m&includePrePost=true")
         try:
             d = _hole_json(url, timeout=15)
         except Gedrosselt as e:
-            log(2, f"Vor-/Nachbörse: Yahoo drosselt ({e}) — abgebrochen")
-            break
+            if not gedrosselt.is_set():
+                log(2, f"Vor-/Nachbörse: Yahoo drosselt ({e}) — abgebrochen")
+            gedrosselt.set()
+            return
         except Exception as e:
             log(2, f"Vor-/Nachbörse {teil[0]}…: {e}")
-            continue
+            return
         erg = {}
         for e in ((d.get("spark") or {}).get("result") or []):
             try:
@@ -1746,6 +1751,14 @@ def erweiterte_kurse(syms) -> dict:
         with _erweitert_lock:
             for s in teil:                       # auch ohne Antwort merken, sonst fragt jede Liste neu
                 _erweitert[s] = (time.time(), erg.get(s))
+
+    teile = [fehlen[i:i + 20] for i in range(0, len(fehlen), 20)]
+    if len(teile) == 1:
+        abfragen(teile[0])
+    elif teile:                                  # ganze Indizes: 4 Anfragen gleichzeitig
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            list(ex.map(abfragen, teile))
     with _erweitert_lock:
         return {s: _erweitert[s][1] for s in syms if s in _erweitert and _erweitert[s][1]}
 
