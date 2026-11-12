@@ -381,6 +381,13 @@ def markt_offen(jetzt: float = None) -> bool:
     return 9 * 60 + 30 <= m < 17 * 60
 
 
+def us_sitzung(jetzt: float = None) -> bool:
+    """Reguläre US-Sitzung 9:30–16:00 New York, Mo–Fr (Feiertage nicht berücksichtigt)."""
+    lokal = _ny(jetzt or time.time())
+    m = lokal.hour * 60 + lokal.minute
+    return lokal.weekday() < 5 and 9 * 60 + 30 <= m < 16 * 60
+
+
 # ── Yahoo ───────────────────────────────────────────────────────────────────────
 def _hole_json(url: str, timeout: int = 25) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -1722,6 +1729,10 @@ def erweiterte_kurse(syms) -> dict:
     für alle Benutzer gemeinsam; Yahoo bekommt 20 Werte je Anfrage."""
     syms = [s for s in dict.fromkeys((s or "").strip().upper() for s in syms) if _SYMBOL_RE.match(s)]
     jetzt = time.time()
+    # Während der regulären US-Sitzung gibt es keine Vor-/Nachbörse — Heatmap und
+    # Kursliste fragen trotzdem jede Minute, Yahoo muss das nicht sehen.
+    if us_sitzung(jetzt):
+        return {}
     with _erweitert_lock:
         fehlen = [s for s in syms if jetzt - _erweitert.get(s, (0, None))[0] >= ERWEITERT_FRISCH]
     gedrosselt = threading.Event()

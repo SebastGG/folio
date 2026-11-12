@@ -1311,7 +1311,8 @@ footer {
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.5) 4px 6px);
 }
-.hm-tile .hm-sym, .hm-tile .hm-chg { position: relative; z-index: 1; }   /* Schrift über der Schraffur */
+.hm-ext { white-space: nowrap; font-variant-numeric: tabular-nums; opacity: .8; margin-top: 1px; }
+.hm-tile .hm-sym, .hm-tile .hm-chg, .hm-tile .hm-ext { position: relative; z-index: 1; }   /* Schrift über der Schraffur */
 .hm-tip {
   position: absolute; z-index: 20; pointer-events: none; min-width: 230px; max-width: 340px;
   background: var(--surface); color: var(--text); border: 1px solid var(--border);
