@@ -413,6 +413,7 @@ _APP_ERLAUBT = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/prices/update"),         # Kurse holen: Marktdaten, keine Einstellungen
     ("GET",  r"/api/prices/update/stand"),   # Fortschritt des Kurse-Holens
     ("POST", r"/api/prices/last"),          # liest nur (POST wegen der Tickerliste)
+    ("POST", r"/api/prices/extended"),      # Vor-/Nachbörse, liest nur
     ("GET",  r"/api/heatmap"),
     ("GET",  r"/api/ticker/info/[^/]+"),
     ("GET",  r"/api/ibkr/positions"),
@@ -1537,6 +1538,18 @@ async def last_prices(request: Request):
             out = await run_in_threadpool(lesen)
     return JSONResponse(content=out)
 
+@app.post("/api/prices/extended")
+async def extended_prices(request: Request):
+    """Kurse vor bzw. nach der Börse für die Kursliste: {ticker: {preis, zeit,
+    sitzung ('vor'|'nach'), basis, aenderung}}. Nur Ticker, für die Yahoo einen
+    jüngeren Kurs als den regulären hat — in der Praxis US-Werte."""
+    get_user(request)
+    body = await request.json()
+    tickers = [str(t) for t in (body.get("tickers") or [])][:500]
+    if not tickers:
+        return JSONResponse(content={})
+    return JSONResponse(content=await run_in_threadpool(markt.erweiterte_kurse, tickers))
+
 @app.get("/api/splits")
 async def get_splits(request: Request):
     """Alle bekannten Splits je Ticker: {"AAPL": [{"date": ..., "ratio": 4.0}, …]}.
@@ -2295,21 +2308,42 @@ async def undo_set(request: Request):
     shutil.move(tmp, pfad)
     return {"ok": True, "undo": len(d["undo"]), "redo": len(d["redo"])}
 
+# Einzelner Futures-Kontraktmonat bei Yahoo: Wurzel + Monatsbuchstabe + Jahr + Börse (MNQZ26.CME)
+_KONTRAKT_RE = re.compile(r"^([A-Z0-9]{1,4})[FGHJKMNQUVXZ]\d{2}\.[A-Z]{2,4}$")
+
 @app.get("/api/search/{query}")
 async def search_ticker(query: str, request: Request):
     """Yahoo Finance Ticker-Suche."""
     try:
         import urllib.request
-        url = f"https://query1.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=8"
+        url = (f"https://query1.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(query)}"
+               f"&quotesCount=10")
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read())
         results = [
-            {"symbol": q["symbol"], "name": q.get("shortname", q.get("longname", ""))}
+            {"symbol": q["symbol"], "name": q.get("shortname") or q.get("longname") or "",
+             "future": q.get("quoteType") == "FUTURE"}
             for q in data.get("quotes", [])
-            if q.get("quoteType") in ("EQUITY", "ETF", "FUTURE", "INDEX", "CURRENCY")
+            if q.get("quoteType") in ("EQUITY", "ETF", "FUTURE", "INDEX", "CURRENCY") and q.get("symbol")
         ]
-        return JSONResponse(content=results)
+        # Futures: Yahoo liefert oft nur einzelne Kontraktmonate (MNQZ26.CME) und nicht
+        # den fortlaufenden Kontrakt MNQ=F, der als einziger eine lange Kursreihe hat.
+        # Den ergänzen und vor die Kontraktmonate stellen.
+        vorhanden = {r["symbol"] for r in results}
+        fortlaufend = []
+        for r in results:
+            m = _KONTRAKT_RE.match(r["symbol"]) if r["future"] else None
+            if m and m.group(1) + "=F" not in vorhanden:
+                vorhanden.add(m.group(1) + "=F")
+                fortlaufend.append({"symbol": m.group(1) + "=F", "name": r["name"], "future": True})
+        results = fortlaufend + results
+        rang = lambda r: 0 if r["symbol"].endswith("=F") else (2 if _KONTRAKT_RE.match(r["symbol"]) else 1)
+        if any(r["future"] for r in results):
+            q = query.strip().upper()
+            # gesuchtes Symbol selbst (MES → MES=F) zuerst, sonst fortlaufende Futures vor Monaten
+            results.sort(key=lambda r: (r["symbol"] not in (q, q + "=F"), rang(r) == 2))
+        return JSONResponse(content=[{"symbol": r["symbol"], "name": r["name"]} for r in results])
     except Exception as e:
         print(f"Search error for {query}: {e}")
         return JSONResponse(content=[])

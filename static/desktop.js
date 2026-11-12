@@ -1407,6 +1407,7 @@ function renderWatchlist() {
     scroller.scrollTop = bildlauf;
     if (_wlZurAktivenZeile && aktivZeile) aktivZeile.scrollIntoView({ block: 'nearest' });
     _wlZurAktivenZeile = false;
+    _wlExtPruefen();
 
     function zeile(sym) {
         var p      = perfData[sym];
@@ -1443,6 +1444,7 @@ function renderWatchlist() {
             + '<div class="wl-price">' + (p ? tickerCurSymbol(sym) + p.price.toFixed(2) : '-') + '</div>'
             + '<div class="wl-chg" style="color:' + (!active ? chgColor : 'rgba(255,255,255,0.85)') + '">'
             + (p ? (parseFloat(p.d1) >= 0 ? '+' : '') + p.d1 + '%' : '-') + '</div>'
+            + _wlExtHtml(sym, active)
             + '</div>'
             + (entfernbar
                 ? '<button class="wl-del" onclick="removeTicker(\'' + sym + '\', event)"'
@@ -1452,6 +1454,64 @@ function renderWatchlist() {
         el.appendChild(div);
         if (active) aktivZeile = div;
     }
+}
+
+// ── Vor- und Nachbörse in der Kursliste ────────────────────────────────────────
+// /api/prices/extended liefert je Ticker den jüngsten Kurs außerhalb der regulären
+// Sitzung (praktisch nur US-Werte). Die Liste holt ihn beim Zeichnen, wenn sich die
+// Ticker geändert haben oder der letzte Abruf älter als zwei Minuten ist, und
+// zusätzlich jede Minute über den Zeitgeber unten.
+var _wlExt = { kurse: {}, geholt: 0, schluessel: '', laeuft: false };
+var WL_EXT_FRISCH = 2 * 60 * 1000;
+
+function _wlExtPruefen() {
+    if (_wlExt.laeuft || document.hidden) return;
+    var syms = watchlistTicker();
+    var schluessel = syms.slice().sort().join(',');
+    if (!syms.length) { _wlExt.kurse = {}; _wlExt.schluessel = ''; return; }
+    if (schluessel === _wlExt.schluessel && Date.now() - _wlExt.geholt < WL_EXT_FRISCH) return;
+    _wlExt.laeuft = true;
+    fetch('/api/prices/extended', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickers: syms })
+    }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(d) {
+        var vorher = JSON.stringify(_wlExt.kurse);
+        _wlExt.kurse = d || {};
+        _wlExt.laeuft = false;
+        _wlExt.geholt = Date.now();
+        _wlExt.schluessel = schluessel;
+        if (JSON.stringify(_wlExt.kurse) !== vorher) renderWatchlist();
+    }).catch(function(e) {
+        _wlExt.laeuft = false;
+        _wlExt.geholt = Date.now();          // nicht bei jedem Neuzeichnen erneut versuchen
+        _wlExt.schluessel = schluessel;
+        logIt(2, 'Kursliste', 'Vor-/Nachbörse nicht abrufbar: ' + e.message);
+    });
+}
+setInterval(function() { if (document.getElementById('watchlist')) _wlExtPruefen(); }, 60 * 1000);
+
+/** Dritte Zeile rechts: „VB 356.14 +0.14%“ – leer ohne Kurs vor/nach der Börse. */
+function _wlExtHtml(sym, active) {
+    var x = _wlExt.kurse[sym];
+    if (!x || !(x.preis > 0)) return '';
+    var vor   = x.sitzung === 'vor';
+    var chg   = x.aenderung;
+    var farbe = active ? 'rgba(255,255,255,0.75)' : (chg >= 0 ? 'var(--green)' : 'var(--red)');
+    var uhr   = new Date(x.zeit * 1000);
+    var tag   = uhr.toDateString() === new Date().toDateString() ? ''
+              : uhr.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' }) + ' ';
+    var title = (vor ? 'Vorbörse' : 'Nachbörse') + ', Stand ' + tag
+              + uhr.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+              + ' — ' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + ' % gegen den letzten regulären Kurs '
+              + x.basis.toFixed(2);
+    return '<div class="wl-ext" title="' + escHtml(title) + '">'
+        + '<span class="wl-ext-tag">' + (vor ? 'VB' : 'NB') + '</span> '
+        + x.preis.toFixed(2) + ' '
+        + '<span style="color:' + farbe + '">' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</span>'
+        + '</div>';
 }
 
 /** Sektoren der Basket-Ticker, die noch fehlen, holen und die Liste danach neu zeichnen. */
@@ -2256,13 +2316,24 @@ async function verlaufSchritt(zurueck) {
     }
 }
 
+// Bei jedem Tastendruck eine Anfrage — und die Antworten kommen nicht in der
+// Reihenfolge zurück. Ohne Nummer gewann die zuletzt eintreffende: die Treffer für
+// „M“ überschrieben die für „MES“, und MES=F war wieder weg.
+var _sucheNr = 0, _sucheTimer = null;
 function onSearch(val) {
     var res = document.getElementById('searchResults');
     if (!res) return;
-    if (!val || val.length < 1) { res.innerHTML = ''; return; }
+    var nr = ++_sucheNr;
+    clearTimeout(_sucheTimer);
+    val = (val || '').trim();
+    if (!val) { res.innerHTML = ''; return; }
+    _sucheTimer = setTimeout(function() { _sucheAbschicken(val, nr, res); }, 200);
+}
+function _sucheAbschicken(val, nr, res) {
     fetch('/api/search/' + encodeURIComponent(val))
         .then(function(r) { return r.json(); })
         .then(function(data) {
+            if (nr !== _sucheNr) return;      // inzwischen weitergetippt
             res.innerHTML = data.slice(0, 6).map(function(d) {
                 return '<div class="search-result" onclick="addTicker(\'' + d.symbol + '\');document.getElementById(\'searchInput\').value=\'\';document.getElementById(\'searchResults\').innerHTML=\'\';">'
                     + '<span style="font-weight:600">' + d.symbol + '</span>'
@@ -2270,7 +2341,7 @@ function onSearch(val) {
                     + '</div>';
             }).join('');
         })
-        .catch(function() { res.innerHTML = ''; });
+        .catch(function() { if (nr === _sucheNr) res.innerHTML = ''; });
 }
 
 // ╔══════════════════════════════════════════════════════════╗

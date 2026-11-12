@@ -1468,6 +1468,15 @@
           breitem Fenster der Betrag.
         </p>
         <p>
+          <b>Vor- und Nachbörse:</b> Hat ein Wert außerhalb der regulären Sitzung einen jüngeren
+          Kurs, steht rechts eine dritte Zeile, etwa <b>VB</b> 356.14 +0.14% (Vorbörse) oder
+          <b>NB</b> … (Nachbörse). Die Veränderung bezieht sich auf den letzten regulären Kurs, den
+          Stand zeigt der Tooltip. Die Kurse kommen von Yahoo und werden jede Minute aufgefrischt,
+          wenn sie älter als zwei Minuten sind. Yahoo hat sie praktisch nur für US-Werte. Am
+          Wochenende bleibt der Nachbörsenkurs vom Freitag stehen. Sobald die reguläre Sitzung läuft,
+          verschwindet die Zeile wieder.
+        </p>
+        <p>
           Das <b>×</b>, das beim Überfahren einer Zeile erscheint, nimmt den Wert aus dem Basket —
           sofort gespeichert, wie das × in der Verwaltung und das Hinzufügen über die Suche. Ein
           Fehlklick lässt sich mit <b>↶</b> oben in der Reiterleiste oder <kbd>Strg</kbd>+<kbd>Z</kbd>
@@ -1536,7 +1545,11 @@
           <dt>Notierung</dt>
           <dd>Yahoo-Schreibweise verwenden: <code>AAPL</code>, aber <code>SAP.DE</code>,
               <code>ASML.AS</code>, <code>ES=F</code>. Die Suche im Verwaltungs-Reiter liefert die
-              richtige Form.</dd>
+              richtige Form. Futures haben bei Yahoo die Form <i>Wurzel</i><code>=F</code>, z.&nbsp;B.
+              <code>MES=F</code> (Micro S&amp;P 500), <code>MNQ=F</code> (Micro Nasdaq 100) und
+              <code>M2K=F</code> (Micro Russell 2000). Das ist der fortlaufende Kontrakt mit langer
+              Kursreihe. Die einzelnen Kontraktmonate wie <code>MNQZ26.CME</code> stehen in der Suche
+              dahinter.</dd>
           <dt>Fremdwährung</dt>
           <dd>Nicht-Euro-Werte werden über Wechselkurse umgerechnet, die beim Refresh mitgeladen
               werden.</dd>
