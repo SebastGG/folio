@@ -1684,6 +1684,72 @@ def _live_runde():
         _live["laeuft"] = False
 
 
+# ── Vor- und Nachbörse für die Kursliste ────────────────────────────────────────
+ERWEITERT_FRISCH = 120          # s: so lange gilt ein abgefragter Wert
+_erweitert: dict = {}           # sym → (abgefragt, Ergebnis oder None)
+_erweitert_lock = threading.Lock()
+
+def _erweitert_auswerten(antwort: dict):
+    """Aus einer spark-Antwort (5-Minuten-Kerzen samt Vor-/Nachbörse) den jüngsten
+    Kurs außerhalb der regulären Sitzung. None, wenn der jüngste Kurs der reguläre ist
+    (Sitzung läuft, oder der Wert hat keinen Handel davor/danach — fast alle Nicht-US-Werte)."""
+    m = antwort.get("meta") or {}
+    basis, rzeit = m.get("regularMarketPrice"), m.get("regularMarketTime") or 0
+    ts = antwort.get("timestamp") or []
+    q = ((antwort.get("indicators") or {}).get("quote") or [{}])[0] or {}
+    punkte = [(t, c) for t, c in zip(ts, q.get("close") or []) if c and c > 0]
+    if not basis or not punkte:
+        return None
+    t = punkte[-1][0]
+    if t <= rzeit + 60:
+        return None
+    # Einzelne Ausreißer abfangen: Mittelwert (Median) der letzten drei Kurse
+    letzte = sorted(c for _t, c in punkte[-3:])
+    preis = letzte[len(letzte) // 2]
+    reg = ((m.get("currentTradingPeriod") or {}).get("regular") or {})
+    sitzung = "nach"
+    if reg.get("start"):
+        off = reg.get("gmtoffset") or 0
+        if (t + off) % 86400 < (reg["start"] + off) % 86400:
+            sitzung = "vor"
+    return {"preis": preis, "zeit": t, "sitzung": sitzung, "basis": basis,
+            "aenderung": round((preis / basis - 1) * 100, 2)}
+
+def erweiterte_kurse(syms) -> dict:
+    """Jüngster Kurs vor bzw. nach der Börse je Ticker: {sym: {preis, zeit, sitzung
+    ('vor'|'nach'), basis (letzter regulärer Kurs), aenderung (% gegen basis)}}.
+    Ticker ohne solchen Kurs fehlen. Werte werden ERWEITERT_FRISCH s zwischengehalten,
+    für alle Benutzer gemeinsam; Yahoo bekommt 20 Werte je Anfrage."""
+    syms = [s for s in dict.fromkeys((s or "").strip().upper() for s in syms) if _SYMBOL_RE.match(s)]
+    jetzt = time.time()
+    with _erweitert_lock:
+        fehlen = [s for s in syms if jetzt - _erweitert.get(s, (0, None))[0] >= ERWEITERT_FRISCH]
+    for i in range(0, len(fehlen), 20):
+        teil = fehlen[i:i + 20]
+        url = ("https://query1.finance.yahoo.com/v7/finance/spark?symbols=" +
+               ",".join(urllib.parse.quote(s) for s in teil) +
+               "&range=1d&interval=5m&includePrePost=true")
+        try:
+            d = _hole_json(url, timeout=15)
+        except Gedrosselt as e:
+            log(2, f"Vor-/Nachbörse: Yahoo drosselt ({e}) — abgebrochen")
+            break
+        except Exception as e:
+            log(2, f"Vor-/Nachbörse {teil[0]}…: {e}")
+            continue
+        erg = {}
+        for e in ((d.get("spark") or {}).get("result") or []):
+            try:
+                erg[(e.get("symbol") or "").upper()] = _erweitert_auswerten((e.get("response") or [{}])[0] or {})
+            except Exception:
+                pass
+        with _erweitert_lock:
+            for s in teil:                       # auch ohne Antwort merken, sonst fragt jede Liste neu
+                _erweitert[s] = (time.time(), erg.get(s))
+    with _erweitert_lock:
+        return {s: _erweitert[s][1] for s in syms if s in _erweitert and _erweitert[s][1]}
+
+
 # ── Auskunft ────────────────────────────────────────────────────────────────────
 def liste(lid: str) -> set:
     mc = _db(_pfad_markt())
