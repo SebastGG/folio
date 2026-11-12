@@ -20,8 +20,7 @@
     // Ausreißer alle anderen Kacheln grau, und gleiche Farbe hieße an jedem Tag etwas anderes.
     // Durch 3 teilbar, damit die Legende (Drittel-Stufen) glatte Zahlen zeigt.
     // vk: Abstand zum letzten Verkaufskurs (Quelle „Über letztem Verkauf")
-    // ext: Vor-/Nachbörse gegen den letzten regulären Kurs
-    var SKALA = { d1: 3, ext: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45, vk: 50 };
+    var SKALA = { d1: 3, d5: 6, d22: 9, d66: 15, d126: 24, ytd: 30, d252: 45, vk: 50 };
 
     // Divergierende Skala: neutrales Grau in der Mitte, Grün/Rot an den Enden wie
     // überall in der App. Je Theme eigene Stufen — hell werden die Enden dunkler,
@@ -159,8 +158,14 @@
      * Schriftgrößen für die Beschriftung einer Kachel w×h mit einem Symbol der
      * Länge len → { sym, chg } (chg = 0: nur der Ticker passt) oder null.
      */
-    function beschriftung(w, h, len) {
+    // dritte: Kachel hat eine dritte Zeile (Vor-/Nachbörse) — passt sie nicht, fällt sie weg
+    function beschriftung(w, h, len, dritte) {
         var breit = (w - 6) / (len * 0.62 + 0.3);
+        if (dritte) {
+            var f3 = Math.min(22, breit, (h - 4) / 3.1);
+            var c3 = Math.max(8, f3 * 0.72), e3 = Math.max(7.5, f3 * 0.6);
+            if (f3 >= 8 && (w - 6) >= e3 * 0.56 * 11) return { sym: f3, chg: c3, ext: e3 };
+        }
         var fs = Math.min(22, breit, (h - 4) / 2.25);        // Platz für zwei Zeilen
         if (fs >= 8) {
             var chg = Math.max(8, fs * 0.72);
@@ -215,9 +220,10 @@ var _HM = {
     ext:        { kurse: {}, geholt: 0, schluessel: '', laeuft: false },   // Vor-/Nachbörse
 };
 
-// ── Vor- und Nachbörse (Zeitraum „VB/NB“) ─────────────────────────────────────
-// Nur geholt, solange VB/NB gewählt ist: bei einem ganzen Index sind das Hunderte
-// Werte, und Yahoo bekommt 20 je Anfrage. Der Server hält jeden Wert zwei Minuten.
+// ── Vor- und Nachbörse ────────────────────────────────────────────────────────
+// Wie in der Kursliste: gibt es einen Kurs vor/nach der Börse, steht er als dritte
+// Zeile unter der Veränderung des Zeitraums. Geholt für alle angezeigten Werte; der
+// Server hält jeden Wert zwei Minuten und fragt während der US-Sitzung gar nicht.
 var HM_EXT_FRISCH = 2 * 60 * 1000;
 
 /** Den Datenzeilen e.ext (Änderung in %) aus den geholten Kursen anhängen. */
@@ -232,7 +238,7 @@ function _hmExtAnwenden() {
 
 function _hmExtPruefen() {
     var X = _HM.ext;
-    if (X.laeuft || !_HM.prefs || _HM.prefs.zeitraum !== 'ext' || !_HM.geladen) return;
+    if (X.laeuft || !_HM.prefs || !_HM.geladen) return;
     var syms = _hmAuswahl().eintraege.map(function(e) { return e.t; }).sort();
     var schluessel = syms.join(',');
     if (!syms.length) return;
@@ -286,6 +292,7 @@ function _hmPrefsLaden() {
     if (p.quelle === 'screener' && !_screenerBasketIds().length) p.quelle = 'alle';
     // „Seit Verkauf" gibt es nur bei der Verkaufs-Quelle
     if (p.zeitraum === 'vk' && p.quelle !== 'verkauft') p.zeitraum = 'd1';
+    if (p.zeitraum === 'ext') p.zeitraum = 'd1';   // kurzzeitig eigener Zeitraum (v1.31.0)
     return p;
 }
 
@@ -315,7 +322,7 @@ function heatmapSetze(schluessel, wert) {
     appearance.heatmap = Object.assign({}, _HM.prefs);
     if (typeof saveAppearanceSoon === 'function') saveAppearanceSoon();
     // Nach einer Zeitraum-Spalte sortiert → die Liste folgt dem neuen Zeitraum
-    if (schluessel === 'zeitraum' && (_HM.sort === 'ext' || HM_ZEITRAEUME.some(function(z) { return z.k === _HM.sort; }))) _HM.sort = null;
+    if (schluessel === 'zeitraum' && HM_ZEITRAEUME.some(function(z) { return z.k === _HM.sort; })) _HM.sort = null;
     heatmapRender();
     if (schluessel === 'quelle') _hmInfosNachladen();
 }
@@ -745,12 +752,11 @@ function _hmStatus() {
         teile.push('<span class="hm-warn" title="' + escHtml(aus.ohneKurse.join(', ')) + '">'
             + aus.ohneKurse.length + ' ohne Kursdaten</span>');
     }
-    if (k === 'ext') {
-        var X = _HM.ext;
-        teile.push(X.laeuft ? '<span class="hm-warn">Vor-/Nachbörse wird geholt …</span>'
-            : '<span title="Die übrigen haben keinen Kurs außerhalb der regulären Sitzung — Yahoo liefert ihn fast nur für US-Werte, und während der Sitzung gibt es keinen">'
-              + werte.length + ' von ' + E.length + ' mit Vor-/Nachbörse</span>'
-              + (X.geholt ? ' · Stand ' + new Date(X.geholt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : ''));
+    var nExt = E.filter(function(e) { return e.ext !== null && e.ext !== undefined; }).length;
+    if (nExt) {
+        teile.push('<span title="Kurs vor bzw. nach der Börse gegen den letzten regulären Kurs, Stand '
+            + new Date(_HM.ext.geholt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+            + ' — Yahoo liefert ihn fast nur für US-Werte">' + nExt + ' mit Vor-/Nachbörse</span>');
     }
     var I = _HM.info;
     if (I.lauf) teile.push('Stammdaten ' + I.fertig + '/' + I.gesamt + ' …');
@@ -830,10 +836,13 @@ function _hmKachelnZeichnen() {
             var cls = 'hm-tile' + (c ? '' : ' hm-leer') + (veraltet ? ' hm-alt' : '');
             var stil = 'left:' + l + 'px;top:' + t + 'px;width:' + w + 'px;height:' + h + 'px;'
                      + (c ? 'background:' + c.bg + ';color:' + c.fg + ';' : '');
-            var b = HeatmapCalc.beschriftung(w, h, e.t.length), inhalt = '';
+            var mitExt = e.extInfo && e.ext !== null && e.ext !== undefined;
+            var b = HeatmapCalc.beschriftung(w, h, e.t.length, mitExt), inhalt = '';
             if (b) {
                 inhalt = '<span class="hm-sym" style="font-size:' + b.sym.toFixed(1) + 'px">' + escHtml(e.t) + '</span>';
                 if (b.chg) inhalt += '<span class="hm-chg" style="font-size:' + b.chg.toFixed(1) + 'px">' + _hmPct(e[k]) + '</span>';
+                if (b.ext) inhalt += '<span class="hm-ext" style="font-size:' + b.ext.toFixed(1) + 'px">'
+                    + (e.extInfo.sitzung === 'vor' ? 'VB ' : 'NB ') + _hmPct(e.ext) + '</span>';
             }
             html += '<div class="' + cls + '" data-i="' + i + '" style="' + stil + '">' + inhalt + '</div>';
         });
@@ -858,7 +867,7 @@ var HM_SPALTEN = [
 /** Spalten der Liste — bei der Verkaufs-Quelle mit Abstand und Verkaufstag. */
 function _hmSpalten() {
     var basis = HM_SPALTEN;
-    if (_HM.prefs.zeitraum === 'ext') {
+    if (Object.keys(_HM.ext.kurse).length) {
         var j = basis.findIndex(function(s) { return s.k === 'd1'; });
         basis = basis.slice(0, j).concat([{ k: 'ext', l: 'VB/NB', pct: true }], basis.slice(j));
     }
