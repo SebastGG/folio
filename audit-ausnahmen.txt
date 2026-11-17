@@ -1,0 +1,53 @@
+# Bekannte Lücken, die der Audit-Schritt in Woodpecker (pip-audit) bewusst
+# durchlässt. Eine ID je Zeile, danach Kommentar. Alles andere blockiert den Build.
+#
+# Grund (2026-11-17): Die behobenen Versionen (pillow 13, soupsieve 3/4) brauchen
+# Python >= 3.11. cloudron/base:4.2.0 hat Python 3.10. Aufheben, sobald das
+# Basis-Image angehoben ist (cloudron/base 5.x, Python 3.12): dann Lock neu
+# erzeugen und diese Datei leeren.
+
+PYSEC-2026-4327  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4328  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4326  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4339  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4340  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4343  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4334  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4337  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4341  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4330  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4338  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4335  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4336  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4331  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4332  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4329  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4333  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4342  # pillow 12.3.0 -> 13.0.0
+PYSEC-2026-4363  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112895  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112400  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112897  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112395  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112404  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112899  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112900  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112893  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112891  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112390  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112401  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112391  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112894  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112406  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112399  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112892  # pillow 12.3.0 -> 13.0.0
+CVE-2026-112393  # pillow 12.3.0 -> 13.0.0
+CVE-2026-96638  # pillow 12.3.0 -> 13.0.0
+CVE-2026-96640  # pillow 12.3.0 -> 13.0.0
+CVE-2026-96778  # pillow 12.3.0 -> 13.0.0
+GHSA-78g4-xqwv-q3g8  # pillow 12.3.0 -> 13.0.0
+CVE-2026-128067  # pillow 12.3.0 -> 13.0.0
+CVE-2026-128066  # pillow 12.3.0 -> 13.0.0
+CVE-2026-126190  # soupsieve 2.10 -> 4.0.0
+CVE-2026-126193  # soupsieve 2.10 -> 3.0.2
+CVE-2026-126191  # soupsieve 2.10 -> 3.0.2

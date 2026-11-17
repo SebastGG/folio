@@ -1,4 +1,17 @@
 steps:
+  # Bekannte Sicherheitsluecken in requirements.lock stoppen den Deploy.
+  # Bewusst durchgelassene IDs stehen mit Begruendung in audit-ausnahmen.txt.
+  - name: abhaengigkeiten-pruefen
+    image: python:3.12-slim
+    when:
+      event: [push, manual]
+      branch: main
+    commands:
+      - pip install --no-cache-dir --quiet --disable-pip-version-check pip-audit==2.10.1
+      - |
+        AUSNAHMEN=$(grep -o '^[A-Za-z0-9-]*' audit-ausnahmen.txt | sed 's/^/--ignore-vuln /')
+        pip-audit -r requirements.lock --require-hashes --disable-pip --progress-spinner off $AUSNAHMEN
+
   - name: build-and-push
     image: docker:dind
     privileged: true
