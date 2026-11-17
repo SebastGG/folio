@@ -4266,22 +4266,17 @@ function ibkrRenderTable() {
             + '<td style="font-weight:700;color:' + tc + '">' + (tPnlPctEur  >= 0 ? '+' : '') + tPnlPctEur.toFixed(2)  + '%</td>'
             + '</tr>';
     }
+    // Cash (Basis) weder als eigene Zeile noch in der SUMME: laut Seb steckt das
+    // IBKR-Cash schon in den Assets, die Summe war um genau diesen Betrag zu hoch.
     if (cashBase) {
-        var cb = cashBase.ending_cash || 0;
-        footHtml += '<tr style="border-top:1px solid var(--border);background:var(--bg);">'
-            + '<td></td><td style="font-weight:700">Cash (Basis)</td><td colspan="5"></td>'
-            + '<td style="font-weight:700">' + cb.toFixed(2) + ' €</td>'
-            + '<td colspan="2"></td>'
-            + '</tr>';
         if (hasPosns && totalValueEur !== 0) {
-            var grandTotal = totalValueEur + cb;
+            var grandTotal = totalValueEur;
             var grandPnl   = totalPnlEur;
-            var grandPnlPct = (totalCostEur + cb - grandPnl) > 0
-                ? grandPnl / Math.abs(totalCostEur + cb - grandPnl) * 100 : 0;
+            var grandPnlPct = totalCostEur ? grandPnl / Math.abs(totalCostEur) * 100 : 0;
             var gc = grandTotal >= 0 ? '#2d8a4e' : '#c0392b';
             footHtml += '<tr style="border-top:2px solid var(--border);background:var(--bg);">'
                 + '<td></td><td style="font-weight:700;font-size:11px;">SUMME</td><td colspan="4"></td>'
-                + '<td style="font-weight:700;font-size:11px;">' + (totalCostEur + cb).toFixed(0) + ' €</td>'
+                + '<td style="font-weight:700;font-size:11px;">' + totalCostEur.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;">' + grandTotal.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnl >= 0 ? '+' : '') + grandPnl.toFixed(0) + ' €</td>'
                 + '<td style="font-weight:700;font-size:11px;color:' + gc + '">' + (grandPnlPct >= 0 ? '+' : '') + grandPnlPct.toFixed(2) + '%</td>'
