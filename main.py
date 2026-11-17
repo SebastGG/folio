@@ -2692,6 +2692,14 @@ def _xml_date(raw):
         return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
     return raw[:10]
 
+def _ist_devisen(asset_class) -> bool:
+    """Devisenbestand (IBKR-Klasse CASH, z. B. USD oder EUR.USD in den OpenPositions).
+
+    Diese Bestände stehen schon im Cash-Report (cash_balances). Als Position
+    gezählt, landete das Cash doppelt in Depotwert, Portfolio-Report und SUMME.
+    """
+    return (asset_class or "").strip().upper() == "CASH"
+
 def _parse_activity_xml(xml_text: str, now: str):
     """Parst die Activity-Flex-*XML* (OpenPositions / CashReport / Trades).
 
@@ -2707,7 +2715,7 @@ def _parse_activity_xml(xml_text: str, now: str):
 
     for el in root.iter("OpenPosition"):
         sym = (el.get("symbol") or "").strip()
-        if not sym:
+        if not sym or _ist_devisen(el.get("assetCategory")):
             continue
         positions.append((
             sym, _xml_float(el, "position"), _xml_float(el, "costBasisPrice"),
@@ -2787,8 +2795,8 @@ def _confirmation_position_deltas(conf_text: str, activity_tids: set, fx_by_ccy:
     """
     recs = {}
     def add(tid, sym, action, qty, price, mult, ccy, isin, cls):
-        if not sym or not tid or tid in activity_tids:
-            return
+        if not sym or not tid or tid in activity_tids or _ist_devisen(cls):
+            return   # Devisentausch ist keine Position, das Geld steht im Cash-Report
         mult = mult or 1.0
         fx   = fx_by_ccy.get((ccy or "").upper(), 1.0) if ccy else 1.0
         signed = abs(qty) if "BUY" in (action or "").upper() else -abs(qty)
@@ -3073,6 +3081,8 @@ def _do_ibkr_sync(db_file: str, data_dir: str) -> dict:
         if mult == 0:
             mult = 1.0
         asset_class = parts[i_cls].strip() if 0 <= i_cls < len(parts) else ""
+        if _ist_devisen(asset_class):
+            continue   # Devisen kommen aus dem Cash-Report (CRTT)
         isin        = parts[i_isin].strip() if 0 <= i_isin < len(parts) else ""
         currency    = parts[i_cur].strip() if 0 <= i_cur < len(parts) else ""
         positions.append((symbol, qty, cbp, cbm, mrkp, posval, asset_class, now, fx, isin, currency, mult))
@@ -3225,6 +3235,8 @@ async def ibkr_positions(request: Request):
     out   = []
     for r in conn.execute("SELECT * FROM positions ORDER BY symbol").fetchall():
         d = dict(r)
+        if _ist_devisen(d.get("asset_class")):
+            continue   # Altbestand vor dem nächsten Sync: Devisen zählen über /api/ibkr/cash
         d["account"] = "IBKR"
         out.append(d)
     for r in conn.execute(
@@ -3543,7 +3555,7 @@ def _ibkr_db_value(conn) -> float:
     try:
         pos  = conn.execute(
             "SELECT COALESCE(SUM(position_value * COALESCE(fx_rate_to_base,1.0)),0) AS v "
-            "FROM positions").fetchone()["v"] or 0
+            "FROM positions WHERE UPPER(COALESCE(asset_class,'')) <> 'CASH'").fetchone()["v"] or 0
         cash = conn.execute(
             "SELECT ending_cash FROM cash_balances WHERE currency='BASE'").fetchone()
         return float(pos) + float(cash["ending_cash"] if cash else 0)
