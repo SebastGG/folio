@@ -1,4 +1,5 @@
-FROM cloudron/base:4.2.0
+FROM cloudron/base:5.1.0@sha256:1c0666c9abe9e2090d33686826d4e97769b799124573118d41e0d7485135748e
+# Ubuntu 24.04, Python 3.12 (Tag + Digest: ein umgeschriebener Tag aendert das Abbild nicht still).
 
 COPY CloudronManifest.json /CloudronManifest.json
 
