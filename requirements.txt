@@ -1,4 +1,6 @@
-# Dieselbe Liste installiert das Dockerfile — bei Änderungen beide anpassen.
+# Direkte Abhängigkeiten. Installiert wird NUR aus requirements.lock (exakte
+# Versionen + SHA256). Nach einer Änderung hier die Lock-Datei neu erzeugen,
+# siehe Kopf von requirements.lock.
 fastapi
 uvicorn
 jinja2
