@@ -852,8 +852,20 @@ def _fetch_all_splits(ticker: str) -> dict:
 def _reconcile_splits(ticker: str, conn: sqlite3.Connection) -> list:
     """Gleicht Yahoo-Splits mit der DB ab und korrigiert Altdaten rückwirkend,
     falls sie noch auf der Vor-Split-Skala liegen. Gibt die Faktoren der NEU
-    angewandten Splits zurück (für die Zeichnungs-Anpassung)."""
-    import math
+    angewandten Splits zurück (für die Zeichnungs-Anpassung).
+
+    ticker_splits.applied: 1 = Kurse rückwirkend skaliert (oder Split vor unseren
+    Daten), 2 = gegen Yahoo geprüft, lagen schon richtig, 0 = Altlast der früheren
+    Sprungmessung — wird einmal nachgeprüft.
+
+    Früher wurde der Sprung an den 5 Tagen vor/nach dem Ex-Tag gemessen. Seit dem
+    Nachlauffenster in update_ticker (REWRITE_DAYS) schreibt aber jedes Update die
+    letzten Tage vor dem Ex-Tag bereits bereinigt neu → kein Sprung messbar →
+    applied=0 und nie wieder angefasst, während die Klippe eine Woche weiter
+    hinten für immer im Chart stand (Trades nutzen ticker_splits trotzdem und
+    wurden umgerechnet). Jetzt: Tag für Tag mit Yahoos bereinigten Kursen
+    vergleichen; Verhältnis ≈ Faktor = roh, ≈ 1 = schon bereinigt."""
+    import math, calendar
     try:
         splits = _fetch_all_splits(ticker)
     except Exception as e:
@@ -861,51 +873,76 @@ def _reconcile_splits(ticker: str, conn: sqlite3.Connection) -> list:
         return []
     if not splits:
         return []
+    bekannt = {r["date"]: r["applied"] for r in conn.execute(
+        "SELECT date, applied FROM ticker_splits WHERE ticker=?", (ticker,))}
+    offen = [(d, f) for d, f in splits.items() if not bekannt.get(d)]
     applied_factors = []
-    for date_str, f in sorted(splits.items()):
-        if conn.execute("SELECT 1 FROM ticker_splits WHERE ticker=? AND date=?",
-                        (ticker, date_str)).fetchone():
-            continue  # schon abgehandelt
-        # Kurssprung an der Grenze aus unseren eigenen Tagesdaten messen
-        pre = conn.execute(
-            "SELECT close FROM prices WHERE ticker=? AND date<? AND close>0 "
-            "ORDER BY date DESC LIMIT 5", (ticker, date_str)).fetchall()
-        post = conn.execute(
-            "SELECT close FROM prices WHERE ticker=? AND date>=? AND close>0 "
-            "ORDER BY date ASC LIMIT 5", (ticker, date_str)).fetchall()
-        applied = 0
-        if pre and post:
-            pre_m  = sorted(r["close"] for r in pre)[len(pre) // 2]
-            post_m = sorted(r["close"] for r in post)[len(post) // 2]
-            lr, lf = math.log(pre_m / post_m), math.log(f)
-            # Ist die Diskontinuität mind. halbwegs in Richtung Split-Faktor
-            # (gleiche Richtung)? → Altdaten liegen noch auf der Vor-Split-Skala.
-            if lf != 0 and (lr / lf) > 0.5:
-                # Yahoo back-adjustiert die jüngsten Vor-Split-Tage oft schon mit
-                # dem Ex-Tag; unser Delta-Update holt genau die erneut und legt sie
-                # BEREITS skaliert ab. Nicht pauschal alles < date_str teilen (das
-                # würde diese Tage ein zweites Mal halbieren → künstliche Delle),
-                # sondern nur den zusammenhängenden Roh-Block: von der Grenze rück-
-                # wärts den schon adjustierten Tail (Ratio ≈ 0) überspringen und
-                # erst ab dem ersten klar rohen Tag (Ratio > 0.5) abwärts skalieren.
-                boundary = date_str
-                older = conn.execute(
-                    "SELECT date, close FROM prices WHERE ticker=? AND date<? "
-                    "AND close>0 ORDER BY date DESC", (ticker, date_str)).fetchall()
-                for r in older:
-                    if (math.log(r["close"] / post_m) / lf) > 0.5:
-                        break                 # erster roher Tag → ab hier abwärts
-                    boundary = r["date"]      # noch adjustiert → aus Korrektur raus
+    heute = time.strftime("%Y-%m-%d", time.gmtime())
+    # Neueste zuerst: Yahoo rechnet ältere Tage über ALLE späteren Splits um. Ist
+    # der jüngste korrigiert, zeigt der ältere Block danach genau seinen Faktor.
+    for date_str, f in sorted(offen, reverse=True):
+        lf = math.log(f)
+        hat_vor = conn.execute("SELECT 1 FROM prices WHERE ticker=? AND date<? AND close>0 "
+                               "LIMIT 1", (ticker, date_str)).fetchone()
+        hat_nach = conn.execute("SELECT 1 FROM prices WHERE ticker=? AND date>=? AND close>0 "
+                                "LIMIT 1", (ticker, date_str)).fetchone()
+        if not hat_vor:
+            if not hat_nach:
+                continue      # noch gar keine Daten → später erneut
+            applied = 1       # Split liegt vor unseren Daten → nichts zu korrigieren
+        elif not hat_nach or abs(lf) < 1e-9:
+            continue          # Ex-Tag noch nicht in der DB → später erneut
+        else:
+            ende = calendar.timegm(time.strptime(date_str, "%Y-%m-%d"))
+            try:
+                chart = _yahoo_chart(ticker, ende - 120 * 86400, ende)
+            except Exception as e:
+                print(f"reconcile_splits vergleich {ticker} {date_str}: {e}")
+                continue
+            ts = chart.get("timestamp") or []
+            closes = (((chart.get("indicators") or {}).get("quote") or [{}])[0]
+                      .get("close") or [])
+            yahoo = {}
+            for t, c in zip(ts, closes):
+                d = time.strftime("%Y-%m-%d", time.gmtime(t))
+                if c and c > 0 and d < date_str:
+                    yahoo[d] = c
+            if not yahoo:
+                continue
+            gespeichert = {r["date"]: r["close"] for r in conn.execute(
+                "SELECT date, close FROM prices WHERE ticker=? AND date>=? AND date<? "
+                "AND close>0", (ticker, min(yahoo), date_str))}
+            roh, bereinigt = [], 0
+            for d, c in yahoo.items():
+                if d not in gespeichert:
+                    continue
+                lr = math.log(gespeichert[d] / c)
+                if abs(lr - lf) < abs(lf) / 2:
+                    roh.append(d)
+                elif abs(lr) < abs(lf) / 2:
+                    bereinigt += 1
+            if roh:
+                # Alles bis einschließlich des jüngsten rohen Tags liegt auf der
+                # alten Skala (wurde vor dem Split geschrieben); jüngere Tage hat
+                # das Nachlauffenster schon bereinigt überschrieben.
+                grenze = max(roh)
                 conn.execute(
                     "UPDATE prices SET open=open/?, high=high/?, low=low/?, "
-                    "close=close/?, volume=volume*? WHERE ticker=? AND date<?",
-                    (f, f, f, f, f, ticker, boundary))
+                    "close=close/?, volume=volume*? WHERE ticker=? AND date<=?",
+                    (f, f, f, f, f, ticker, grenze))
                 applied = 1
-                applied_factors.append(f)
-        elif post and not pre:
-            applied = 1  # Split liegt vor unseren Daten → nichts zu korrigieren
-        else:
-            continue     # zu wenig Daten für sichere Entscheidung → später erneut
+                print(f"reconcile_splits {ticker}: Split {date_str} (Faktor {f:g}) "
+                      f"nachgezogen bis {grenze}")
+                # Zeichnungen nur bei frischen Splits mitziehen: bei einem alten,
+                # liegengebliebenen Split wurden seither Zeichnungen auf der neuen
+                # Skala angelegt, die dürfen nicht verrutschen.
+                ex = time.strptime(date_str, "%Y-%m-%d")
+                if (time.mktime(time.strptime(heute, "%Y-%m-%d")) - time.mktime(ex)) <= 30 * 86400:
+                    applied_factors.append(f)
+            elif bereinigt:
+                applied = 2
+            else:
+                continue      # nichts vergleichbar → später erneut
         conn.execute("INSERT OR REPLACE INTO ticker_splits VALUES (?,?,?,?,?)",
                      (ticker, date_str, f, applied, time.time()))
     conn.commit()
